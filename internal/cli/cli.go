@@ -19,6 +19,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/enrich"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
+	"github.com/marcohefti/zero-context-lab/internal/funnel/mcp_proxy"
 	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
 	"github.com/marcohefti/zero-context-lab/internal/report"
@@ -75,6 +76,8 @@ func (r Runner) Run(args []string) int {
 		return r.runGC(args[1:])
 	case "enrich":
 		return r.runEnrich(args[1:])
+	case "mcp":
+		return r.runMCP(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -613,6 +616,56 @@ func (r Runner) runEnrich(args []string) int {
 	return 0
 }
 
+func (r Runner) runMCP(args []string) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		printMCPHelp(r.Stdout)
+		return 0
+	}
+	switch args[0] {
+	case "proxy":
+		return r.runMCPProxy(args[1:])
+	default:
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown mcp subcommand %q\n", args[0])
+		printMCPHelp(r.Stderr)
+		return 2
+	}
+}
+
+func (r Runner) runMCPProxy(args []string) int {
+	fs := flag.NewFlagSet("mcp proxy", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	help := fs.Bool("help", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("mcp proxy: invalid flags")
+	}
+	if *help {
+		printMCPProxyHelp(r.Stdout)
+		return 0
+	}
+
+	env, err := trace.EnvFromProcess()
+	if err != nil {
+		printMCPProxyHelp(r.Stderr)
+		return r.failUsage("mcp proxy: missing ZCL attempt context (need ZCL_* env)")
+	}
+
+	argv := fs.Args()
+	if len(argv) >= 1 && argv[0] == "--" {
+		argv = argv[1:]
+	}
+	if len(argv) == 0 {
+		printMCPProxyHelp(r.Stderr)
+		return r.failUsage("mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)")
+	}
+
+	if err := mcpproxy.Proxy(context.Background(), env, argv, os.Stdin, r.Stdout, 16*1024); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	return 0
+}
+
 func (r Runner) printReportErr(err error) int {
 	var ce *report.CliError
 	if errors.As(err, &ce) {
@@ -654,6 +707,7 @@ Usage:
   zcl doctor [--json]
   zcl gc [--dry-run] [--json]
   zcl enrich --runner codex --rollout <path> [<attemptDir>]
+  zcl mcp proxy -- <server-cmd> [args...]
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -667,6 +721,7 @@ Commands:
   doctor           Check environment/config sanity for running ZCL.
   gc               Retention cleanup under .zcl/runs (supports pinning).
   enrich           Optional runner enrichment (does not affect scoring).
+  mcp proxy        MCP stdio proxy funnel (records initialize/tools/list/tools/call).
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -743,5 +798,17 @@ func printGCHelp(w io.Writer) {
 func printEnrichHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]
+`)
+}
+
+func printMCPHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl mcp proxy -- <server-cmd> [args...]
+`)
+}
+
+func printMCPProxyHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl mcp proxy -- <server-cmd> [args...]
 `)
 }

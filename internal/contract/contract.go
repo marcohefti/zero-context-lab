@@ -164,6 +164,11 @@ func Build(version string) Contract {
 				Summary: "Optional runner enrichment (writes runner.ref.json + runner.metrics.json).",
 			},
 			{
+				ID:      "mcp proxy",
+				Usage:   "zcl mcp proxy -- <server-cmd> [args...]",
+				Summary: "MCP stdio proxy funnel (records initialize/tools/list/tools/call).",
+			},
+			{
 				ID:      "run",
 				Usage:   "zcl run -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",

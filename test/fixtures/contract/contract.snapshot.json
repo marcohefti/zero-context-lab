@@ -199,6 +199,11 @@
       "summary": "Optional runner enrichment (writes runner.ref.json + runner.metrics.json)."
     },
     {
+      "id": "mcp proxy",
+      "usage": "zcl mcp proxy -- <server-cmd> [args...]",
+      "summary": "MCP stdio proxy funnel (records initialize/tools/list/tools/call)."
+    },
+    {
       "id": "run",
       "usage": "zcl run -- <cmd> [args...]",
       "summary": "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces)."

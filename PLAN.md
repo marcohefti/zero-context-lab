@@ -126,9 +126,9 @@ Goal: keep scoring runner-agnostic, but allow optional enrichment from Codex ses
 
 Goal: proxy MCP JSON-RPC boundaries and emit trace events comparable to CLI funnel events.
 
-1. [ ] Implement `zcl mcp proxy -- <server-cmd>` (stdio first).
-2. [ ] Trace v1: record `initialize`, `tools/list`, `tools/call` with timing + payload sizes + redacted previews.
-3. [ ] Add deterministic integration tests with a tiny fake MCP server.
+1. [x] Implement `zcl mcp proxy -- <server-cmd>` (stdio first).
+2. [x] Trace v1: record `initialize`, `tools/list`, `tools/call` with timing + payload sizes + redacted previews.
+3. [x] Add deterministic integration tests with a tiny fake MCP server.
 
 ### Phase 10: Distribution + Release Guardrails (MVP4)
 
@@ -162,4 +162,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 6: Implemented `zcl validate` (strict vs best-effort) with typed codes for missing artifacts, invalid JSON/JSONL, unsupported schema versions, id mismatches, bounds, and containment, plus tests. Next: Phase 7 (config merge, doctor, gc).
 - 2026-02-15: Phase 7 Step 1-4: Added config merge precedence and implemented `zcl doctor` + `zcl gc` (age/size retention, pinned runs supported via `run.json.pinned`) with deterministic GC tests. Next: Phase 8 (Codex enrichment + skill pack).
 - 2026-02-15: Phase 8: Implemented `zcl enrich --runner codex` (runner.ref.json + runner.metrics.json) with tolerant rollout JSONL parsing, added in-repo Codex skill (`skills/zcl/`), and wired a skills validation script into `./scripts/verify.sh`. Next: Phase 9 (MCP proxy funnel).
+- 2026-02-15: Phase 9: Implemented `zcl mcp proxy` (stdio) with trace emission for initialize/tools/list/tools/call and deterministic integration tests using a tiny helper MCP server. Next: Phase 10 (distribution + release guardrails).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
