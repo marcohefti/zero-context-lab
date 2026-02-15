@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
+	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
+	"github.com/marcohefti/zero-context-lab/internal/note"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
 
@@ -51,6 +54,10 @@ func (r Runner) Run(args []string) int {
 		return r.runContract(args[1:])
 	case "init":
 		return r.runInit(args[1:])
+	case "feedback":
+		return r.runFeedback(args[1:])
+	case "note":
+		return r.runNote(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -131,6 +138,94 @@ func (r Runner) runAttempt(args []string) int {
 		printAttemptHelp(r.Stderr)
 		return 2
 	}
+}
+
+func (r Runner) runFeedback(args []string) int {
+	fs := flag.NewFlagSet("feedback", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	ok := fs.Bool("ok", false, "mark attempt as success")
+	fail := fs.Bool("fail", false, "mark attempt as failure")
+	result := fs.String("result", "", "result string (bounded/redacted)")
+	resultJSON := fs.String("result-json", "", "result json (bounded/canonicalized)")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("feedback: invalid flags")
+	}
+	if *help {
+		printFeedbackHelp(r.Stdout)
+		return 0
+	}
+	if (*ok && *fail) || (!*ok && !*fail) {
+		printFeedbackHelp(r.Stderr)
+		return r.failUsage("feedback: require exactly one of --ok or --fail")
+	}
+
+	env, err := trace.EnvFromProcess()
+	if err != nil {
+		printFeedbackHelp(r.Stderr)
+		return r.failUsage("feedback: missing ZCL attempt context (need ZCL_* env)")
+	}
+
+	if err := feedback.Write(r.Now(), env, feedback.WriteOpts{
+		OK:         *ok,
+		Result:     *result,
+		ResultJSON: *resultJSON,
+	}); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		return 2
+	}
+
+	fmt.Fprintf(r.Stdout, "feedback: OK\n")
+	return 0
+}
+
+func (r Runner) runNote(args []string) int {
+	fs := flag.NewFlagSet("note", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	kind := fs.String("kind", "agent", "note kind: agent|operator|system")
+	message := fs.String("message", "", "note message (bounded/redacted)")
+	dataJSON := fs.String("data-json", "", "structured note payload as json (bounded/canonicalized)")
+	tagsCSV := fs.String("tags", "", "comma-separated tags (optional)")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("note: invalid flags")
+	}
+	if *help {
+		printNoteHelp(r.Stdout)
+		return 0
+	}
+
+	env, err := trace.EnvFromProcess()
+	if err != nil {
+		printNoteHelp(r.Stderr)
+		return r.failUsage("note: missing ZCL attempt context (need ZCL_* env)")
+	}
+
+	var tags []string
+	if *tagsCSV != "" {
+		for _, t := range strings.Split(*tagsCSV, ",") {
+			if v := strings.TrimSpace(t); v != "" {
+				tags = append(tags, v)
+			}
+		}
+	}
+
+	if err := note.Append(r.Now(), env, note.AppendOpts{
+		Kind:     *kind,
+		Message:  *message,
+		DataJSON: *dataJSON,
+		Tags:     tags,
+	}); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		return 2
+	}
+
+	fmt.Fprintf(r.Stdout, "note: OK\n")
+	return 0
 }
 
 func (r Runner) runAttemptStart(args []string) int {
@@ -262,12 +357,16 @@ Usage:
   zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl feedback --ok|--fail --result <string>|--result-json <json>
+  zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl run -- <cmd> [args...]
 
 Commands:
   init            Initialize the project (.zcl output root + zcl.config.json).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
+  feedback        Write the canonical attempt outcome to feedback.json.
+  note            Append a secondary evidence note to notes.jsonl.
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -300,5 +399,19 @@ func printAttemptStartHelp(w io.Writer) {
 func printRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl run -- <cmd> [args...]
+`)
+}
+
+func printFeedbackHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl feedback --ok|--fail --result <string>
+  zcl feedback --ok|--fail --result-json <json>
+`)
+}
+
+func printNoteHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl note [--kind agent|operator|system] --message <string> [--tags a,b,c]
+  zcl note [--kind agent|operator|system] --data-json <json> [--tags a,b,c]
 `)
 }

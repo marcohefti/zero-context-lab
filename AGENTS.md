@@ -55,7 +55,7 @@ Core:
 - `zcl gc`
 
 Optional/later:
-- `zcl note ...` (secondary evidence)
+- `zcl note ...` (secondary evidence; implemented)
 - `zcl enrich --runner codex`
 - `zcl mcp proxy ...`
 - `zcl replay ...`

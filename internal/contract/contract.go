@@ -113,6 +113,16 @@ func Build(version string) Contract {
 				Summary: "Initialize the project output root and write the minimal project config.",
 			},
 			{
+				ID:      "feedback",
+				Usage:   "zcl feedback --ok|--fail --result <string>|--result-json <json>",
+				Summary: "Write the canonical attempt outcome to feedback.json (primary evidence).",
+			},
+			{
+				ID:      "note",
+				Usage:   "zcl note [--kind agent|operator|system] --message <string>|--data-json <json>",
+				Summary: "Append a bounded/redacted note event to notes.jsonl (secondary evidence).",
+			},
+			{
 				ID:      "run",
 				Usage:   "zcl run -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",

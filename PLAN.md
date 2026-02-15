@@ -68,13 +68,13 @@ Goal: funnel-first evidence. Each tool invocation becomes one deterministic trac
 
 Goal: runner-agnostic scoring uses `feedback.json`, while self-reports live in `notes.jsonl`.
 
-1. [ ] Implement `zcl feedback --ok|--fail --result <string>` (+ `--result-json` option):
+1. [x] Implement `zcl feedback --ok|--fail --result <string>` (+ `--result-json` option):
    atomic write to `feedback.json`, bounded payload, redaction.
-2. [ ] Implement `zcl note`:
+2. [x] Implement `zcl note`:
    append a bounded/redacted note event to `notes.jsonl` (agent self-report or operator note).
-3. [ ] Document the difference in `AGENTS.md` and `CONCEPT.md`:
+3. [x] Document the difference in `AGENTS.md` and `CONCEPT.md`:
    primary evidence vs secondary evidence.
-4. [ ] Add tests for:
+4. [x] Add tests for:
    feedback schema, note schema, bounds/redaction behavior.
 
 ### Phase 5: Reporting (`zcl report`)
@@ -157,4 +157,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 3 Step 2: Added trace emission for `zcl run` (one v1 event per invocation appended to `tool.calls.jsonl` using `ZCL_*` attempt env). Next: make JSONL appends concurrency-safe (lock/spool) and document the approach.
 - 2026-02-15: Phase 3 Step 3: Made JSONL appends concurrency-safe via `mkdir` lock dirs (documented in `ARCHITECTURE.md`) and added `fsync` on append. Next: integration tests covering passthrough, trace emission, and bounds.
 - 2026-02-15: Phase 3 Step 4: Added integration tests for `zcl run` covering passthrough stdout/stderr, trace emission, and preview bounds/truncation signaling. Next: Phase 4 begins (`zcl feedback` + `zcl note`).
+- 2026-02-15: Phase 4 Step 1-4: Implemented `zcl feedback` (atomic `feedback.json`) and `zcl note` (append `notes.jsonl`) with bounded payload + basic redaction, updated contract snapshot, and added tests for schema + redaction behavior. Next: Phase 5 begins (`zcl report`).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
