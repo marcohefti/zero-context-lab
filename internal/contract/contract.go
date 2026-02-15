@@ -1,12 +1,29 @@
 package contract
 
 type Contract struct {
-	Name                  string    `json:"name"`
-	Version               string    `json:"version"`
-	ArtifactLayoutVersion int       `json:"artifactLayoutVersion"`
-	TraceSchemaVersion    int       `json:"traceSchemaVersion"`
-	Commands              []Command `json:"commands"`
-	Errors                []Error   `json:"errors"`
+	Name                  string     `json:"name"`
+	Version               string     `json:"version"`
+	ArtifactLayoutVersion int        `json:"artifactLayoutVersion"`
+	TraceSchemaVersion    int        `json:"traceSchemaVersion"`
+	Artifacts             []Artifact `json:"artifacts"`
+	Events                []Event    `json:"events"`
+	Commands              []Command  `json:"commands"`
+	Errors                []Error    `json:"errors"`
+}
+
+type Artifact struct {
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind"` // json|jsonl
+	SchemaVersions []int    `json:"schemaVersions"`
+	Required       bool     `json:"required"`
+	PathPattern    string   `json:"pathPattern"`
+	RequiredFields []string `json:"requiredFields"`
+}
+
+type Event struct {
+	Stream         string   `json:"stream"` // tool.calls.jsonl|notes.jsonl
+	SchemaVersions []int    `json:"schemaVersions"`
+	RequiredFields []string `json:"requiredFields"`
 }
 
 type Command struct {
@@ -27,6 +44,52 @@ func Build(version string) Contract {
 		Version:               version,
 		ArtifactLayoutVersion: 1,
 		TraceSchemaVersion:    1,
+		Artifacts: []Artifact{
+			{
+				ID:             "run.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       true,
+				PathPattern:    ".zcl/runs/<runId>/run.json",
+				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "createdAt"},
+			},
+			{
+				ID:             "attempt.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       true,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.json",
+				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "mode", "startedAt"},
+			},
+			{
+				ID:             "feedback.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       true,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
+				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "ok", "createdAt"},
+			},
+			{
+				ID:             "attempt.report.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json",
+				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "computedAt", "metrics"},
+			},
+		},
+		Events: []Event{
+			{
+				Stream:         "tool.calls.jsonl",
+				SchemaVersions: []int{1},
+				RequiredFields: []string{"v", "ts", "runId", "missionId", "attemptId", "tool", "op", "result", "io"},
+			},
+			{
+				Stream:         "notes.jsonl",
+				SchemaVersions: []int{1},
+				RequiredFields: []string{"v", "ts", "runId", "missionId", "attemptId", "kind"},
+			},
+		},
 		Commands: []Command{
 			{
 				ID:      "contract",

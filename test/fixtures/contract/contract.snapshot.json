@@ -3,6 +3,110 @@
   "version": "0.0.0-dev",
   "artifactLayoutVersion": 1,
   "traceSchemaVersion": 1,
+  "artifacts": [
+    {
+      "id": "run.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": true,
+      "pathPattern": ".zcl/runs/<runId>/run.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "createdAt"
+      ]
+    },
+    {
+      "id": "attempt.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": true,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/attempt.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "missionId",
+        "attemptId",
+        "mode",
+        "startedAt"
+      ]
+    },
+    {
+      "id": "feedback.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": true,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "missionId",
+        "attemptId",
+        "ok",
+        "createdAt"
+      ]
+    },
+    {
+      "id": "attempt.report.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "missionId",
+        "attemptId",
+        "computedAt",
+        "metrics"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "stream": "tool.calls.jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "requiredFields": [
+        "v",
+        "ts",
+        "runId",
+        "missionId",
+        "attemptId",
+        "tool",
+        "op",
+        "result",
+        "io"
+      ]
+    },
+    {
+      "stream": "notes.jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "requiredFields": [
+        "v",
+        "ts",
+        "runId",
+        "missionId",
+        "attemptId",
+        "kind"
+      ]
+    }
+  ],
   "commands": [
     {
       "id": "contract",
