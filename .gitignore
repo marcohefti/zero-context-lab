@@ -1,0 +1,16 @@
+# ZCL runtime outputs
+.zcl/
+
+# Local/CI artifacts from validation scripts
+artifacts/
+
+# Go build/test outputs
+*.test
+*.out
+coverage/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+

@@ -1,0 +1,30 @@
+{
+  "name": "zcl",
+  "version": "0.0.0-dev",
+  "artifactLayoutVersion": 1,
+  "traceSchemaVersion": 1,
+  "commands": [
+    {
+      "id": "contract",
+      "usage": "zcl contract --json",
+      "summary": "Print the ZCL surface contract (artifact layout + supported schema versions)."
+    },
+    {
+      "id": "attempt start",
+      "usage": "zcl attempt start --suite <suiteId> --mission <missionId> --json",
+      "summary": "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent."
+    }
+  ],
+  "errors": [
+    {
+      "code": "ZCL_E_USAGE",
+      "summary": "Invalid CLI usage (missing/invalid flags).",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_IO",
+      "summary": "Filesystem I/O error while writing artifacts.",
+      "retryable": true
+    }
+  ]
+}
