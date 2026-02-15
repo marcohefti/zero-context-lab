@@ -1,6 +1,7 @@
 # ZCL Agent Map (High-Signal)
 
 Start here:
+- `PLAN.md` (implementation checklist; update execution log as work progresses)
 - `CONCEPT.md` (why ZCL exists; non-negotiables; operator UX baseline)
 - `ARCHITECTURE.md` (how we implement it without overengineering)
 

@@ -27,6 +27,7 @@ require_contains() {
 require_file "CONCEPT.md"
 require_file "ARCHITECTURE.md"
 require_file "AGENTS.md"
+require_file "PLAN.md"
 
 require_contains "CONCEPT.md" "ARCHITECTURE.md" "CONCEPT.md must reference ARCHITECTURE.md"
 require_contains "CONCEPT.md" "AGENTS.md" "CONCEPT.md must reference AGENTS.md"
@@ -36,6 +37,10 @@ require_contains "ARCHITECTURE.md" "AGENTS.md" "ARCHITECTURE.md must reference A
 
 require_contains "AGENTS.md" "CONCEPT.md" "AGENTS.md must reference CONCEPT.md"
 require_contains "AGENTS.md" "ARCHITECTURE.md" "AGENTS.md must reference ARCHITECTURE.md"
+require_contains "AGENTS.md" "PLAN.md" "AGENTS.md must reference PLAN.md"
+
+require_contains "PLAN.md" "CONCEPT.md" "PLAN.md must reference CONCEPT.md"
+require_contains "PLAN.md" "ARCHITECTURE.md" "PLAN.md must reference ARCHITECTURE.md"
 
 if (( ${#failures[@]} > 0 )); then
   for f in "${failures[@]}"; do
