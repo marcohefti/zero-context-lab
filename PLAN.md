@@ -36,7 +36,7 @@ Goal: make evidence artifacts and schema versions explicit so validation/reporti
 3. [x] Update `zcl contract --json` to print:
    supported schema versions, required artifact files, and the minimal required fields (not prose).
 4. [x] Update `scripts/contract-snapshot.sh --update` and commit the updated snapshot.
-5. [ ] Add contract/serialization tests:
+5. [x] Add contract/serialization tests:
    `go test` must fail if contract JSON shape drifts without snapshot update.
 
 ### Phase 2: Attempt Lifecycle + Output Root
@@ -148,4 +148,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 1 Step 1: Added explicit v1 artifact schemas in `internal/schema` and documented exact JSON/JSONL shapes in `SCHEMAS.md` (linked from `AGENTS.md`/`ARCHITECTURE.md`). Next: lock canonical ID formats and reflect them in docs + contract output.
 - 2026-02-15: Phase 1 Step 2: Documented canonical ID formats in `SCHEMAS.md` and enforced canonicalization/validation in attempt creation (`suiteId`/`missionId` sanitized; `runId` validated). Next: expand `zcl contract --json` with required artifacts + required fields.
 - 2026-02-15: Phase 1 Step 3-4: Expanded `zcl contract --json` with explicit artifact/event requirements + supported schema versions, then updated `test/fixtures/contract/contract.snapshot.json`. Next: add tests that fail on contract drift without snapshot updates.
+- 2026-02-15: Phase 1 Step 5: Added a strict contract snapshot test so `go test` fails if the contract drifts without updating the snapshot. Next: Phase 2 begins (attempt lifecycle + output root).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
