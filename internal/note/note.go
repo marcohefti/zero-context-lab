@@ -13,9 +13,6 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
 
-const MaxMessageBytesV1 = 16 * 1024
-const MaxDataBytesV1 = 64 * 1024
-
 type AppendOpts struct {
 	Kind     string
 	Message  string
@@ -49,8 +46,8 @@ func Append(now time.Time, env trace.Env, opts AppendOpts) error {
 		red, a := redact.Text(msg)
 		msg = red
 		applied = a.Names
-		if len([]byte(msg)) > MaxMessageBytesV1 {
-			return fmt.Errorf("message exceeds max bytes (%d)", MaxMessageBytesV1)
+		if len([]byte(msg)) > schema.NoteMessageMaxBytesV1 {
+			return fmt.Errorf("message exceeds max bytes (%d)", schema.NoteMessageMaxBytesV1)
 		}
 	} else {
 		var v any
@@ -61,8 +58,8 @@ func Append(now time.Time, env trace.Env, opts AppendOpts) error {
 		if err != nil {
 			return err
 		}
-		if len(b) > MaxDataBytesV1 {
-			return fmt.Errorf("data exceeds max bytes (%d)", MaxDataBytesV1)
+		if len(b) > schema.NoteDataMaxBytesV1 {
+			return fmt.Errorf("data exceeds max bytes (%d)", schema.NoteDataMaxBytesV1)
 		}
 		dataRaw = b
 	}

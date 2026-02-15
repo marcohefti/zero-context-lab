@@ -39,7 +39,7 @@ func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	}
 
 	ev := readSingleTraceEvent(t, filepath.Join(outDir, "tool.calls.jsonl"))
-	if ev.V != 1 || ev.Tool != os.Args[0] || ev.Op != "exec" {
+	if ev.V != 1 || ev.Tool != "cli" || ev.Op != "exec" {
 		t.Fatalf("unexpected event header: %+v", ev)
 	}
 	if ev.Result.ExitCode == nil || *ev.Result.ExitCode != 7 {
@@ -80,6 +80,63 @@ func TestRun_BoundsEnforcedAndTruncationRecorded(t *testing.T) {
 	}
 	if got := len(ev.IO.OutPreview); got != 16*1024 {
 		t.Fatalf("expected outPreview length 16384, got %d", got)
+	}
+}
+
+func TestRun_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+
+	openAIKey := "sk-1234567890ABCDEF"
+	ghToken := "ghp_1234567890abcdef"
+
+	payloadOut := "token=" + openAIKey + "\n"
+	payloadErr := "gh=" + ghToken + "\n"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=" + payloadOut, "stderr=" + payloadErr, "arg=" + openAIKey, "exit=0"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	// Passthrough should not be redacted.
+	if stdout.String() != payloadOut {
+		t.Fatalf("stdout passthrough mismatch: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), payloadErr) {
+		t.Fatalf("stderr passthrough mismatch: %q", stderr.String())
+	}
+
+	ev := readSingleTraceEvent(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	if strings.Contains(ev.IO.OutPreview, openAIKey) || strings.Contains(ev.IO.ErrPreview, ghToken) {
+		t.Fatalf("expected redaction in previews, got out=%q err=%q", ev.IO.OutPreview, ev.IO.ErrPreview)
+	}
+	if !strings.Contains(ev.IO.OutPreview, "[REDACTED:OPENAI_KEY]") {
+		t.Fatalf("expected OPENAI key redaction in outPreview, got: %q", ev.IO.OutPreview)
+	}
+	if !strings.Contains(ev.IO.ErrPreview, "[REDACTED:GITHUB_TOKEN]") {
+		t.Fatalf("expected GitHub token redaction in errPreview, got: %q", ev.IO.ErrPreview)
+	}
+
+	// Input argv should also be redacted.
+	var in struct {
+		Argv []string `json:"argv"`
+	}
+	if err := json.Unmarshal(ev.Input, &in); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	for _, a := range in.Argv {
+		if strings.Contains(a, openAIKey) {
+			t.Fatalf("expected redaction in input argv, got: %q", a)
+		}
 	}
 }
 

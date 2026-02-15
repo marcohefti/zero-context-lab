@@ -23,6 +23,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
 	"github.com/marcohefti/zero-context-lab/internal/report"
+	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
@@ -333,7 +334,7 @@ func (r Runner) runRun(args []string) int {
 	}
 
 	// Keep this intentionally small for MVP; richer capture/trace wiring comes in Phase 3 Step 2+.
-	res, runErr := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, 16*1024)
+	res, runErr := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, schema.PreviewMaxBytesV1)
 
 	traceRes := trace.ResultForTrace{
 		ExitCode:     res.ExitCode,
@@ -394,6 +395,16 @@ func (r Runner) runReport(args []string) int {
 	}
 	if !info.IsDir() {
 		return r.failUsage("report: target must be a directory")
+	}
+
+	// If the attempt was allocated in ci mode, treat report as strict by default.
+	if !*strict {
+		if b, err := os.ReadFile(filepath.Join(target, "attempt.json")); err == nil {
+			var a schema.AttemptJSONV1
+			if err := json.Unmarshal(b, &a); err == nil && a.Mode == "ci" {
+				*strict = true
+			}
+		}
 	}
 
 	// If target is a run dir, compute for each attempt under attempts/.
@@ -462,6 +473,17 @@ func (r Runner) runValidate(args []string) int {
 	if len(paths) != 1 {
 		printValidateHelp(r.Stderr)
 		return r.failUsage("validate: require exactly one <attemptDir|runDir>")
+	}
+
+	// If the attempt was allocated in ci mode, treat validate as strict by default.
+	if !*strict {
+		target := paths[0]
+		if b, err := os.ReadFile(filepath.Join(target, "attempt.json")); err == nil {
+			var a schema.AttemptJSONV1
+			if err := json.Unmarshal(b, &a); err == nil && a.Mode == "ci" {
+				*strict = true
+			}
+		}
 	}
 
 	res, err := validate.ValidatePath(paths[0], *strict)
@@ -659,7 +681,7 @@ func (r Runner) runMCPProxy(args []string) int {
 		return r.failUsage("mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)")
 	}
 
-	if err := mcpproxy.Proxy(context.Background(), env, argv, os.Stdin, r.Stdout, 16*1024); err != nil {
+	if err := mcpproxy.Proxy(context.Background(), env, argv, os.Stdin, r.Stdout, schema.PreviewMaxBytesV1); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}

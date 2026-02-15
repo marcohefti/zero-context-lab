@@ -3,6 +3,7 @@ package feedback
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -11,8 +12,6 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/store"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
-
-const MaxResultBytesV1 = 64 * 1024
 
 type WriteOpts struct {
 	OK         bool
@@ -28,6 +27,10 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		return fmt.Errorf("missing --result or --result-json")
 	}
 
+	if err := requireEvidenceForMode(env); err != nil {
+		return err
+	}
+
 	var (
 		resultText string
 		resultRaw  json.RawMessage
@@ -38,8 +41,8 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		red, a := redact.Text(opts.Result)
 		resultText = red
 		applied = a.Names
-		if len([]byte(resultText)) > MaxResultBytesV1 {
-			return fmt.Errorf("result exceeds max bytes (%d)", MaxResultBytesV1)
+		if len([]byte(resultText)) > schema.FeedbackMaxBytesV1 {
+			return fmt.Errorf("result exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
 		}
 	} else {
 		var v any
@@ -50,8 +53,8 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		if err != nil {
 			return err
 		}
-		if len(b) > MaxResultBytesV1 {
-			return fmt.Errorf("resultJson exceeds max bytes (%d)", MaxResultBytesV1)
+		if len(b) > schema.FeedbackMaxBytesV1 {
+			return fmt.Errorf("resultJson exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
 		}
 		resultRaw = b
 	}
@@ -71,4 +74,50 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 
 	path := filepath.Join(env.OutDirAbs, "feedback.json")
 	return store.WriteJSONAtomic(path, payload)
+}
+
+func requireEvidenceForMode(env trace.Env) error {
+	// Enforce "ci" semantics: primary evidence must exist before we accept a final outcome.
+	// This makes it harder to accidentally record a result without funnel-backed actions.
+	rawAttempt, err := os.ReadFile(filepath.Join(env.OutDirAbs, "attempt.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("missing attempt.json in attempt directory (need zcl attempt start context)")
+		}
+		return err
+	}
+	var a schema.AttemptJSONV1
+	if err := json.Unmarshal(rawAttempt, &a); err != nil {
+		return fmt.Errorf("invalid attempt.json (cannot determine mode): %w", err)
+	}
+	if a.Mode != "ci" {
+		return nil
+	}
+
+	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	f, err := os.Open(tracePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("ci mode requires tool.calls.jsonl before feedback")
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	// Cheap check: at least one non-empty line.
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			for _, b := range buf[:n] {
+				if b != ' ' && b != '\n' && b != '\t' && b != '\r' {
+					return nil
+				}
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return fmt.Errorf("ci mode requires non-empty tool.calls.jsonl before feedback")
 }

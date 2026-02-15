@@ -92,7 +92,7 @@ Each line is one v1 `TraceEvent`:
   "missionId": "latest-blog-title",
   "attemptId": "001-latest-blog-title-r1",
   "tool": "cli",
-  "op": "run",
+  "op": "exec",
   "input": {"argv":["echo","hello"]},
   "result": {
     "ok": true,
@@ -110,8 +110,9 @@ Each line is one v1 `TraceEvent`:
 
 Notes:
 - `suiteId` and `agentId` are optional.
-- `input`/`enrichment` are stored as bounded/canonicalized JSON when possible.
+- `input`/`enrichment` are stored as bounded/canonicalized JSON when possible; inputs may be truncated with a warning when they exceed bounds.
 - `result.code` is a typed ZCL code when ZCL can classify; otherwise a normalized tool error code.
+- `redactionsApplied` lists the redaction rules applied to this event (informational only; scoring must not depend on it).
 
 ## `feedback.json` (v1)
 

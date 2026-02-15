@@ -187,6 +187,17 @@ func Build(version string) Contract {
 		Errors: []Error{
 			{Code: "ZCL_E_USAGE", Summary: "Invalid CLI usage (missing/invalid flags).", Retryable: false},
 			{Code: "ZCL_E_IO", Summary: "Filesystem I/O error while writing artifacts.", Retryable: true},
+			{Code: "ZCL_E_MISSING_ARTIFACT", Summary: "Missing required artifact(s) for the requested operation.", Retryable: true},
+			{Code: "ZCL_E_MISSING_EVIDENCE", Summary: "Primary evidence is missing/empty (e.g. empty tool.calls.jsonl).", Retryable: true},
+			{Code: "ZCL_E_INVALID_JSON", Summary: "Invalid JSON in an artifact file.", Retryable: false},
+			{Code: "ZCL_E_INVALID_JSONL", Summary: "Invalid JSONL stream (bad line or empty line in strict mode).", Retryable: false},
+			{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Summary: "Unsupported schema version for an artifact/event.", Retryable: false},
+			{Code: "ZCL_E_ID_MISMATCH", Summary: "IDs in artifacts/events do not match expected attempt/run IDs.", Retryable: false},
+			{Code: "ZCL_E_BOUNDS", Summary: "Captured payload exceeds size bounds.", Retryable: false},
+			{Code: "ZCL_E_CONTRACT", Summary: "Artifact/event violates the ZCL contract shape.", Retryable: false},
+			{Code: "ZCL_E_CONTAINMENT", Summary: "Artifact path escapes attempt/run directory (symlink traversal).", Retryable: false},
+			{Code: "ZCL_E_SPAWN", Summary: "Failed to spawn or execute a wrapped command in the funnel.", Retryable: true},
+			{Code: "ZCL_E_TIMEOUT", Summary: "Timed out waiting for a tool operation.", Retryable: true},
 		},
 	}
 }

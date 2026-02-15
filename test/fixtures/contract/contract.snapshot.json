@@ -229,6 +229,61 @@
       "code": "ZCL_E_IO",
       "summary": "Filesystem I/O error while writing artifacts.",
       "retryable": true
+    },
+    {
+      "code": "ZCL_E_MISSING_ARTIFACT",
+      "summary": "Missing required artifact(s) for the requested operation.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_MISSING_EVIDENCE",
+      "summary": "Primary evidence is missing/empty (e.g. empty tool.calls.jsonl).",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_INVALID_JSON",
+      "summary": "Invalid JSON in an artifact file.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_INVALID_JSONL",
+      "summary": "Invalid JSONL stream (bad line or empty line in strict mode).",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_SCHEMA_UNSUPPORTED",
+      "summary": "Unsupported schema version for an artifact/event.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_ID_MISMATCH",
+      "summary": "IDs in artifacts/events do not match expected attempt/run IDs.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_BOUNDS",
+      "summary": "Captured payload exceeds size bounds.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CONTRACT",
+      "summary": "Artifact/event violates the ZCL contract shape.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CONTAINMENT",
+      "summary": "Artifact path escapes attempt/run directory (symlink traversal).",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_SPAWN",
+      "summary": "Failed to spawn or execute a wrapped command in the funnel.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_TIMEOUT",
+      "summary": "Timed out waiting for a tool operation.",
+      "retryable": true
     }
   ]
 }

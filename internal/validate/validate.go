@@ -11,14 +11,6 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
-const (
-	MaxPreviewBytesV1   = 16 * 1024
-	MaxFeedbackBytesV1  = 64 * 1024
-	MaxNoteMsgBytesV1   = 16 * 1024
-	MaxNoteDataBytesV1  = 64 * 1024
-	MaxToolInputBytesV1 = 64 * 1024
-)
-
 type CliError struct {
 	Code    string
 	Message string
@@ -218,10 +210,10 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool) error
 		if ev.RunID != attempt.RunID || ev.AttemptID != attempt.AttemptID || ev.MissionID != attempt.MissionID {
 			return &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "trace ids do not match attempt.json", Path: path}
 		}
-		if len(ev.IO.OutPreview) > MaxPreviewBytesV1 || len(ev.IO.ErrPreview) > MaxPreviewBytesV1 {
+		if len(ev.IO.OutPreview) > schema.PreviewMaxBytesV1 || len(ev.IO.ErrPreview) > schema.PreviewMaxBytesV1 {
 			return &CliError{Code: "ZCL_E_BOUNDS", Message: "trace preview exceeds bounds", Path: path}
 		}
-		if len(ev.Input) > MaxToolInputBytesV1 {
+		if len(ev.Input) > schema.ToolInputMaxBytesV1 {
 			return &CliError{Code: "ZCL_E_BOUNDS", Message: "trace input exceeds bounds", Path: path}
 		}
 	}
@@ -239,7 +231,7 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool) er
 	if err != nil {
 		return err
 	}
-	if len(raw) > MaxFeedbackBytesV1*2 {
+	if len(raw) > schema.FeedbackMaxBytesV1*2 {
 		// feedback.json includes envelope + possible pretty-print; enforce loose cap.
 		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback.json exceeds bounds", Path: path}
 	}
@@ -261,10 +253,10 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool) er
 			return &CliError{Code: "ZCL_E_CONTRACT", Message: "feedback missing result/resultJson", Path: path}
 		}
 	}
-	if fb.Result != "" && len([]byte(fb.Result)) > MaxFeedbackBytesV1 {
+	if fb.Result != "" && len([]byte(fb.Result)) > schema.FeedbackMaxBytesV1 {
 		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback result exceeds bounds", Path: path}
 	}
-	if fb.ResultJSON != nil && len(fb.ResultJSON) > MaxFeedbackBytesV1 {
+	if fb.ResultJSON != nil && len(fb.ResultJSON) > schema.FeedbackMaxBytesV1 {
 		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback resultJson exceeds bounds", Path: path}
 	}
 	return nil
@@ -300,10 +292,10 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool) error
 		if ev.Message != "" && ev.Data != nil {
 			return &CliError{Code: "ZCL_E_CONTRACT", Message: "note must set only one of message or data", Path: path}
 		}
-		if ev.Message != "" && len([]byte(ev.Message)) > MaxNoteMsgBytesV1 {
+		if ev.Message != "" && len([]byte(ev.Message)) > schema.NoteMessageMaxBytesV1 {
 			return &CliError{Code: "ZCL_E_BOUNDS", Message: "note message exceeds bounds", Path: path}
 		}
-		if ev.Data != nil && len(ev.Data) > MaxNoteDataBytesV1 {
+		if ev.Data != nil && len(ev.Data) > schema.NoteDataMaxBytesV1 {
 			return &CliError{Code: "ZCL_E_BOUNDS", Message: "note data exceeds bounds", Path: path}
 		}
 	}

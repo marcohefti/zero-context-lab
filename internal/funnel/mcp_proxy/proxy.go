@@ -49,6 +49,15 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	waited := false
+	defer func() {
+		if waited {
+			return
+		}
+		// Ensure we don't leak the child process on early returns (e.g., trace write failures).
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
 
 	var (
 		mu       sync.Mutex
@@ -131,14 +140,29 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 		}
 
 		input := info.input
-		if len(input) > maxPreviewBytes {
-			input = input[:maxPreviewBytes]
+		inputTruncated := false
+		// Keep input bounded and validate-friendly even if caller passes a smaller preview cap.
+		inputMax := maxPreviewBytes
+		if inputMax > schema.ToolInputMaxBytesV1 {
+			inputMax = schema.ToolInputMaxBytesV1
 		}
+		if len(input) > inputMax {
+			input = input[:inputMax]
+			inputTruncated = true
+		}
+
+		inStr, inApplied := redact.Text(string(input))
+		inStr, inCapped := capStringBytes(inStr, inputMax)
+		input = []byte(inStr)
+
 		outPreview := line
+		outTruncated := false
 		if len(outPreview) > maxPreviewBytes {
 			outPreview = outPreview[:maxPreviewBytes]
+			outTruncated = true
 		}
 		outStr, a := redact.Text(string(outPreview))
+		outStr, outCapped := capStringBytes(outStr, maxPreviewBytes)
 
 		duration := time.Since(info.start).Milliseconds()
 		ev := schema.TraceEventV1{
@@ -162,9 +186,14 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 				ErrBytes:   0,
 				OutPreview: outStr,
 			},
-			RedactionsApplied: a.Names,
+			RedactionsApplied: unionStrings(inApplied.Names, a.Names),
+			Integrity: &schema.TraceIntegrityV1{
+				Truncated: inputTruncated || inCapped || outTruncated || outCapped,
+			},
 		}
-		_ = store.AppendJSONL(tracePath, ev)
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return err
@@ -172,6 +201,7 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 
 	<-reqDone
 	waitErr := cmd.Wait()
+	waited = true
 	if waitErr != nil {
 		var ee *exec.ExitError
 		if errors.As(waitErr, &ee) {
@@ -232,4 +262,29 @@ func bytesTrim(b []byte) []byte {
 		j--
 	}
 	return b[i:j]
+}
+
+func capStringBytes(s string, maxBytes int) (string, bool) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	return s[:maxBytes], true
+}
+
+func unionStrings(parts ...[]string) []string {
+	out := make([]string, 0, 4)
+	seen := map[string]bool{}
+	for _, p := range parts {
+		for _, s := range p {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }

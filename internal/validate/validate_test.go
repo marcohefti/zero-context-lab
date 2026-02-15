@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
 func TestValidate_MissingArtifact_Strict(t *testing.T) {
@@ -54,7 +56,7 @@ func TestValidate_BoundsExceeded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(attemptDir, "feedback.json"), []byte(`{"schemaVersion":1,"runId":"20260215-180012Z-09c5a6","suiteId":"s","missionId":"m","attemptId":"`+attemptID+`","ok":true,"result":"x","createdAt":"2026-02-15T18:00:00Z"}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tooLong := make([]byte, MaxPreviewBytesV1+1)
+	tooLong := make([]byte, schema.PreviewMaxBytesV1+1)
 	for i := range tooLong {
 		tooLong[i] = 'a'
 	}

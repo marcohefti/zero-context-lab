@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
+	"github.com/marcohefti/zero-context-lab/internal/redact"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
@@ -43,7 +45,8 @@ type ToolCallInput struct {
 }
 
 func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace) error {
-	input, err := json.Marshal(ToolCallInput{Argv: argv})
+	redArgv, argvApplied := redactStrings(argv)
+	input, inputTruncated, inputWarn, err := boundedToolInputJSON(ToolCallInput{Argv: redArgv}, schema.ToolInputMaxBytesV1)
 	if err != nil {
 		return err
 	}
@@ -54,6 +57,15 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		exitCodePtr = &exitCode
 	}
 
+	outPrev, outApplied := redact.Text(res.OutPreview)
+	errPrev, errApplied := redact.Text(res.ErrPreview)
+
+	outPrev, outCapped := capStringBytes(outPrev, schema.PreviewMaxBytesV1)
+	errPrev, errCapped := capStringBytes(errPrev, schema.PreviewMaxBytesV1)
+
+	redactions := unionStrings(argvApplied, outApplied.Names, errApplied.Names)
+	warnings := append([]schema.TraceWarningV1(nil), inputWarn...)
+
 	ev := schema.TraceEventV1{
 		V:         schema.TraceSchemaV1,
 		TS:        now.UTC().Format(time.RFC3339Nano),
@@ -62,7 +74,7 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		MissionID: env.MissionID,
 		AttemptID: env.AttemptID,
 		AgentID:   env.AgentID,
-		Tool:      argv[0],
+		Tool:      "cli",
 		Op:        "exec",
 		Input:     input,
 		Result: schema.TraceResultV1{
@@ -74,12 +86,13 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		IO: schema.TraceIOV1{
 			OutBytes:   res.OutBytes,
 			ErrBytes:   res.ErrBytes,
-			OutPreview: res.OutPreview,
-			ErrPreview: res.ErrPreview,
+			OutPreview: outPrev,
+			ErrPreview: errPrev,
 		},
-		RedactionsApplied: []string{},
+		RedactionsApplied: redactions,
+		Warnings:          warnings,
 		Integrity: &schema.TraceIntegrityV1{
-			Truncated: res.OutTruncated || res.ErrTruncated,
+			Truncated: inputTruncated || outCapped || errCapped || res.OutTruncated || res.ErrTruncated,
 		},
 	}
 
@@ -98,4 +111,86 @@ type ResultForTrace struct {
 	ErrPreview   string
 	OutTruncated bool
 	ErrTruncated bool
+}
+
+func redactStrings(in []string) ([]string, []string) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	var applied []string
+	for _, s := range in {
+		red, a := redact.Text(s)
+		out = append(out, red)
+		applied = append(applied, a.Names...)
+	}
+	return out, uniqStrings(applied)
+}
+
+func boundedToolInputJSON(v any, maxBytes int) (json.RawMessage, bool, []schema.TraceWarningV1, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if len(b) <= maxBytes {
+		return b, false, nil, nil
+	}
+
+	// Special-case the only input we currently emit (argv) and trim args until it fits.
+	if tc, ok := v.(ToolCallInput); ok {
+		argv := append([]string(nil), tc.Argv...)
+		for len(argv) > 1 {
+			argv = argv[:len(argv)-1]
+			b2, err := json.Marshal(ToolCallInput{Argv: argv})
+			if err != nil {
+				return nil, false, nil, err
+			}
+			if len(b2) <= maxBytes {
+				return b2, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
+			}
+		}
+		// Last resort: drop argv content entirely (still a valid shape).
+		b3, err := json.Marshal(ToolCallInput{Argv: []string{"[TRUNCATED]"}})
+		if err != nil {
+			return nil, false, nil, err
+		}
+		if len(b3) > maxBytes {
+			// Should be impossible, but avoid violating the contract.
+			return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
+		}
+		return b3, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
+	}
+
+	// Unknown input type: omit it rather than violating bounds.
+	return nil, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input omitted to fit bounds"}}, nil
+}
+
+func capStringBytes(s string, maxBytes int) (string, bool) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	return s[:maxBytes], true
+}
+
+func unionStrings(parts ...[]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range parts {
+		for _, s := range p {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func uniqStrings(in []string) []string {
+	return unionStrings(in)
 }
