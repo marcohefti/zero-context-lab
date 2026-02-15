@@ -304,6 +304,10 @@ Config precedence (suggested):
 4. global config (`~/.zcl/config.*`)
 5. built-in defaults
 
+## Distribution Notes
+
+ZCL does not implement a `zcl update` self-updater in v1. Prefer deterministic upgrades via your package manager or pinned release binaries (see `scripts/release-build.sh` + checksums).
+
 ## Validation & Guardrails (Second Review Round)
 This section is the "keep it coherent" layer: mechanical rules + checks so ZCL stays agent-legible as it grows.
 

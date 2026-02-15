@@ -134,11 +134,11 @@ Goal: proxy MCP JSON-RPC boundaries and emit trace events comparable to CLI funn
 
 Goal: ship a single binary with simple, safe install/update patterns and release validation.
 
-1. [ ] Add a release build script and produce per-platform artifacts (mac/linux/windows) + checksums.
-2. [ ] Add `scripts/release-check.*` mirroring SurfWright's approach:
+1. [x] Add a release build script and produce per-platform artifacts (mac/linux/windows) + checksums.
+2. [x] Add `scripts/release-check.*` mirroring SurfWright's approach:
    validate checksums exist, versions match, and release notes/changelog policy is satisfied.
-3. [ ] Add optional installer scripts (`install.sh`, `install.ps1`) and test them in CI (smoke).
-4. [ ] Decide whether `zcl update` exists; if yes, implement `zcl update status --json` first.
+3. [x] Add optional installer scripts (`install.sh`, `install.ps1`) and test them in CI (smoke).
+4. [x] Decide whether `zcl update` exists; if yes, implement `zcl update status --json` first.
 
 ## Progress Execution Log
 
@@ -163,4 +163,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 7 Step 1-4: Added config merge precedence and implemented `zcl doctor` + `zcl gc` (age/size retention, pinned runs supported via `run.json.pinned`) with deterministic GC tests. Next: Phase 8 (Codex enrichment + skill pack).
 - 2026-02-15: Phase 8: Implemented `zcl enrich --runner codex` (runner.ref.json + runner.metrics.json) with tolerant rollout JSONL parsing, added in-repo Codex skill (`skills/zcl/`), and wired a skills validation script into `./scripts/verify.sh`. Next: Phase 9 (MCP proxy funnel).
 - 2026-02-15: Phase 9: Implemented `zcl mcp proxy` (stdio) with trace emission for initialize/tools/list/tools/call and deterministic integration tests using a tiny helper MCP server. Next: Phase 10 (distribution + release guardrails).
+- 2026-02-15: Phase 10: Added release build/check scripts, installer scripts with a smoke test, and documented that `zcl update` is intentionally not part of v1. Next: finish by ensuring all phases are checked and `./scripts/verify.sh` stays green.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
