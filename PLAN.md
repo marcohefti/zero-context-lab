@@ -103,12 +103,12 @@ Goal: enforce artifact integrity mechanically (discovery mode best-effort; CI mo
 
 Goal: keep the harness usable at scale (many runs) and safe by default.
 
-1. [ ] Implement minimal config load/merge (CLI flags > env > project config > global config > defaults).
-2. [ ] Implement `zcl doctor` (human output + `--json`):
+1. [x] Implement minimal config load/merge (CLI flags > env > project config > global config > defaults).
+2. [x] Implement `zcl doctor` (human output + `--json`):
    write access, config parse, environment sanity, optional runner availability.
-3. [ ] Implement `zcl gc`:
+3. [x] Implement `zcl gc`:
    age/size-based cleanup under `.zcl/runs/`, support pinning runs in `run.json`.
-4. [ ] Add tests or deterministic fixtures for GC selection logic.
+4. [x] Add tests or deterministic fixtures for GC selection logic.
 
 ### Phase 8: Codex Enrichment + Skill Pack (MVP2)
 
@@ -160,4 +160,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 4 Step 1-4: Implemented `zcl feedback` (atomic `feedback.json`) and `zcl note` (append `notes.jsonl`) with bounded payload + basic redaction, updated contract snapshot, and added tests for schema + redaction behavior. Next: Phase 5 begins (`zcl report`).
 - 2026-02-15: Phase 5: Implemented `zcl report` with `--strict`, expanded metrics to include `failuresByCode`, added golden fixtures and strict-missing-artifact tests, and updated schemas/docs accordingly. Next: Phase 6 (`zcl validate`).
 - 2026-02-15: Phase 6: Implemented `zcl validate` (strict vs best-effort) with typed codes for missing artifacts, invalid JSON/JSONL, unsupported schema versions, id mismatches, bounds, and containment, plus tests. Next: Phase 7 (config merge, doctor, gc).
+- 2026-02-15: Phase 7 Step 1-4: Added config merge precedence and implemented `zcl doctor` + `zcl gc` (age/size retention, pinned runs supported via `run.json.pinned`) with deterministic GC tests. Next: Phase 8 (Codex enrichment + skill pack).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

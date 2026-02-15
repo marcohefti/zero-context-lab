@@ -41,7 +41,8 @@ Required fields:
   "schemaVersion": 1,
   "runId": "20260215-180012Z-09c5a6",
   "suiteId": "heftiweb-smoke",
-  "createdAt": "2026-02-15T18:00:12.123456789Z"
+  "createdAt": "2026-02-15T18:00:12.123456789Z",
+  "pinned": true
 }
 ```
 

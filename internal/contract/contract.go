@@ -133,6 +133,16 @@ func Build(version string) Contract {
 				Summary: "Validate artifact integrity (schemas, ids, bounds, containment) with typed error codes.",
 			},
 			{
+				ID:      "doctor",
+				Usage:   "zcl doctor [--out-root .zcl] [--json]",
+				Summary: "Check environment/config sanity (write access, config parse, optional runner availability).",
+			},
+			{
+				ID:      "gc",
+				Usage:   "zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]",
+				Summary: "Retention cleanup under .zcl/runs (age/size; respects pinned runs).",
+			},
+			{
 				ID:      "run",
 				Usage:   "zcl run -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",

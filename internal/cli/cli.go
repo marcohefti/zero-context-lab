@@ -15,8 +15,10 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
+	"github.com/marcohefti/zero-context-lab/internal/doctor"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
+	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
@@ -66,6 +68,10 @@ func (r Runner) Run(args []string) int {
 		return r.runReport(args[1:])
 	case "validate":
 		return r.runValidate(args[1:])
+	case "doctor":
+		return r.runDoctor(args[1:])
+	case "gc":
+		return r.runGC(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -107,7 +113,7 @@ func (r Runner) runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	outRoot := fs.String("out-root", ".zcl", "project output root (default .zcl)")
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	configPath := fs.String("config", config.DefaultProjectConfigPath, "project config path (default zcl.config.json)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
@@ -120,7 +126,12 @@ func (r Runner) runInit(args []string) int {
 		return 0
 	}
 
-	res, err := config.InitProject(*configPath, *outRoot)
+	m, err := config.LoadMerged(*outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	res, err := config.InitProject(*configPath, m.OutRoot)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
@@ -247,7 +258,7 @@ func (r Runner) runAttemptStart(args []string) int {
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	agentID := fs.String("agent-id", "", "runner agent id (optional)")
 	mode := fs.String("mode", "discovery", "run mode: discovery|ci")
-	outRoot := fs.String("out-root", ".zcl", "project output root (default .zcl)")
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	retry := fs.Int("retry", 1, "attempt retry number (default 1)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
@@ -264,8 +275,13 @@ func (r Runner) runAttemptStart(args []string) int {
 		return r.failUsage("attempt start: require --json for stable output")
 	}
 
+	m, err := config.LoadMerged(*outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
 	res, err := attempt.Start(r.Now(), attempt.StartOpts{
-		OutRoot:   *outRoot,
+		OutRoot:   m.OutRoot,
 		RunID:     *runID,
 		SuiteID:   *suite,
 		MissionID: *mission,
@@ -459,6 +475,86 @@ func (r Runner) runValidate(args []string) int {
 	return 0
 }
 
+func (r Runner) runDoctor(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("doctor: invalid flags")
+	}
+	if *help {
+		printDoctorHelp(r.Stdout)
+		return 0
+	}
+
+	res, err := doctor.Run(*outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	if *jsonOut {
+		return r.writeJSON(res)
+	}
+	if res.OK {
+		fmt.Fprintf(r.Stdout, "doctor: OK outRoot=%s\n", res.OutRoot)
+		return 0
+	}
+	fmt.Fprintf(r.Stderr, "doctor: FAIL outRoot=%s\n", res.OutRoot)
+	for _, c := range res.Checks {
+		if !c.OK {
+			fmt.Fprintf(r.Stderr, "  FAIL %s: %s\n", c.ID, c.Message)
+		}
+	}
+	return 1
+}
+
+func (r Runner) runGC(args []string) int {
+	fs := flag.NewFlagSet("gc", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
+	maxAgeDays := fs.Int("max-age-days", 30, "delete runs older than N days (unpinned only); 0 disables")
+	maxTotalBytes := fs.Int64("max-total-bytes", 0, "delete oldest runs until total size is under this threshold (unpinned only); 0 disables")
+	dryRun := fs.Bool("dry-run", false, "print what would be deleted without deleting")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("gc: invalid flags")
+	}
+	if *help {
+		printGCHelp(r.Stdout)
+		return 0
+	}
+
+	m, err := config.LoadMerged(*outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+
+	res, err := gc.Run(gc.Opts{
+		OutRoot:       m.OutRoot,
+		Now:           r.Now(),
+		MaxAgeDays:    *maxAgeDays,
+		MaxTotalBytes: *maxTotalBytes,
+		DryRun:        *dryRun,
+	})
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	if *jsonOut {
+		return r.writeJSON(res)
+	}
+	fmt.Fprintf(r.Stdout, "gc: OK deleted=%d kept=%d dryRun=%v\n", len(res.Deleted), len(res.Kept), res.DryRun)
+	return 0
+}
+
 func (r Runner) printReportErr(err error) int {
 	var ce *report.CliError
 	if errors.As(err, &ce) {
@@ -497,6 +593,8 @@ Usage:
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
   zcl validate [--strict] [--json] <attemptDir|runDir>
+  zcl doctor [--json]
+  zcl gc [--dry-run] [--json]
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -507,6 +605,8 @@ Commands:
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
   validate         Validate artifact integrity with typed error codes.
+  doctor           Check environment/config sanity for running ZCL.
+  gc               Retention cleanup under .zcl/runs (supports pinning).
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -565,5 +665,17 @@ func printReportHelp(w io.Writer) {
 func printValidateHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl validate [--strict] [--json] <attemptDir|runDir>
+`)
+}
+
+func printDoctorHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl doctor [--out-root .zcl] [--json]
+`)
+}
+
+func printGCHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]
 `)
 }

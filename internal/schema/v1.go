@@ -14,6 +14,7 @@ type RunJSONV1 struct {
 	RunID         string `json:"runId"`
 	SuiteID       string `json:"suiteId"`
 	CreatedAt     string `json:"createdAt"` // RFC3339 UTC (use consistent precision)
+	Pinned        bool   `json:"pinned,omitempty"`
 }
 
 // AttemptJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/attempt.json
