@@ -44,7 +44,7 @@ Goal: make evidence artifacts and schema versions explicit so validation/reporti
 Goal: orchestrator can allocate attempts deterministically and we can locate artifacts without guesswork.
 
 1. [x] Implement `zcl init` to create a minimal project config and ensure `.zcl/` exists.
-2. [ ] Extend `zcl attempt start`:
+2. [x] Extend `zcl attempt start`:
    write `prompt.txt` (optional) when provided, and optionally snapshot input suite (`suite.json`) when running a suite.
 3. [ ] Add `zcl attempt start --json` output contract documentation to `ARCHITECTURE.md`:
    exact keys and semantics (env map, outDirAbs, ids).
@@ -150,4 +150,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 1 Step 3-4: Expanded `zcl contract --json` with explicit artifact/event requirements + supported schema versions, then updated `test/fixtures/contract/contract.snapshot.json`. Next: add tests that fail on contract drift without snapshot updates.
 - 2026-02-15: Phase 1 Step 5: Added a strict contract snapshot test so `go test` fails if the contract drifts without updating the snapshot. Next: Phase 2 begins (attempt lifecycle + output root).
 - 2026-02-15: Phase 2 Step 1: Implemented `zcl init` (writes `zcl.config.json`, ensures `.zcl/runs` exists) with unit tests; updated contract + snapshot accordingly. Next: extend `attempt start` to write `prompt.txt` and optionally snapshot suites.
+- 2026-02-15: Phase 2 Step 2: Extended `zcl attempt start` with optional prompt (`prompt.txt`) and suite snapshot (`suite.json`), with tests and contract snapshot updates. Next: document the `attempt start --json` output contract in `ARCHITECTURE.md`.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

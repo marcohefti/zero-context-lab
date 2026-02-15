@@ -134,6 +134,8 @@ func (r Runner) runAttemptStart(args []string) int {
 
 	suite := fs.String("suite", "", "suite id (required)")
 	mission := fs.String("mission", "", "mission id (required)")
+	prompt := fs.String("prompt", "", "optional mission prompt to snapshot into prompt.txt")
+	suiteFile := fs.String("suite-file", "", "optional JSON suite file to snapshot into suite.json")
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	agentID := fs.String("agent-id", "", "runner agent id (optional)")
 	mode := fs.String("mode", "discovery", "run mode: discovery|ci")
@@ -162,6 +164,8 @@ func (r Runner) runAttemptStart(args []string) int {
 		AgentID:   *agentID,
 		Mode:      *mode,
 		Retry:     *retry,
+		Prompt:    *prompt,
+		SuiteFile: *suiteFile,
 	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
@@ -222,6 +226,6 @@ func printAttemptHelp(w io.Writer) {
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl attempt start --suite <suiteId> --mission <missionId> [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
+  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
 `)
 }

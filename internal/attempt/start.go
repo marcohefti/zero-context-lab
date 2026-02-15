@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ type StartOpts struct {
 	AgentID   string
 	Mode      string
 	Retry     int
+	Prompt    string
+	SuiteFile string
 }
 
 type StartResult struct {
@@ -92,6 +95,40 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, err
 	}
 
+	// Optional: snapshot a suite input file into the run directory.
+	if strings.TrimSpace(opts.SuiteFile) != "" {
+		raw, err := os.ReadFile(opts.SuiteFile)
+		if err != nil {
+			return nil, err
+		}
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("invalid --suite-file json: %w", err)
+		}
+
+		suiteJSONPath := filepath.Join(runDir, "suite.json")
+		if _, err := os.Stat(suiteJSONPath); err == nil {
+			existing, err := os.ReadFile(suiteJSONPath)
+			if err != nil {
+				return nil, err
+			}
+			var existingAny any
+			if err := json.Unmarshal(existing, &existingAny); err != nil {
+				return nil, err
+			}
+			// Compare semantic JSON, not bytes (snapshot is canonicalized by WriteJSONAtomic).
+			if !reflect.DeepEqual(existingAny, v) {
+				return nil, fmt.Errorf("suite.json mismatch for runId=%s", runID)
+			}
+		} else if os.IsNotExist(err) {
+			if err := store.WriteJSONAtomic(suiteJSONPath, v); err != nil {
+				return nil, err
+			}
+		} else if err != nil {
+			return nil, err
+		}
+	}
+
 	// Create run.json if missing (or validate it if present).
 	runJSONPath := filepath.Join(runDir, "run.json")
 	if _, err := os.Stat(runJSONPath); err == nil {
@@ -135,6 +172,12 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	outDirAbs, err := filepath.Abs(outDir)
 	if err != nil {
 		return nil, err
+	}
+
+	if strings.TrimSpace(opts.Prompt) != "" {
+		if err := store.WriteFileAtomic(filepath.Join(outDir, "prompt.txt"), []byte(opts.Prompt)); err != nil {
+			return nil, err
+		}
 	}
 
 	attemptMeta := schema.AttemptJSONV1{

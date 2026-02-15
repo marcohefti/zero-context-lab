@@ -45,6 +45,12 @@ Required fields:
 }
 ```
 
+## `suite.json` (snapshot; optional)
+
+Path: `.zcl/runs/<runId>/suite.json`
+
+If `zcl attempt start --suite-file <path>` is used, ZCL snapshots the suite JSON here (canonicalized JSON for diffability).
+
 ## `attempt.json` (v1)
 
 Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.json`
@@ -64,6 +70,12 @@ Required fields:
 
 Optional fields:
 - `agentId` (runner-provided correlation id)
+
+## `prompt.txt` (snapshot; optional)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/prompt.txt`
+
+If `zcl attempt start --prompt <text>` is used, ZCL snapshots the prompt text here.
 
 ## `tool.calls.jsonl` trace events (v1)
 

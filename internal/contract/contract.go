@@ -54,12 +54,28 @@ func Build(version string) Contract {
 				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "createdAt"},
 			},
 			{
+				ID:             "suite.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/suite.json",
+				RequiredFields: []string{},
+			},
+			{
 				ID:             "attempt.json",
 				Kind:           "json",
 				SchemaVersions: []int{1},
 				Required:       true,
 				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.json",
 				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "mode", "startedAt"},
+			},
+			{
+				ID:             "prompt.txt",
+				Kind:           "text",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/prompt.txt",
+				RequiredFields: []string{},
 			},
 			{
 				ID:             "feedback.json",
@@ -103,7 +119,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "attempt start",
-				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> --json",
+				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] --json",
 				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
 			},
 		},

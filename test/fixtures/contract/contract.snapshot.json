@@ -20,6 +20,16 @@
       ]
     },
     {
+      "id": "suite.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/suite.json",
+      "requiredFields": []
+    },
+    {
       "id": "attempt.json",
       "kind": "json",
       "schemaVersions": [
@@ -36,6 +46,16 @@
         "mode",
         "startedAt"
       ]
+    },
+    {
+      "id": "prompt.txt",
+      "kind": "text",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/prompt.txt",
+      "requiredFields": []
     },
     {
       "id": "feedback.json",
@@ -120,7 +140,7 @@
     },
     {
       "id": "attempt start",
-      "usage": "zcl attempt start --suite <suiteId> --mission <missionId> --json",
+      "usage": "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] --json",
       "summary": "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent."
     }
   ],
