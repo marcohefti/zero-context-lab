@@ -1,72 +1,113 @@
-# ZCL Agent Map (High-Signal)
+# ZCL Map (Operator + Builder Index)
 
-Start here:
-- `PLAN.md` (implementation checklist; update execution log as work progresses)
-- `CONCEPT.md` (why ZCL exists; non-negotiables; operator UX baseline)
-- `ARCHITECTURE.md` (how we implement it without overengineering)
-- `SCHEMAS.md` (exact v1 artifact schemas; the contract docs that keep us honest)
+This file is the navigation map. It should stay short and high-signal.
+The system of record lives in the linked docs + contracts + validation scripts.
 
-## What ZCL Is
-ZCL is a funnel-first benchmark harness. It measures agent/operator UX by producing deterministic, trace-backed artifacts.
+## Start Here (In Order)
 
-## Evidence Hierarchy
-Primary evidence (scoring must work from this alone):
-- `tool.calls.jsonl` (funnel trace)
-- `feedback.json` (canonical mission outcome; written via `zcl feedback`)
+1. `PLAN.md`
+   - Execution checklist. Do steps in order. Update the log as you go.
+2. `CONCEPT.md`
+   - Why ZCL exists and the non-negotiables (funnel-first evidence, bounded outputs, runner-agnostic scoring).
+3. `ARCHITECTURE.md`
+   - The intended shape: command surface, artifacts, determinism, guardrails.
+4. `SCHEMAS.md`
+   - Exact v1 artifact schemas and canonical ID formats.
 
-Secondary evidence (useful for triage; never overrides trace evidence):
-- `notes.jsonl` (agent self-reports, operator notes, structured follow-ups)
-- `runner.*.json` (optional enrichment from runners like Codex)
+Repo validation (must be green after meaningful changes):
+- `./scripts/verify.sh`
 
-## Operator Invocation Story
-When an operator says "run this through ZCL", the orchestrator (Codex skill) should:
-1. Resolve the ZCL entrypoint (`zcl` on `PATH`, or a project wrapper like `pnpm zcl`).
-2. Start an attempt and pass `ZCL_*` env + a fixed harness preamble to a fresh "zero context" agent.
-3. Keep Turn 2 intentionally unstructured (mission prompt is a single sentence).
-4. Require the agent to finish with `zcl feedback ...`.
-5. Optionally collect free-form + structured self-report feedback and persist it via `zcl note ...`.
+## Non-Negotiables (Keep This Boring)
 
-## Artifact Layout (Example)
-Per project, artifacts live under `.zcl/` by default:
-```text
+- Primary evidence is artifacts, not transcripts.
+  - `tool.calls.jsonl` (funnel trace)
+  - `feedback.json` (canonical mission outcome)
+- Runner enrichments are optional and must not affect scoring.
+- Bounded capture by default; redact obvious secrets.
+- Deterministic shapes: stable JSON, versioned schemas, atomic writes, safe JSONL appends.
+- If you change artifact layout or schema: update `SCHEMAS.md`, `zcl contract --json`, contract snapshot, and tests together.
+
+## Operator Workflow (Golden Path)
+
+1. Initialize: `zcl init`
+2. Start attempt (JSON output is required for automation):
+   - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --json`
+3. Run actions through the funnel:
+   - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
+   - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
+4. Finish with authoritative outcome:
+   - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
+5. Optional secondary evidence:
+   - `zcl note --kind agent|operator --message <text>`
+   - `zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]`
+6. Compute and validate:
+   - `zcl report --strict <attemptDir|runDir>`
+   - `zcl validate --strict <attemptDir|runDir>`
+
+## Artifact Layout (Default)
+
+Root: `.zcl/`
+```
 .zcl/
-  runs/
-    <runId>/
-      run.json
-      attempts/
-        <attemptId>/
-          attempt.json
-          tool.calls.jsonl
-          feedback.json
-          notes.jsonl
-          attempt.report.json
+  runs/<runId>/
+    run.json
+    suite.json                  (optional snapshot)
+    attempts/<attemptId>/
+      attempt.json
+      prompt.txt                (optional snapshot)
+      tool.calls.jsonl          (primary evidence)
+      feedback.json             (primary evidence)
+      notes.jsonl               (optional; secondary evidence)
+      attempt.report.json       (computed)
+      runner.ref.json           (optional enrichment)
+      runner.metrics.json       (optional enrichment)
 ```
 
-## Command Surface (MVP)
-Core:
-- `zcl init`
-- `zcl attempt start --json` (allocates attempt dir + ids; prints env/pointers)
-- `zcl run -- <cmd> ...` (CLI funnel)
-- `zcl feedback ...` (canonical outcome)
-- `zcl report ...`
-- `zcl validate ...`
-- `zcl contract --json`
-- `zcl doctor`
-- `zcl gc`
+## Where To Change Things (By Intent)
 
-Optional/later:
-- `zcl note ...` (secondary evidence; implemented)
-- `zcl enrich --runner codex`
-- `zcl mcp proxy ...`
-- `zcl replay ...`
+If you’re changing CLI behavior or adding a command:
+- `internal/cli/cli.go`
+- `internal/contract/contract.go` (command + artifact contract)
+- `test/fixtures/contract/contract.snapshot.json` (via `scripts/contract-snapshot.sh --update`)
 
-## Repo Validation
-Run the SurfWright-style, script-driven checks before merge/release:
-```bash
-./scripts/verify.sh
-```
+If you’re changing artifact shapes or schema versions:
+- `internal/schema/`
+- `SCHEMAS.md`
+- `internal/contract/contract.go` + contract snapshot test
 
-## Guardrails
-- Don’t couple scoring to runner transcripts.
-- Keep captures bounded + redacted by default.
-- If you change artifact layout or trace schema, update docs + validation rules together.
+If you’re changing trace emission:
+- CLI funnel exec: `internal/funnel/cli_funnel/exec.go`
+- MCP proxy funnel: `internal/funnel/mcp_proxy/proxy.go`
+- Trace writer/util: `internal/trace/trace.go`
+- JSONL append safety: `internal/store/jsonl.go` + `internal/store/lock.go`
+
+If you’re changing redaction or bounds:
+- `internal/redact/redact.go`
+- `internal/feedback/feedback.go`, `internal/note/note.go`
+- `internal/validate/validate.go` (bounds are enforced here too)
+
+If you’re changing reporting/metrics:
+- `internal/report/report.go`
+- Golden fixtures: `test/fixtures/report/`
+
+If you’re changing retention/scale knobs:
+- `internal/gc/gc.go`
+- `internal/doctor/doctor.go`
+- `internal/config/merge.go`
+
+If you’re changing Codex enrichment:
+- `internal/enrich/`
+- Runner schemas: `internal/schema/runner_v1.go`
+
+## Mechanical Guardrails (What Enforces Coherence)
+
+Single entrypoint:
+- `./scripts/verify.sh`
+
+What it runs:
+- `scripts/docs-check.sh` (doc cross-links exist)
+- `scripts/skills-check.sh` (skill pack sanity)
+- gofmt check
+- `go test ./...`, `go vet ./...`
+- `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
+
