@@ -93,6 +93,22 @@ func Build(version string) Contract {
 				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json",
 				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "computedAt", "metrics"},
 			},
+			{
+				ID:             "runner.ref.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/runner.ref.json",
+				RequiredFields: []string{"schemaVersion", "runner", "runId", "suiteId", "missionId", "attemptId"},
+			},
+			{
+				ID:             "runner.metrics.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/runner.metrics.json",
+				RequiredFields: []string{"schemaVersion", "runner"},
+			},
 		},
 		Events: []Event{
 			{
@@ -141,6 +157,11 @@ func Build(version string) Contract {
 				ID:      "gc",
 				Usage:   "zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]",
 				Summary: "Retention cleanup under .zcl/runs (age/size; respects pinned runs).",
+			},
+			{
+				ID:      "enrich",
+				Usage:   "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
+				Summary: "Optional runner enrichment (writes runner.ref.json + runner.metrics.json).",
 			},
 			{
 				ID:      "run",

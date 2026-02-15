@@ -92,6 +92,36 @@
         "computedAt",
         "metrics"
       ]
+    },
+    {
+      "id": "runner.ref.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/runner.ref.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runner",
+        "runId",
+        "suiteId",
+        "missionId",
+        "attemptId"
+      ]
+    },
+    {
+      "id": "runner.metrics.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/runner.metrics.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runner"
+      ]
     }
   ],
   "events": [
@@ -162,6 +192,11 @@
       "id": "gc",
       "usage": "zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]",
       "summary": "Retention cleanup under .zcl/runs (age/size; respects pinned runs)."
+    },
+    {
+      "id": "enrich",
+      "usage": "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
+      "summary": "Optional runner enrichment (writes runner.ref.json + runner.metrics.json)."
     },
     {
       "id": "run",

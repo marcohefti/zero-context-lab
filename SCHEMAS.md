@@ -186,3 +186,39 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   }
 }
 ```
+
+## `runner.ref.json` (optional; v1)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/runner.ref.json`
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "runner": "codex",
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "missionId": "latest-blog-title",
+  "attemptId": "001-latest-blog-title-r1",
+  "agentId": "optional-runner-agent-id",
+  "rolloutPath": "/path/to/rollout.jsonl"
+}
+```
+
+## `runner.metrics.json` (optional; v1)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/runner.metrics.json`
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "runner": "codex",
+  "model": "gpt-5.1",
+  "totalTokens": 12345,
+  "inputTokens": 111,
+  "outputTokens": 222,
+  "cachedInputTokens": 0,
+  "reasoningOutputTokens": 333
+}
+```

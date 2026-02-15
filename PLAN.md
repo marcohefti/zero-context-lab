@@ -114,13 +114,13 @@ Goal: keep the harness usable at scale (many runs) and safe by default.
 
 Goal: keep scoring runner-agnostic, but allow optional enrichment from Codex sessions and ship the orchestrator workflow.
 
-1. [ ] Implement `zcl enrich --runner codex`:
+1. [x] Implement `zcl enrich --runner codex`:
    emit `runner.ref.json` + `runner.metrics.json` (tokens/turns/model when available).
-2. [ ] Add robust parsing for Codex rollout JSONL:
+2. [x] Add robust parsing for Codex rollout JSONL:
    tolerate missing fields/schema drift; treat metrics as nullable.
-3. [ ] Create and ship a Codex skill in-repo (e.g. `skills/zcl/`):
+3. [x] Create and ship a Codex skill in-repo (e.g. `skills/zcl/`):
    includes orchestrator responsibilities and the Turn 1/2/3 protocol.
-4. [ ] Add skill validation script + wire it into `./scripts/verify.sh`.
+4. [x] Add skill validation script + wire it into `./scripts/verify.sh`.
 
 ### Phase 9: MCP Funnel (MVP3)
 
@@ -161,4 +161,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 5: Implemented `zcl report` with `--strict`, expanded metrics to include `failuresByCode`, added golden fixtures and strict-missing-artifact tests, and updated schemas/docs accordingly. Next: Phase 6 (`zcl validate`).
 - 2026-02-15: Phase 6: Implemented `zcl validate` (strict vs best-effort) with typed codes for missing artifacts, invalid JSON/JSONL, unsupported schema versions, id mismatches, bounds, and containment, plus tests. Next: Phase 7 (config merge, doctor, gc).
 - 2026-02-15: Phase 7 Step 1-4: Added config merge precedence and implemented `zcl doctor` + `zcl gc` (age/size retention, pinned runs supported via `run.json.pinned`) with deterministic GC tests. Next: Phase 8 (Codex enrichment + skill pack).
+- 2026-02-15: Phase 8: Implemented `zcl enrich --runner codex` (runner.ref.json + runner.metrics.json) with tolerant rollout JSONL parsing, added in-repo Codex skill (`skills/zcl/`), and wired a skills validation script into `./scripts/verify.sh`. Next: Phase 9 (MCP proxy funnel).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 ./scripts/docs-check.sh
+./scripts/skills-check.sh
 
 go_files="$(find . -type f -name '*.go' -not -path './vendor/*' || true)"
 if [[ -n "${go_files}" ]]; then
@@ -24,4 +25,3 @@ go vet ./...
 ./scripts/contract-snapshot.sh --check
 
 echo "verify: PASS"
-

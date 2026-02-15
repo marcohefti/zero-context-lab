@@ -16,6 +16,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
 	"github.com/marcohefti/zero-context-lab/internal/doctor"
+	"github.com/marcohefti/zero-context-lab/internal/enrich"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/gc"
@@ -72,6 +73,8 @@ func (r Runner) Run(args []string) int {
 		return r.runDoctor(args[1:])
 	case "gc":
 		return r.runGC(args[1:])
+	case "enrich":
+		return r.runEnrich(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -555,6 +558,61 @@ func (r Runner) runGC(args []string) int {
 	return 0
 }
 
+func (r Runner) runEnrich(args []string) int {
+	fs := flag.NewFlagSet("enrich", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	runner := fs.String("runner", "", "runner kind (required): codex")
+	rollout := fs.String("rollout", "", "path to runner rollout jsonl (required for codex)")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("enrich: invalid flags")
+	}
+	if *help {
+		printEnrichHelp(r.Stdout)
+		return 0
+	}
+	if strings.TrimSpace(*runner) == "" {
+		printEnrichHelp(r.Stderr)
+		return r.failUsage("enrich: missing --runner")
+	}
+
+	target := ""
+	if rest := fs.Args(); len(rest) == 1 {
+		target = rest[0]
+	} else if len(rest) == 0 {
+		if env, err := trace.EnvFromProcess(); err == nil {
+			target = env.OutDirAbs
+		}
+	} else {
+		printEnrichHelp(r.Stderr)
+		return r.failUsage("enrich: require at most one <attemptDir>")
+	}
+	if target == "" {
+		printEnrichHelp(r.Stderr)
+		return r.failUsage("enrich: missing <attemptDir> (or set ZCL_OUT_DIR)")
+	}
+
+	switch *runner {
+	case "codex":
+		if err := enrich.EnrichCodexAttempt(target, *rollout); err != nil {
+			var ce *enrich.CliError
+			if errors.As(err, &ce) {
+				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
+				return 2
+			}
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
+	default:
+		return r.failUsage("enrich: unsupported --runner (expected codex)")
+	}
+
+	fmt.Fprintf(r.Stdout, "enrich: OK\n")
+	return 0
+}
+
 func (r Runner) printReportErr(err error) int {
 	var ce *report.CliError
 	if errors.As(err, &ce) {
@@ -595,6 +653,7 @@ Usage:
   zcl validate [--strict] [--json] <attemptDir|runDir>
   zcl doctor [--json]
   zcl gc [--dry-run] [--json]
+  zcl enrich --runner codex --rollout <path> [<attemptDir>]
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -607,6 +666,7 @@ Commands:
   validate         Validate artifact integrity with typed error codes.
   doctor           Check environment/config sanity for running ZCL.
   gc               Retention cleanup under .zcl/runs (supports pinning).
+  enrich           Optional runner enrichment (does not affect scoring).
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -677,5 +737,11 @@ func printDoctorHelp(w io.Writer) {
 func printGCHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]
+`)
+}
+
+func printEnrichHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]
 `)
 }
