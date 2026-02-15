@@ -123,6 +123,11 @@ func Build(version string) Contract {
 				Summary: "Append a bounded/redacted note event to notes.jsonl (secondary evidence).",
 			},
 			{
+				ID:      "report",
+				Usage:   "zcl report [--strict] [--json] <attemptDir|runDir>",
+				Summary: "Compute attempt.report.json from tool.calls.jsonl + feedback.json.",
+			},
+			{
 				ID:      "run",
 				Usage:   "zcl run -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",

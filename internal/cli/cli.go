@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/note"
+	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
 
@@ -58,6 +61,8 @@ func (r Runner) Run(args []string) int {
 		return r.runFeedback(args[1:])
 	case "note":
 		return r.runNote(args[1:])
+	case "report":
+		return r.runReport(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -334,6 +339,95 @@ func (r Runner) runRun(args []string) int {
 	return 0
 }
 
+func (r Runner) runReport(args []string) int {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	strict := fs.Bool("strict", false, "strict mode (missing required artifacts fails)")
+	jsonOut := fs.Bool("json", false, "print JSON output (also writes attempt.report.json)")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("report: invalid flags")
+	}
+	if *help {
+		printReportHelp(r.Stdout)
+		return 0
+	}
+
+	paths := fs.Args()
+	if len(paths) != 1 {
+		printReportHelp(r.Stderr)
+		return r.failUsage("report: require exactly one <attemptDir|runDir>")
+	}
+
+	target := paths[0]
+	info, err := os.Stat(target)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	if !info.IsDir() {
+		return r.failUsage("report: target must be a directory")
+	}
+
+	// If target is a run dir, compute for each attempt under attempts/.
+	if _, err := os.Stat(filepath.Join(target, "run.json")); err == nil {
+		attemptsDir := filepath.Join(target, "attempts")
+		entries, err := os.ReadDir(attemptsDir)
+		if err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			attemptDir := filepath.Join(attemptsDir, e.Name())
+			rep, err := report.BuildAttemptReport(r.Now(), attemptDir, *strict)
+			if err != nil {
+				return r.printReportErr(err)
+			}
+			if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
+				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				return 1
+			}
+			if *jsonOut {
+				if err := json.NewEncoder(r.Stdout).Encode(rep); err != nil {
+					fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to encode json\n")
+					return 1
+				}
+			}
+		}
+		return 0
+	}
+
+	rep, err := report.BuildAttemptReport(r.Now(), target, *strict)
+	if err != nil {
+		return r.printReportErr(err)
+	}
+	if err := report.WriteAttemptReportAtomic(filepath.Join(target, "attempt.report.json"), rep); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	if *jsonOut {
+		return r.writeJSON(rep)
+	}
+	fmt.Fprintf(r.Stdout, "report: OK\n")
+	return 0
+}
+
+func (r Runner) printReportErr(err error) int {
+	var ce *report.CliError
+	if errors.As(err, &ce) {
+		fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
+		// Strict/validation-like errors should be non-zero and typed.
+		return 2
+	}
+	fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+	return 1
+}
+
 func (r Runner) writeJSON(v any) int {
 	enc := json.NewEncoder(r.Stdout)
 	enc.SetIndent("", "  ")
@@ -359,6 +453,7 @@ Usage:
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
+  zcl report [--strict] [--json] <attemptDir|runDir>
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -367,6 +462,7 @@ Commands:
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
+  report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -413,5 +509,11 @@ func printNoteHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl note [--kind agent|operator|system] --message <string> [--tags a,b,c]
   zcl note [--kind agent|operator|system] --data-json <json> [--tags a,b,c]
+`)
+}
+
+func printReportHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl report [--strict] [--json] <attemptDir|runDir>
 `)
 }

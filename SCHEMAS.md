@@ -172,6 +172,9 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   "metrics": {
     "toolCallsTotal": 3,
     "failuresTotal": 0,
+    "failuresByCode": {
+      "ZCL_E_SPAWN": 1
+    },
     "retriesTotal": 0,
     "timeoutsTotal": 0,
     "wallTimeMs": 42000,

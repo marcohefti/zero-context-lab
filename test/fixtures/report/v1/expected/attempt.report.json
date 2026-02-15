@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "missionId": "latest-blog-title",
+  "attemptId": "001-latest-blog-title-r1",
+  "computedAt": "2026-02-15T18:00:10Z",
+  "ok": false,
+  "metrics": {
+    "toolCallsTotal": 2,
+    "failuresTotal": 1,
+    "failuresByCode": {
+      "ZCL_E_SPAWN": 1
+    },
+    "retriesTotal": 0,
+    "timeoutsTotal": 0,
+    "wallTimeMs": 1000,
+    "outBytesTotal": 6,
+    "errBytesTotal": 0,
+    "outPreviewTruncations": 0,
+    "errPreviewTruncations": 0
+  }
+}
+

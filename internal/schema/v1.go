@@ -60,11 +60,12 @@ type AttemptReportJSONV1 struct {
 }
 
 type AttemptMetricsV1 struct {
-	ToolCallsTotal int64 `json:"toolCallsTotal"`
-	FailuresTotal  int64 `json:"failuresTotal"`
-	RetriesTotal   int64 `json:"retriesTotal"`
-	TimeoutsTotal  int64 `json:"timeoutsTotal"`
-	WallTimeMs     int64 `json:"wallTimeMs"`
+	ToolCallsTotal int64            `json:"toolCallsTotal"`
+	FailuresTotal  int64            `json:"failuresTotal"`
+	FailuresByCode map[string]int64 `json:"failuresByCode,omitempty"`
+	RetriesTotal   int64            `json:"retriesTotal"`
+	TimeoutsTotal  int64            `json:"timeoutsTotal"`
+	WallTimeMs     int64            `json:"wallTimeMs"`
 
 	OutBytesTotal int64 `json:"outBytesTotal"`
 	ErrBytesTotal int64 `json:"errBytesTotal"`

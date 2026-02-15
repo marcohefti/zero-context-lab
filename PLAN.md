@@ -81,13 +81,13 @@ Goal: runner-agnostic scoring uses `feedback.json`, while self-reports live in `
 
 Goal: compute deterministic `attempt.report.json` from trace + feedback (runner-agnostic).
 
-1. [ ] Implement `zcl report [--strict] <attemptDir|runDir>`:
+1. [x] Implement `zcl report [--strict] <attemptDir|runDir>`:
    parse artifacts, compute metrics, write `attempt.report.json` atomically.
-2. [ ] Metrics v1 must include at least:
+2. [x] Metrics v1 must include at least:
    toolCallsTotal, failuresTotal/byCode, retriesTotal, timeoutsTotal, wallTimeMs, bytes totals, truncation counts.
-3. [ ] Add golden fixture tests:
+3. [x] Add golden fixture tests:
    known `tool.calls.jsonl` + `feedback.json` => expected `attempt.report.json`.
-4. [ ] Ensure `--strict` fails when required artifacts are missing (typed ZCL codes).
+4. [x] Ensure `--strict` fails when required artifacts are missing (typed ZCL codes).
 
 ### Phase 6: Validation (`zcl validate`)
 
@@ -158,4 +158,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 3 Step 3: Made JSONL appends concurrency-safe via `mkdir` lock dirs (documented in `ARCHITECTURE.md`) and added `fsync` on append. Next: integration tests covering passthrough, trace emission, and bounds.
 - 2026-02-15: Phase 3 Step 4: Added integration tests for `zcl run` covering passthrough stdout/stderr, trace emission, and preview bounds/truncation signaling. Next: Phase 4 begins (`zcl feedback` + `zcl note`).
 - 2026-02-15: Phase 4 Step 1-4: Implemented `zcl feedback` (atomic `feedback.json`) and `zcl note` (append `notes.jsonl`) with bounded payload + basic redaction, updated contract snapshot, and added tests for schema + redaction behavior. Next: Phase 5 begins (`zcl report`).
+- 2026-02-15: Phase 5: Implemented `zcl report` with `--strict`, expanded metrics to include `failuresByCode`, added golden fixtures and strict-missing-artifact tests, and updated schemas/docs accordingly. Next: Phase 6 (`zcl validate`).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
