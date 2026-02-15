@@ -20,6 +20,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/note"
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
+	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
 
 type CliError struct {
@@ -63,6 +64,8 @@ func (r Runner) Run(args []string) int {
 		return r.runNote(args[1:])
 	case "report":
 		return r.runReport(args[1:])
+	case "validate":
+		return r.runValidate(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -417,6 +420,45 @@ func (r Runner) runReport(args []string) int {
 	return 0
 }
 
+func (r Runner) runValidate(args []string) int {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	strict := fs.Bool("strict", false, "strict mode (missing required artifacts fails)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("validate: invalid flags")
+	}
+	if *help {
+		printValidateHelp(r.Stdout)
+		return 0
+	}
+
+	paths := fs.Args()
+	if len(paths) != 1 {
+		printValidateHelp(r.Stderr)
+		return r.failUsage("validate: require exactly one <attemptDir|runDir>")
+	}
+
+	res, err := validate.ValidatePath(paths[0], *strict)
+	if err != nil {
+		var ce *validate.CliError
+		if errors.As(err, &ce) {
+			fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
+			return 2
+		}
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	if *jsonOut {
+		return r.writeJSON(res)
+	}
+	fmt.Fprintf(r.Stdout, "validate: OK\n")
+	return 0
+}
+
 func (r Runner) printReportErr(err error) int {
 	var ce *report.CliError
 	if errors.As(err, &ce) {
@@ -454,6 +496,7 @@ Usage:
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
+  zcl validate [--strict] [--json] <attemptDir|runDir>
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -463,6 +506,7 @@ Commands:
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
+  validate         Validate artifact integrity with typed error codes.
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
@@ -515,5 +559,11 @@ func printNoteHelp(w io.Writer) {
 func printReportHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl report [--strict] [--json] <attemptDir|runDir>
+`)
+}
+
+func printValidateHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl validate [--strict] [--json] <attemptDir|runDir>
 `)
 }

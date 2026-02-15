@@ -93,10 +93,10 @@ Goal: compute deterministic `attempt.report.json` from trace + feedback (runner-
 
 Goal: enforce artifact integrity mechanically (discovery mode best-effort; CI mode strict).
 
-1. [ ] Implement `zcl validate [--strict] <attemptDir|runDir>` with typed ZCL error codes.
-2. [ ] Validation v1 rules must cover:
+1. [x] Implement `zcl validate [--strict] <attemptDir|runDir>` with typed ZCL error codes.
+2. [x] Validation v1 rules must cover:
    required file presence, JSON/JSONL parse, schema versions, ID consistency with directory, bounds, containment (no path traversal/symlink escape).
-3. [ ] Add tests for failure cases:
+3. [x] Add tests for failure cases:
    missing artifact, invalid json, schema unsupported, bounds exceeded.
 
 ### Phase 7: Operator UX Commands (`doctor`, `gc`) + Config
@@ -159,4 +159,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 3 Step 4: Added integration tests for `zcl run` covering passthrough stdout/stderr, trace emission, and preview bounds/truncation signaling. Next: Phase 4 begins (`zcl feedback` + `zcl note`).
 - 2026-02-15: Phase 4 Step 1-4: Implemented `zcl feedback` (atomic `feedback.json`) and `zcl note` (append `notes.jsonl`) with bounded payload + basic redaction, updated contract snapshot, and added tests for schema + redaction behavior. Next: Phase 5 begins (`zcl report`).
 - 2026-02-15: Phase 5: Implemented `zcl report` with `--strict`, expanded metrics to include `failuresByCode`, added golden fixtures and strict-missing-artifact tests, and updated schemas/docs accordingly. Next: Phase 6 (`zcl validate`).
+- 2026-02-15: Phase 6: Implemented `zcl validate` (strict vs best-effort) with typed codes for missing artifacts, invalid JSON/JSONL, unsupported schema versions, id mismatches, bounds, and containment, plus tests. Next: Phase 7 (config merge, doctor, gc).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

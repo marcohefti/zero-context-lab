@@ -149,6 +149,11 @@
       "summary": "Compute attempt.report.json from tool.calls.jsonl + feedback.json."
     },
     {
+      "id": "validate",
+      "usage": "zcl validate [--strict] [--json] <attemptDir|runDir>",
+      "summary": "Validate artifact integrity (schemas, ids, bounds, containment) with typed error codes."
+    },
+    {
       "id": "run",
       "usage": "zcl run -- <cmd> [args...]",
       "summary": "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces)."

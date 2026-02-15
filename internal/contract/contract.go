@@ -128,6 +128,11 @@ func Build(version string) Contract {
 				Summary: "Compute attempt.report.json from tool.calls.jsonl + feedback.json.",
 			},
 			{
+				ID:      "validate",
+				Usage:   "zcl validate [--strict] [--json] <attemptDir|runDir>",
+				Summary: "Validate artifact integrity (schemas, ids, bounds, containment) with typed error codes.",
+			},
+			{
 				ID:      "run",
 				Usage:   "zcl run -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",
