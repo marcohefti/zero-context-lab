@@ -52,6 +52,16 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, fmt.Errorf("missing --mission")
 	}
 
+	// Canonicalize ids (stable, path-safe, low-friction).
+	opts.SuiteID = ids.SanitizeComponent(opts.SuiteID)
+	if opts.SuiteID == "" {
+		return nil, fmt.Errorf("invalid --suite (no usable characters)")
+	}
+	opts.MissionID = ids.SanitizeComponent(opts.MissionID)
+	if opts.MissionID == "" {
+		return nil, fmt.Errorf("invalid --mission (no usable characters)")
+	}
+
 	mode := opts.Mode
 	if mode == "" {
 		mode = "discovery"
@@ -72,6 +82,8 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if !ids.IsValidRunID(runID) {
+		return nil, fmt.Errorf("invalid --run-id (expected format YYYYMMDD-HHMMSSZ-<hex6>)")
 	}
 
 	runDir := filepath.Join(outRoot, "runs", runID)

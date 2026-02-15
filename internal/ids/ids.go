@@ -12,6 +12,7 @@ import (
 var (
 	reInvalid = regexp.MustCompile(`[^a-z0-9-]+`)
 	reDashes  = regexp.MustCompile(`-+`)
+	reRunID   = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}Z-[0-9a-f]{6}$`)
 )
 
 func NewRunID(now time.Time) (string, error) {
@@ -23,6 +24,10 @@ func NewRunID(now time.Time) (string, error) {
 		return "", err
 	}
 	return prefix + "-" + hex.EncodeToString(b[:]), nil
+}
+
+func IsValidRunID(s string) bool {
+	return reRunID.MatchString(strings.TrimSpace(s))
 }
 
 func SanitizeComponent(s string) string {

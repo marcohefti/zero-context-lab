@@ -7,6 +7,30 @@ Notes:
 - JSON files are written atomically (temp file + rename).
 - JSONL files are append-only streams; each line is one JSON object.
 
+## Canonical ID Formats (v1)
+
+These strings are the identity surface for artifact layout and trace correlation. They are intentionally:
+- path-safe (usable in directory names)
+- stable and boring (diff-friendly)
+
+`runId`:
+- Format: `YYYYMMDD-HHMMSSZ-<hex6>`
+- Regex: `^[0-9]{8}-[0-9]{6}Z-[0-9a-f]{6}$`
+- Example: `20260215-180012Z-09c5a6`
+
+`suiteId` / `missionId`:
+- Canonical format: lowercase kebab-case components
+- Regex: `^[a-z0-9]+(?:-[a-z0-9]+)*$`
+- ZCL canonicalizes inputs by: lowercasing, `_` -> `-`, replacing non `[a-z0-9-]` with `-`, collapsing dashes, trimming leading/trailing dashes.
+
+`attemptId`:
+- Format: `<index3>-<missionId>-r<retry>`
+- Regex: `^[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*-r[0-9]+$`
+- Example: `001-latest-blog-title-r1`
+
+`agentId` (optional):
+- Opaque runner correlation id (not used in paths).
+
 ## `run.json` (v1)
 
 Path: `.zcl/runs/<runId>/run.json`
@@ -146,4 +170,3 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   }
 }
 ```
-
