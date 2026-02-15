@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
+	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 )
 
 type CliError struct {
@@ -48,6 +50,8 @@ func (r Runner) Run(args []string) int {
 		return r.runContract(args[1:])
 	case "init":
 		return r.runInit(args[1:])
+	case "run":
+		return r.runRun(args[1:])
 	case "attempt":
 		return r.runAttempt(args[1:])
 	case "version":
@@ -174,6 +178,44 @@ func (r Runner) runAttemptStart(args []string) int {
 	return r.writeJSON(res)
 }
 
+func (r Runner) runRun(args []string) int {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	help := fs.Bool("help", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("run: invalid flags")
+	}
+	if *help {
+		printRunHelp(r.Stdout)
+		return 0
+	}
+
+	argv := fs.Args()
+	if len(argv) >= 1 && argv[0] == "--" {
+		argv = argv[1:]
+	}
+	if len(argv) == 0 {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: missing command (use: zcl run -- <cmd> ...)")
+	}
+
+	// Keep this intentionally small for MVP; richer capture/trace wiring comes in Phase 3 Step 2+.
+	res, err := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, 16*1024)
+	if err != nil {
+		// If the command couldn't be spawned, treat as I/O failure. If it ran and exited,
+		// we return the child's exit code below.
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: run failed: %s\n", err.Error())
+		return 1
+	}
+
+	// Preserve the wrapped command's exit code for operator parity.
+	if res.ExitCode != 0 {
+		return res.ExitCode
+	}
+	return 0
+}
+
 func (r Runner) writeJSON(v any) int {
 	enc := json.NewEncoder(r.Stdout)
 	enc.SetIndent("", "  ")
@@ -197,11 +239,13 @@ Usage:
   zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl run -- <cmd> [args...]
 
 Commands:
   init            Initialize the project (.zcl output root + zcl.config.json).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
+  run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)
 }
@@ -227,5 +271,11 @@ func printAttemptHelp(w io.Writer) {
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
+`)
+}
+
+func printRunHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl run -- <cmd> [args...]
 `)
 }

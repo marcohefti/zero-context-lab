@@ -55,7 +55,7 @@ Goal: orchestrator can allocate attempts deterministically and we can locate art
 
 Goal: funnel-first evidence. Each tool invocation becomes one deterministic trace event.
 
-1. [ ] Implement `zcl run -- <cmd> [args...]`:
+1. [x] Implement `zcl run -- <cmd> [args...]`:
    spawn process, capture bounded stdout/stderr previews, measure duration, preserve exit code.
 2. [ ] Write one JSON object per invocation to `tool.calls.jsonl` with:
    canonical IDs, `tool`, `op`, bounded `input`, `result` (ok/code/exitCode/duration), `io` (bytes + previews), redactions list.
@@ -153,4 +153,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 2 Step 2: Extended `zcl attempt start` with optional prompt (`prompt.txt`) and suite snapshot (`suite.json`), with tests and contract snapshot updates. Next: document the `attempt start --json` output contract in `ARCHITECTURE.md`.
 - 2026-02-15: Phase 2 Step 3: Documented the exact `zcl attempt start --json` output keys and env semantics in `ARCHITECTURE.md`. Next: add lifecycle tests covering multi-attempt runs and atomic file guarantees.
 - 2026-02-15: Phase 2 Step 4: Added lifecycle tests for multi-attempt runs (stable attempt IDs/dirs) and verified atomic writers leave no temp files behind. Next: Phase 3 begins (`zcl run` funnel + trace emission).
+- 2026-02-15: Phase 3 Step 1: Implemented `zcl run` CLI funnel wrapper (passthrough + bounded capture + duration + exit code) as a foundation for trace emission. Next: emit `tool.calls.jsonl` events per invocation.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

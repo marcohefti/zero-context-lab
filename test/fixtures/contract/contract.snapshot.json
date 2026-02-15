@@ -134,6 +134,11 @@
       "summary": "Initialize the project output root and write the minimal project config."
     },
     {
+      "id": "run",
+      "usage": "zcl run -- <cmd> [args...]",
+      "summary": "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces)."
+    },
+    {
       "id": "contract",
       "usage": "zcl contract --json",
       "summary": "Print the ZCL surface contract (artifact layout + supported schema versions)."

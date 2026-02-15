@@ -113,6 +113,11 @@ func Build(version string) Contract {
 				Summary: "Initialize the project output root and write the minimal project config.",
 			},
 			{
+				ID:      "run",
+				Usage:   "zcl run -- <cmd> [args...]",
+				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",
+			},
+			{
 				ID:      "contract",
 				Usage:   "zcl contract --json",
 				Summary: "Print the ZCL surface contract (artifact layout + supported schema versions).",
