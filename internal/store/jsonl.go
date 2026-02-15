@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func AppendJSONL(path string, v any) error {
@@ -19,12 +20,18 @@ func AppendJSONL(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
 
-	_, err = f.Write(b)
-	return err
+	lockDir := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".lock")
+	return WithDirLock(lockDir, 5*time.Second, func() error {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+
+		if _, err := f.Write(b); err != nil {
+			return err
+		}
+		return f.Sync()
+	})
 }

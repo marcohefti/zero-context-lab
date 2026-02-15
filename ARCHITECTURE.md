@@ -188,7 +188,7 @@ Recommended choices:
 
 Write safety:
 - **Atomic writes** for JSON files (`*.json`): write temp + fsync + rename.
-- **Safe appends** for JSONL (`*.jsonl`): implement a simple lock file per attempt (cross-platform) or spool-per-call + merge. Pick one and validate it; do not assume "agents never run two commands concurrently".
+- **Safe appends** for JSONL (`*.jsonl`): ZCL uses a cross-platform `mkdir` lock directory next to the JSONL stream (e.g. `.tool.calls.jsonl.lock`) with a short retry window, then appends + `fsync`. This avoids interleaving when multiple processes append concurrently.
 
 ## Interfaces & Extension Points (Without a Plugin Framework)
 We want clear boundaries, not a complicated runtime plugin system.
