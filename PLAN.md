@@ -61,7 +61,7 @@ Goal: funnel-first evidence. Each tool invocation becomes one deterministic trac
    canonical IDs, `tool`, `op`, bounded `input`, `result` (ok/code/exitCode/duration), `io` (bytes + previews), redactions list.
 3. [x] Implement safe JSONL append:
    cross-platform lock (`mkdir` lock dir) or spool-per-call + merge; document choice in `ARCHITECTURE.md`.
-4. [ ] Add integration tests:
+4. [x] Add integration tests:
    passthrough behavior (stdout/stderr), trace emission, and bounds enforcement.
 
 ### Phase 4: Finish + Secondary Evidence (`zcl feedback`, `zcl note`)
@@ -156,4 +156,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 3 Step 1: Implemented `zcl run` CLI funnel wrapper (passthrough + bounded capture + duration + exit code) as a foundation for trace emission. Next: emit `tool.calls.jsonl` events per invocation.
 - 2026-02-15: Phase 3 Step 2: Added trace emission for `zcl run` (one v1 event per invocation appended to `tool.calls.jsonl` using `ZCL_*` attempt env). Next: make JSONL appends concurrency-safe (lock/spool) and document the approach.
 - 2026-02-15: Phase 3 Step 3: Made JSONL appends concurrency-safe via `mkdir` lock dirs (documented in `ARCHITECTURE.md`) and added `fsync` on append. Next: integration tests covering passthrough, trace emission, and bounds.
+- 2026-02-15: Phase 3 Step 4: Added integration tests for `zcl run` covering passthrough stdout/stderr, trace emission, and preview bounds/truncation signaling. Next: Phase 4 begins (`zcl feedback` + `zcl note`).
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
