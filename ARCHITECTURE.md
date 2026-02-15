@@ -65,6 +65,53 @@ Output rules:
 - Any command intended for automation/agents must support a stable `--json` output mode.
 - Avoid log spam; default stderr should be concise and typed (code + message).
 
+## `zcl attempt start --json` Output Contract (v1)
+
+This output is designed for orchestrators: it returns canonical IDs, directories, and the exact `ZCL_*` env map to pass to the spawned "zero context" agent.
+
+Top-level keys (exact):
+- `ok` (bool): always `true` on success.
+- `runId` (string): canonical `runId` (see `SCHEMAS.md`).
+- `suiteId` (string): canonicalized suite id (lowercase kebab-case).
+- `missionId` (string): canonicalized mission id (lowercase kebab-case).
+- `attemptId` (string): canonical attempt directory id.
+- `agentId` (string, optional): runner-provided correlation id (not used in paths).
+- `mode` (string): `discovery` or `ci`.
+- `outDir` (string): attempt output directory relative to the current working directory.
+- `outDirAbs` (string): absolute path to the attempt output directory (this is what we set in `ZCL_OUT_DIR`).
+- `env` (object map of string->string): environment variables to pass to the spawned agent process.
+- `createdAt` (string): RFC3339 UTC timestamp when the attempt was created.
+
+`env` keys (exact; `ZCL_AGENT_ID` is conditional):
+- `ZCL_RUN_ID`
+- `ZCL_SUITE_ID`
+- `ZCL_MISSION_ID`
+- `ZCL_ATTEMPT_ID`
+- `ZCL_OUT_DIR`
+- `ZCL_AGENT_ID` (only when `--agent-id` is provided)
+
+Example:
+```json
+{
+  "ok": true,
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "missionId": "latest-blog-title",
+  "attemptId": "001-latest-blog-title-r1",
+  "mode": "discovery",
+  "outDir": ".zcl/runs/20260215-180012Z-09c5a6/attempts/001-latest-blog-title-r1",
+  "outDirAbs": "/abs/path/to/repo/.zcl/runs/20260215-180012Z-09c5a6/attempts/001-latest-blog-title-r1",
+  "env": {
+    "ZCL_ATTEMPT_ID": "001-latest-blog-title-r1",
+    "ZCL_MISSION_ID": "latest-blog-title",
+    "ZCL_OUT_DIR": "/abs/path/to/repo/.zcl/runs/20260215-180012Z-09c5a6/attempts/001-latest-blog-title-r1",
+    "ZCL_RUN_ID": "20260215-180012Z-09c5a6",
+    "ZCL_SUITE_ID": "heftiweb-smoke"
+  },
+  "createdAt": "2026-02-15T18:00:12.123456789Z"
+}
+```
+
 ## Artifact Contract (Minimum)
 ZCL should standardize a stable project output root at `.zcl/` (configurable) and write one directory per run under `.zcl/runs/<runId>/`:
 - `.zcl/runs/<runId>/run.json`

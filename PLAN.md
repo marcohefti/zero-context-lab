@@ -46,7 +46,7 @@ Goal: orchestrator can allocate attempts deterministically and we can locate art
 1. [x] Implement `zcl init` to create a minimal project config and ensure `.zcl/` exists.
 2. [x] Extend `zcl attempt start`:
    write `prompt.txt` (optional) when provided, and optionally snapshot input suite (`suite.json`) when running a suite.
-3. [ ] Add `zcl attempt start --json` output contract documentation to `ARCHITECTURE.md`:
+3. [x] Add `zcl attempt start --json` output contract documentation to `ARCHITECTURE.md`:
    exact keys and semantics (env map, outDirAbs, ids).
 4. [ ] Add attempt lifecycle tests:
    create run, create two attempts, ensure IDs/dirs are stable and files are atomic.
@@ -151,4 +151,5 @@ Update this log while executing the plan.
 - 2026-02-15: Phase 1 Step 5: Added a strict contract snapshot test so `go test` fails if the contract drifts without updating the snapshot. Next: Phase 2 begins (attempt lifecycle + output root).
 - 2026-02-15: Phase 2 Step 1: Implemented `zcl init` (writes `zcl.config.json`, ensures `.zcl/runs` exists) with unit tests; updated contract + snapshot accordingly. Next: extend `attempt start` to write `prompt.txt` and optionally snapshot suites.
 - 2026-02-15: Phase 2 Step 2: Extended `zcl attempt start` with optional prompt (`prompt.txt`) and suite snapshot (`suite.json`), with tests and contract snapshot updates. Next: document the `attempt start --json` output contract in `ARCHITECTURE.md`.
+- 2026-02-15: Phase 2 Step 3: Documented the exact `zcl attempt start --json` output keys and env semantics in `ARCHITECTURE.md`. Next: add lifecycle tests covering multi-attempt runs and atomic file guarantees.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
