@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
+	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
 )
 
@@ -45,6 +46,8 @@ func (r Runner) Run(args []string) int {
 	switch args[0] {
 	case "contract":
 		return r.runContract(args[1:])
+	case "init":
+		return r.runInit(args[1:])
 	case "attempt":
 		return r.runAttempt(args[1:])
 	case "version":
@@ -78,6 +81,36 @@ func (r Runner) runContract(args []string) int {
 
 	payload := contract.Build(r.Version)
 	return r.writeJSON(payload)
+}
+
+func (r Runner) runInit(args []string) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	outRoot := fs.String("out-root", ".zcl", "project output root (default .zcl)")
+	configPath := fs.String("config", config.DefaultProjectConfigPath, "project config path (default zcl.config.json)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("init: invalid flags")
+	}
+	if *help {
+		printInitHelp(r.Stdout)
+		return 0
+	}
+
+	res, err := config.InitProject(*configPath, *outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+
+	if *jsonOut {
+		return r.writeJSON(res)
+	}
+	fmt.Fprintf(r.Stdout, "init: OK outRoot=%s config=%s created=%v\n", res.OutRoot, res.ConfigPath, res.Created)
+	return 0
 }
 
 func (r Runner) runAttempt(args []string) int {
@@ -157,13 +190,21 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprint(w, `ZCL (ZeroContext Lab)
 
 Usage:
+  zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
 
 Commands:
+  init            Initialize the project (.zcl output root + zcl.config.json).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
   version         Print version.
+`)
+}
+
+func printInitHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
 `)
 }
 

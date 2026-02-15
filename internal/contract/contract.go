@@ -92,6 +92,11 @@ func Build(version string) Contract {
 		},
 		Commands: []Command{
 			{
+				ID:      "init",
+				Usage:   "zcl init [--out-root .zcl] [--config zcl.config.json] [--json]",
+				Summary: "Initialize the project output root and write the minimal project config.",
+			},
+			{
 				ID:      "contract",
 				Usage:   "zcl contract --json",
 				Summary: "Print the ZCL surface contract (artifact layout + supported schema versions).",

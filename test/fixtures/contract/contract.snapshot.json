@@ -109,6 +109,11 @@
   ],
   "commands": [
     {
+      "id": "init",
+      "usage": "zcl init [--out-root .zcl] [--config zcl.config.json] [--json]",
+      "summary": "Initialize the project output root and write the minimal project config."
+    },
+    {
       "id": "contract",
       "usage": "zcl contract --json",
       "summary": "Print the ZCL surface contract (artifact layout + supported schema versions)."
