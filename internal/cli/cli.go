@@ -13,6 +13,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
+	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
 
 type CliError struct {
@@ -191,6 +192,12 @@ func (r Runner) runRun(args []string) int {
 		return 0
 	}
 
+	env, err := trace.EnvFromProcess()
+	if err != nil {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: missing ZCL attempt context (run `zcl attempt start --json` and pass the returned env)")
+	}
+
 	argv := fs.Args()
 	if len(argv) >= 1 && argv[0] == "--" {
 		argv = argv[1:]
@@ -201,11 +208,27 @@ func (r Runner) runRun(args []string) int {
 	}
 
 	// Keep this intentionally small for MVP; richer capture/trace wiring comes in Phase 3 Step 2+.
-	res, err := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, 16*1024)
-	if err != nil {
-		// If the command couldn't be spawned, treat as I/O failure. If it ran and exited,
-		// we return the child's exit code below.
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: run failed: %s\n", err.Error())
+	res, runErr := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, 16*1024)
+
+	traceRes := trace.ResultForTrace{
+		ExitCode:     res.ExitCode,
+		DurationMs:   res.DurationMs,
+		OutBytes:     res.OutBytes,
+		ErrBytes:     res.ErrBytes,
+		OutPreview:   res.OutPreview,
+		ErrPreview:   res.ErrPreview,
+		OutTruncated: res.OutTruncated,
+		ErrTruncated: res.ErrTruncated,
+	}
+	if runErr != nil {
+		traceRes.SpawnError = "ZCL_E_SPAWN"
+	}
+	if err := trace.AppendCLIRunEvent(r.Now(), env, argv, traceRes); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
+		return 1
+	}
+	if runErr != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: run failed: %s\n", runErr.Error())
 		return 1
 	}
 
