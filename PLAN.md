@@ -29,7 +29,7 @@ Rules:
 
 Goal: make evidence artifacts and schema versions explicit so validation/reporting can be strict and stable.
 
-1. [ ] Define (in Go structs + in docs) the v1 schemas for:
+1. [x] Define (in Go structs + in docs) the v1 schemas for:
    `run.json`, `attempt.json`, `feedback.json`, `attempt.report.json`, `tool.calls.jsonl` events, `notes.jsonl` events.
 2. [ ] Decide and document canonical ID formats (exact strings):
    `runId`, `attemptId`, `suiteId`, `missionId`, optional `agentId`.
@@ -145,5 +145,5 @@ Goal: ship a single binary with simple, safe install/update patterns and release
 Update this log while executing the plan.
 
 - 2026-02-15: Bootstrapped repo, added Go module + minimal CLI (`contract`, `attempt start`), and added script-driven `./scripts/verify.sh` with contract snapshot. (Phase 0 done)
+- 2026-02-15: Phase 1 Step 1: Added explicit v1 artifact schemas in `internal/schema` and documented exact JSON/JSONL shapes in `SCHEMAS.md` (linked from `AGENTS.md`/`ARCHITECTURE.md`). Next: lock canonical ID formats and reflect them in docs + contract output.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)
-

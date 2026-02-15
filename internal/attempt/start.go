@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/ids"
+	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
 
@@ -20,24 +21,6 @@ type StartOpts struct {
 	AgentID   string
 	Mode      string
 	Retry     int
-}
-
-type RunMeta struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	RunID         string `json:"runId"`
-	SuiteID       string `json:"suiteId"`
-	CreatedAt     string `json:"createdAt"`
-}
-
-type AttemptMeta struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	RunID         string `json:"runId"`
-	SuiteID       string `json:"suiteId"`
-	MissionID     string `json:"missionId"`
-	AttemptID     string `json:"attemptId"`
-	AgentID       string `json:"agentId,omitempty"`
-	Mode          string `json:"mode"`
-	StartedAt     string `json:"startedAt"`
 }
 
 type StartResult struct {
@@ -104,7 +87,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		var existing RunMeta
+		var existing schema.RunJSONV1
 		if err := json.Unmarshal(raw, &existing); err != nil {
 			return nil, err
 		}
@@ -115,8 +98,8 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 			return nil, fmt.Errorf("run.json mismatch: expected suiteId=%s", opts.SuiteID)
 		}
 	} else if os.IsNotExist(err) {
-		runMeta := RunMeta{
-			SchemaVersion: 1,
+		runMeta := schema.RunJSONV1{
+			SchemaVersion: schema.ArtifactSchemaV1,
 			RunID:         runID,
 			SuiteID:       opts.SuiteID,
 			CreatedAt:     now.UTC().Format(time.RFC3339Nano),
@@ -142,8 +125,8 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, err
 	}
 
-	attemptMeta := AttemptMeta{
-		SchemaVersion: 1,
+	attemptMeta := schema.AttemptJSONV1{
+		SchemaVersion: schema.ArtifactSchemaV1,
 		RunID:         runID,
 		SuiteID:       opts.SuiteID,
 		MissionID:     opts.MissionID,

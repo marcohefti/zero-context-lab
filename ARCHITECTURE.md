@@ -6,6 +6,7 @@ ZCL is a harness/benchmark that funnels agent actions through instrumented bound
 
 For the "why" and the non-negotiables, read `CONCEPT.md` first.
 For a quick map of what to read and what matters, see `AGENTS.md`.
+For exact artifact schemas (v1), see `SCHEMAS.md`.
 
 ## Goals
 - **Funnel-first evidence.** All benchmark metrics should be derivable from ZCL artifacts without needing runner internals.

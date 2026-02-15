@@ -4,6 +4,7 @@ Start here:
 - `PLAN.md` (implementation checklist; update execution log as work progresses)
 - `CONCEPT.md` (why ZCL exists; non-negotiables; operator UX baseline)
 - `ARCHITECTURE.md` (how we implement it without overengineering)
+- `SCHEMAS.md` (exact v1 artifact schemas; the contract docs that keep us honest)
 
 ## What ZCL Is
 ZCL is a funnel-first benchmark harness. It measures agent/operator UX by producing deterministic, trace-backed artifacts.
