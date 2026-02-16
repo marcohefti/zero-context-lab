@@ -101,6 +101,7 @@ Required fields:
 
 Optional fields:
 - `agentId` (runner-provided correlation id)
+- `timeoutMs` (attempt deadline in ms from `startedAt`; funnels should enforce this as a mission-level deadline)
 
 ## `prompt.txt` (snapshot; optional)
 

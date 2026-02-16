@@ -2,6 +2,7 @@ package mcpproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,39 @@ type reqInfo struct {
 	start  time.Time
 	method string
 	input  []byte
+}
+
+type boundedCapture struct {
+	max       int
+	buf       bytes.Buffer
+	total     int64
+	truncated bool
+	mu        sync.Mutex
+}
+
+func (c *boundedCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.total += int64(len(p))
+	remaining := c.max - c.buf.Len()
+	if remaining <= 0 {
+		c.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = c.buf.Write(p[:remaining])
+		c.truncated = true
+		return len(p), nil
+	}
+	_, _ = c.buf.Write(p)
+	return len(p), nil
+}
+
+func (c *boundedCapture) snapshot() (preview string, total int64, truncated bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String(), c.total, c.truncated
 }
 
 func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, maxPreviewBytes int) error {
@@ -65,9 +99,12 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	)
 
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	redServerArgv, argvApplied := redactStrings(serverArgv)
 
-	// Drain stderr to avoid deadlocks; currently we don't trace it.
-	go func() { _, _ = io.Copy(io.Discard, serverErr) }()
+	var errCap boundedCapture
+	errCap.max = maxPreviewBytes
+	// Drain stderr to avoid deadlocks; capture a bounded preview for evidence.
+	go func() { _, _ = io.Copy(&errCap, serverErr) }()
 
 	// Client -> Server (requests)
 	reqDone := make(chan struct{})
@@ -232,6 +269,78 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	<-reqDone
 	waitErr := cmd.Wait()
 	waited = true
+
+	// If the attempt has a deadline and we hit it, record a timeout event.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "timeout",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         false,
+				Code:       "ZCL_E_TIMEOUT",
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
+	// Emit one stderr evidence event at the end (bounded).
+	if prev, total, trunc := errCap.snapshot(); total > 0 || prev != "" {
+		prevRed, applied := redact.Text(prev)
+		prevRed, capped := capStringBytes(prevRed, maxPreviewBytes)
+
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "stderr",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         true,
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes:   0,
+				ErrBytes:   total,
+				ErrPreview: prevRed,
+			},
+			RedactionsApplied: unionStrings(argvApplied, applied.Names),
+			Integrity: &schema.TraceIntegrityV1{
+				Truncated: trunc || capped,
+			},
+		}
+		if trunc || capped {
+			ev.Warnings = []schema.TraceWarningV1{{Code: "ZCL_W_STDERR_TRUNCATED", Message: "mcp server stderr preview truncated to fit bounds"}}
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
 	if waitErr != nil {
 		var ee *exec.ExitError
 		if errors.As(waitErr, &ee) {
@@ -317,4 +426,18 @@ func unionStrings(parts ...[]string) []string {
 		}
 	}
 	return out
+}
+
+func redactStrings(in []string) ([]string, []string) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	var applied []string
+	for _, s := range in {
+		red, a := redact.Text(s)
+		out = append(out, red)
+		applied = append(applied, a.Names...)
+	}
+	return out, unionStrings(applied)
 }

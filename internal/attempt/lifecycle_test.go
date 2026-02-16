@@ -13,23 +13,25 @@ func TestStart_LifecycleTwoAttemptsStableAndNoTmpFilesLeft(t *testing.T) {
 
 	dir := t.TempDir()
 	outRoot := filepath.Join(dir, ".zcl")
-
-	suiteFile := filepath.Join(dir, "suite.input.json")
-	if err := os.WriteFile(suiteFile, []byte("{\"version\":1,\"suiteId\":\"heftiweb-smoke\",\"missions\":[{\"missionId\":\"latest-blog-title\"}]}\n"), 0o644); err != nil {
-		t.Fatalf("write suite input: %v", err)
+	suiteSnap := map[string]any{
+		"version": 1,
+		"suiteId": "heftiweb-smoke",
+		"missions": []any{
+			map[string]any{"missionId": "latest-blog-title"},
+		},
 	}
 
 	now := time.Date(2026, 2, 15, 18, 0, 12, 123, time.UTC)
 	runID := "20260215-180012Z-09c5a6"
 
 	a1, err := Start(now, StartOpts{
-		OutRoot:   outRoot,
-		RunID:     runID,
-		SuiteID:   "Heftiweb Smoke",
-		MissionID: "Latest Blog Title",
-		Retry:     1,
-		Prompt:    "p1",
-		SuiteFile: suiteFile,
+		OutRoot:       outRoot,
+		RunID:         runID,
+		SuiteID:       "Heftiweb Smoke",
+		MissionID:     "Latest Blog Title",
+		Retry:         1,
+		Prompt:        "p1",
+		SuiteSnapshot: suiteSnap,
 	})
 	if err != nil {
 		t.Fatalf("Start a1: %v", err)

@@ -52,6 +52,7 @@ Core commands:
 - `zcl feedback --ok|--fail --result <string|json>`: writes `feedback.json` (authoritative outcome).
 - `zcl report [--strict] <attemptDir|runDir>`: computes `attempt.report.json` from `tool.calls.jsonl` + `feedback.json`.
 - `zcl validate [--strict] <attemptDir|runDir>`: artifact integrity validation with typed ZCL error codes.
+- `zcl expect [--strict] --json <attemptDir|runDir>`: evaluate suite expectations against `feedback.json` (separate from integrity validation).
 - `zcl contract --json`: prints the supported artifact layout version(s) + trace schema version(s) and required fields (the "surface contract").
 - `zcl doctor`: environment checks (write access, config parse, optional runner availability).
 - `zcl gc`: retention (age/size cleanup, pinning support).

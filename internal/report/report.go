@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/schema"
@@ -63,7 +62,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	tracePresent, traceNonEmpty := false, false
 	if _, err := os.Stat(tracePath); err == nil {
 		tracePresent = true
-		nonEmpty, err := jsonlHasNonEmptyLine(tracePath)
+		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 		if err != nil {
 			if strict {
 				return schema.AttemptReportJSONV1{}, err
@@ -250,26 +249,6 @@ func IsCliError(err error, code string) bool {
 		return e.Code == code
 	}
 	return false
-}
-
-func jsonlHasNonEmptyLine(path string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = f.Close() }()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if strings.TrimSpace(string(sc.Bytes())) != "" {
-			return true, nil
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
 }
 
 func summarizeDurations(durs []int64) (total, min, max, avg, p50, p95 int64) {

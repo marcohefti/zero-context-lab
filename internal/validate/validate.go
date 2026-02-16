@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/marcohefti/zero-context-lab/internal/schema"
-	"github.com/marcohefti/zero-context-lab/internal/suite"
+	"github.com/marcohefti/zero-context-lab/internal/store"
 )
 
 type CliError struct {
@@ -155,7 +155,7 @@ func validateAttempt(attemptDir string, strict bool) (Result, error) {
 			}
 			return Result{}, err
 		}
-		nonEmpty, err := jsonlHasNonEmptyLine(tracePath)
+		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 		if err != nil {
 			return Result{}, err
 		}
@@ -221,64 +221,7 @@ func validateAttempt(attemptDir string, strict bool) (Result, error) {
 		}
 	}
 
-	// Optional suite expectations (if suite.json exists under the run dir).
-	// Enforced only in strict mode to align with CI/regression semantics.
-	if strict && feedbackExists {
-		runDir := filepath.Dir(filepath.Dir(attemptDir))
-		suitePath := filepath.Join(runDir, "suite.json")
-		if _, err := os.Stat(suitePath); err == nil {
-			rawSuite, err := os.ReadFile(suitePath)
-			if err != nil {
-				return Result{}, err
-			}
-			var sf suite.SuiteFileV1
-			if err := json.Unmarshal(rawSuite, &sf); err != nil {
-				return Result{}, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "suite.json is not valid suite json", Path: suitePath}
-			}
-
-			rawFB, err := os.ReadFile(feedbackPath)
-			if err != nil {
-				return Result{}, err
-			}
-			var fb schema.FeedbackJSONV1
-			if err := json.Unmarshal(rawFB, &fb); err != nil {
-				// validateFeedback already ran; this is defensive.
-				return Result{}, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "feedback.json is not valid json", Path: feedbackPath}
-			}
-
-			er := suite.Evaluate(sf, attempt.MissionID, fb)
-			if er.Evaluated && !er.OK {
-				msg := "suite expectations failed"
-				if len(er.Failures) > 0 {
-					msg = "suite expectations failed: " + er.Failures[0].Code
-				}
-				return Result{}, &CliError{Code: "ZCL_E_EXPECTATION_FAILED", Message: msg, Path: feedbackPath}
-			}
-		}
-	}
-
 	return res, nil
-}
-
-func jsonlHasNonEmptyLine(path string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = f.Close() }()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := bytesTrim(sc.Bytes())
-		if len(line) != 0 {
-			return true, nil
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
 }
 
 func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool) error {

@@ -8,9 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
+	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
@@ -29,13 +30,25 @@ type StepResult struct {
 type Result struct {
 	OK         bool         `json:"ok"`
 	AttemptDir string       `json:"attemptDir"`
+	DryRun     bool         `json:"dryRun"`
 	Steps      []StepResult `json:"steps"`
 	StartedAt  string       `json:"startedAt"`
 }
 
+type Opts struct {
+	Execute   bool
+	AllowAll  bool
+	AllowCmds map[string]bool // basename allowlist when executing and !AllowAll
+	MaxSteps  int
+	UseStdin  bool
+}
+
 // ReplayAttempt best-effort replays tool.calls.jsonl without mutating attempt artifacts.
-// Today it supports: tool=cli/op=exec (argv input). Everything else is marked non-replayable.
-func ReplayAttempt(ctx context.Context, attemptDir string) (Result, error) {
+// It is dry-run by default; execution requires opts.Execute.
+//
+// Supported today:
+// - tool=cli/op=exec (argv input)
+func ReplayAttempt(ctx context.Context, attemptDir string, opts Opts) (Result, error) {
 	abs, err := filepath.Abs(attemptDir)
 	if err != nil {
 		return Result{}, err
@@ -48,7 +61,15 @@ func ReplayAttempt(ctx context.Context, attemptDir string) (Result, error) {
 	defer func() { _ = f.Close() }()
 
 	start := time.Now().UTC()
-	out := Result{OK: true, AttemptDir: abs, StartedAt: start.Format(time.RFC3339Nano)}
+	if opts.MaxSteps <= 0 {
+		opts.MaxSteps = 50
+	}
+	out := Result{
+		OK:         true,
+		AttemptDir: abs,
+		DryRun:     !opts.Execute,
+		StartedAt:  start.Format(time.RFC3339Nano),
+	}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -59,6 +80,18 @@ func ReplayAttempt(ctx context.Context, attemptDir string) (Result, error) {
 		if len(bytesTrim(line)) == 0 {
 			continue
 		}
+		if len(out.Steps) >= opts.MaxSteps {
+			out.OK = false
+			out.Steps = append(out.Steps, StepResult{
+				Index:      i,
+				Tool:       "zcl",
+				Op:         "replay",
+				Replayable: false,
+				Error:      "maxSteps exceeded",
+			})
+			break
+		}
+
 		var ev schema.TraceEventV1
 		if err := json.Unmarshal(line, &ev); err != nil {
 			return Result{}, fmt.Errorf("invalid trace jsonl: %w", err)
@@ -81,7 +114,32 @@ func ReplayAttempt(ctx context.Context, attemptDir string) (Result, error) {
 			step.Replayable = true
 			step.Argv = append([]string(nil), in.Argv...)
 
-			res, err := clifunnel.Run(ctx, in.Argv, io.Discard, io.Discard, schema.PreviewMaxBytesV1)
+			// Dry-run: record what would be executed.
+			if !opts.Execute {
+				out.Steps = append(out.Steps, step)
+				continue
+			}
+
+			base := filepath.Base(in.Argv[0])
+			if !opts.AllowAll {
+				if opts.AllowCmds == nil || !opts.AllowCmds[base] {
+					step.Error = "command not allowed (use --allow " + base + " or --allow-all)"
+					ok := false
+					step.OK = &ok
+					out.OK = false
+					out.Steps = append(out.Steps, step)
+					continue
+				}
+			}
+
+			var stdin io.Reader
+			if opts.UseStdin {
+				stdin = os.Stdin
+			} else {
+				stdin = strings.NewReader("")
+			}
+
+			res, err := clifunnel.Run(ctx, in.Argv, stdin, io.Discard, io.Discard, schema.PreviewMaxBytesV1)
 			if err != nil {
 				step.Error = err.Error()
 				ok := false

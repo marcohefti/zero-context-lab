@@ -61,7 +61,7 @@ func (c *boundedCapture) snapshot() (preview string, bytesTotal int64, truncated
 	return c.buf.String(), c.total, c.truncated
 }
 
-func Run(ctx context.Context, argv []string, stdout io.Writer, stderr io.Writer, maxPreviewBytes int) (Result, error) {
+func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, maxPreviewBytes int) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, errors.New("missing command argv")
 	}
@@ -70,7 +70,11 @@ func Run(ctx context.Context, argv []string, stdout io.Writer, stderr io.Writer,
 	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdin = os.Stdin
+	if stdin == nil {
+		cmd.Stdin = os.Stdin
+	} else {
+		cmd.Stdin = stdin
+	}
 
 	outPipe, err := cmd.StdoutPipe()
 	if err != nil {

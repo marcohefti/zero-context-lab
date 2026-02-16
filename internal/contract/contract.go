@@ -180,18 +180,23 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "attempt start",
-				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json",
+				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] --json",
 				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
 			},
 			{
 				ID:      "suite plan",
-				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--out-root .zcl] --json",
+				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json",
 				Summary: "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators).",
 			},
 			{
 				ID:      "replay",
-				Usage:   "zcl replay --json <attemptDir>",
+				Usage:   "zcl replay [--execute] [--allow <cmd1,cmd2>] [--allow-all] [--max-steps N] [--stdin] --json <attemptDir>",
 				Summary: "Best-effort replay of tool.calls.jsonl to reproduce failures (partial support by tool/op).",
+			},
+			{
+				ID:      "expect",
+				Usage:   "zcl expect [--strict] --json <attemptDir|runDir>",
+				Summary: "Evaluate suite expectations against feedback.json (JSON output includes failures; exit code indicates pass/fail).",
 			},
 		},
 		Errors: []Error{

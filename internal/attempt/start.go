@@ -12,19 +12,19 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
-	"github.com/marcohefti/zero-context-lab/internal/suite"
 )
 
 type StartOpts struct {
-	OutRoot   string
-	RunID     string
-	SuiteID   string
-	MissionID string
-	AgentID   string
-	Mode      string
-	Retry     int
-	Prompt    string
-	SuiteFile string
+	OutRoot       string
+	RunID         string
+	SuiteID       string
+	MissionID     string
+	AgentID       string
+	Mode          string
+	Retry         int
+	Prompt        string
+	TimeoutMs     int64
+	SuiteSnapshot any
 }
 
 type StartResult struct {
@@ -96,14 +96,15 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, err
 	}
 
-	// Optional: snapshot a suite input file into the run directory.
-	if strings.TrimSpace(opts.SuiteFile) != "" {
-		parsed, err := suite.ParseFile(opts.SuiteFile)
+	// Optional: snapshot suite.json (canonical JSON) into the run directory.
+	if opts.SuiteSnapshot != nil {
+		b, err := json.Marshal(opts.SuiteSnapshot)
 		if err != nil {
 			return nil, err
 		}
-		if parsed.Suite.SuiteID != "" && parsed.Suite.SuiteID != opts.SuiteID {
-			return nil, fmt.Errorf("suiteId mismatch: --suite=%s suite-file=%s", opts.SuiteID, parsed.Suite.SuiteID)
+		var v any
+		if err := json.Unmarshal(b, &v); err != nil {
+			return nil, err
 		}
 
 		suiteJSONPath := filepath.Join(runDir, "suite.json")
@@ -112,16 +113,16 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			var existingSuite suite.SuiteFileV1
-			if err := json.Unmarshal(existing, &existingSuite); err != nil {
+			var existingAny any
+			if err := json.Unmarshal(existing, &existingAny); err != nil {
 				return nil, err
 			}
 			// Compare semantic JSON, not bytes (snapshot is canonicalized by WriteJSONAtomic).
-			if !reflect.DeepEqual(existingSuite, parsed.Suite) {
+			if !reflect.DeepEqual(existingAny, v) {
 				return nil, fmt.Errorf("suite.json mismatch for runId=%s", runID)
 			}
 		} else if os.IsNotExist(err) {
-			if err := store.WriteJSONAtomic(suiteJSONPath, parsed.CanonicalJSON); err != nil {
+			if err := store.WriteJSONAtomic(suiteJSONPath, v); err != nil {
 				return nil, err
 			}
 		} else if err != nil {
@@ -189,6 +190,9 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		AgentID:       opts.AgentID,
 		Mode:          mode,
 		StartedAt:     now.UTC().Format(time.RFC3339Nano),
+	}
+	if opts.TimeoutMs > 0 {
+		attemptMeta.TimeoutMs = opts.TimeoutMs
 	}
 	if err := store.WriteJSONAtomic(filepath.Join(outDir, "attempt.json"), attemptMeta); err != nil {
 		return nil, err

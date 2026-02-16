@@ -1,6 +1,7 @@
 # ZCL runtime outputs
 .zcl/
 .zcl-parity/
+.zcl-parity*/
 
 # Local/CI artifacts from validation scripts
 artifacts/

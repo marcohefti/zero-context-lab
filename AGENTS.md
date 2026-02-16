@@ -44,6 +44,7 @@ Repo validation (must be green after meaningful changes):
 6. Compute and validate:
    - `zcl report --strict <attemptDir|runDir>`
    - `zcl validate --strict <attemptDir|runDir>`
+   - If using suites with `expects`: `zcl expect --strict --json <attemptDir|runDir>`
    - Optional: reproduce from trace: `zcl replay --json <attemptDir>`
 
 ## Artifact Layout (Default)

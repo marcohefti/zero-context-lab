@@ -6,6 +6,7 @@ cd "$root"
 
 ./scripts/docs-check.sh
 ./scripts/skills-check.sh
+./scripts/mod-tidy-check.sh
 
 go_files="$(find . -type f -name '*.go' -not -path './vendor/*' || true)"
 if [[ -n "${go_files}" ]]; then

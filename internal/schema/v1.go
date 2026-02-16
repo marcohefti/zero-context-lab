@@ -27,6 +27,7 @@ type AttemptJSONV1 struct {
 	AgentID       string `json:"agentId,omitempty"`
 	Mode          string `json:"mode"`      // discovery|ci
 	StartedAt     string `json:"startedAt"` // RFC3339 UTC (use consistent precision)
+	TimeoutMs     int64  `json:"timeoutMs,omitempty"`
 }
 
 // FeedbackJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/feedback.json

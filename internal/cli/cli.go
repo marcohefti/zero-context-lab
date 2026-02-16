@@ -17,15 +17,16 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/contract"
 	"github.com/marcohefti/zero-context-lab/internal/doctor"
 	"github.com/marcohefti/zero-context-lab/internal/enrich"
+	"github.com/marcohefti/zero-context-lab/internal/expect"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/funnel/mcp_proxy"
 	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
+	"github.com/marcohefti/zero-context-lab/internal/planner"
 	"github.com/marcohefti/zero-context-lab/internal/replay"
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
-	"github.com/marcohefti/zero-context-lab/internal/suite"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
@@ -89,6 +90,8 @@ func (r Runner) Run(args []string) int {
 		return r.runSuite(args[1:])
 	case "replay":
 		return r.runReplay(args[1:])
+	case "expect":
+		return r.runExpect(args[1:])
 	case "version":
 		fmt.Fprintf(r.Stdout, "%s\n", r.Version)
 		return 0
@@ -194,6 +197,7 @@ func (r Runner) runSuitePlan(args []string) int {
 	file := fs.String("file", "", "suite file path (.json|.yaml|.yml) (required)")
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	mode := fs.String("mode", "", "optional mode override: discovery|ci (default from suite file)")
+	timeoutMs := fs.Int64("timeout-ms", 0, "optional attempt timeout override in ms (default from suite defaults.timeoutMs)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
@@ -216,79 +220,29 @@ func (r Runner) runSuitePlan(args []string) int {
 		return 1
 	}
 
-	parsed, err := suite.ParseFile(strings.TrimSpace(*file))
+	res, err := planner.PlanSuite(r.Now(), planner.SuitePlanOpts{
+		OutRoot:   m.OutRoot,
+		RunID:     strings.TrimSpace(*runID),
+		SuiteFile: strings.TrimSpace(*file),
+		Mode:      strings.TrimSpace(*mode),
+		TimeoutMs: *timeoutMs,
+	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
 		return 2
 	}
-
-	modeStr := strings.TrimSpace(*mode)
-	if modeStr == "" {
-		modeStr = parsed.Suite.Defaults.Mode
-	}
-
-	type plannedMission struct {
-		MissionID string            `json:"missionId"`
-		Prompt    string            `json:"prompt,omitempty"`
-		AttemptID string            `json:"attemptId"`
-		OutDir    string            `json:"outDir"`
-		OutDirAbs string            `json:"outDirAbs"`
-		Env       map[string]string `json:"env"`
-	}
-	type planResult struct {
-		OK        bool             `json:"ok"`
-		RunID     string           `json:"runId"`
-		SuiteID   string           `json:"suiteId"`
-		Mode      string           `json:"mode"`
-		OutRoot   string           `json:"outRoot"`
-		Missions  []plannedMission `json:"missions"`
-		CreatedAt string           `json:"createdAt"`
-	}
-
-	now := r.Now()
-	rid := strings.TrimSpace(*runID)
-	var missions []plannedMission
-	for _, sm := range parsed.Suite.Missions {
-		ar, err := attempt.Start(now, attempt.StartOpts{
-			OutRoot:   m.OutRoot,
-			RunID:     rid,
-			SuiteID:   parsed.Suite.SuiteID,
-			MissionID: sm.MissionID,
-			Mode:      modeStr,
-			Retry:     1,
-			Prompt:    sm.Prompt,
-			SuiteFile: strings.TrimSpace(*file),
-		})
-		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
-			return 2
-		}
-		rid = ar.RunID
-		missions = append(missions, plannedMission{
-			MissionID: sm.MissionID,
-			Prompt:    sm.Prompt,
-			AttemptID: ar.AttemptID,
-			OutDir:    ar.OutDir,
-			OutDirAbs: ar.OutDirAbs,
-			Env:       ar.Env,
-		})
-	}
-
-	return r.writeJSON(planResult{
-		OK:        true,
-		RunID:     rid,
-		SuiteID:   parsed.Suite.SuiteID,
-		Mode:      modeStr,
-		OutRoot:   m.OutRoot,
-		Missions:  missions,
-		CreatedAt: now.UTC().Format(time.RFC3339Nano),
-	})
+	return r.writeJSON(res)
 }
 
 func (r Runner) runReplay(args []string) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
+	execute := fs.Bool("execute", false, "execute replayable steps (default is dry-run)")
+	allowAll := fs.Bool("allow-all", false, "allow executing any replayable command (unsafe)")
+	allowCSV := fs.String("allow", "", "comma-separated command basenames allowed when executing (e.g. echo,cat)")
+	maxSteps := fs.Int("max-steps", 50, "max steps to read from tool.calls.jsonl")
+	useStdin := fs.Bool("stdin", false, "forward stdin to executed commands (default is empty stdin)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
 	if err := fs.Parse(args); err != nil {
@@ -308,12 +262,68 @@ func (r Runner) runReplay(args []string) int {
 		printReplayHelp(r.Stderr)
 		return r.failUsage("replay: require exactly one <attemptDir>")
 	}
-	res, err := replay.ReplayAttempt(context.Background(), rest[0])
+
+	allowCmds := map[string]bool{}
+	if strings.TrimSpace(*allowCSV) != "" {
+		for _, part := range strings.Split(*allowCSV, ",") {
+			if v := strings.TrimSpace(part); v != "" {
+				allowCmds[v] = true
+			}
+		}
+	}
+	res, err := replay.ReplayAttempt(context.Background(), rest[0], replay.Opts{
+		Execute:   *execute,
+		AllowAll:  *allowAll,
+		AllowCmds: allowCmds,
+		MaxSteps:  *maxSteps,
+		UseStdin:  *useStdin,
+	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
 	return r.writeJSON(res)
+}
+
+func (r Runner) runExpect(args []string) int {
+	fs := flag.NewFlagSet("expect", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	strict := fs.Bool("strict", false, "strict mode (missing suite.json/feedback.json fails)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("expect: invalid flags")
+	}
+	if *help {
+		printExpectHelp(r.Stdout)
+		return 0
+	}
+	if !*jsonOut {
+		printExpectHelp(r.Stderr)
+		return r.failUsage("expect: require --json for stable output")
+	}
+
+	paths := fs.Args()
+	if len(paths) != 1 {
+		printExpectHelp(r.Stderr)
+		return r.failUsage("expect: require exactly one <attemptDir|runDir>")
+	}
+
+	res, err := expect.ExpectPath(paths[0], *strict)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	exit := r.writeJSON(res)
+	if exit != 0 {
+		return exit
+	}
+	if !res.OK {
+		return 2
+	}
+	return 0
 }
 
 func (r Runner) runFeedback(args []string) int {
@@ -411,10 +421,11 @@ func (r Runner) runAttemptStart(args []string) int {
 	suite := fs.String("suite", "", "suite id (required)")
 	mission := fs.String("mission", "", "mission id (required)")
 	prompt := fs.String("prompt", "", "optional mission prompt to snapshot into prompt.txt")
-	suiteFile := fs.String("suite-file", "", "optional JSON suite file to snapshot into suite.json")
+	suiteFile := fs.String("suite-file", "", "optional suite file (.json|.yaml|.yml) to snapshot into suite.json")
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	agentID := fs.String("agent-id", "", "runner agent id (optional)")
 	mode := fs.String("mode", "discovery", "run mode: discovery|ci")
+	timeoutMs := fs.Int64("timeout-ms", 0, "attempt timeout in ms (optional; also used by funnels as a mission deadline)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	retry := fs.Int("retry", 1, "attempt retry number (default 1)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
@@ -437,16 +448,27 @@ func (r Runner) runAttemptStart(args []string) int {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
+	var suiteSnap any
+	if strings.TrimSpace(*suiteFile) != "" {
+		snap, err := planner.ParseSuiteSnapshot(*suiteFile, *suite)
+		if err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+			return 2
+		}
+		suiteSnap = snap
+	}
+
 	res, err := attempt.Start(r.Now(), attempt.StartOpts{
-		OutRoot:   m.OutRoot,
-		RunID:     *runID,
-		SuiteID:   *suite,
-		MissionID: *mission,
-		AgentID:   *agentID,
-		Mode:      *mode,
-		Retry:     *retry,
-		Prompt:    *prompt,
-		SuiteFile: *suiteFile,
+		OutRoot:       m.OutRoot,
+		RunID:         *runID,
+		SuiteID:       *suite,
+		MissionID:     *mission,
+		AgentID:       *agentID,
+		Mode:          *mode,
+		Retry:         *retry,
+		Prompt:        *prompt,
+		TimeoutMs:     *timeoutMs,
+		SuiteSnapshot: suiteSnap,
 	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
@@ -483,8 +505,21 @@ func (r Runner) runRun(args []string) int {
 		return r.failUsage("run: missing command (use: zcl run -- <cmd> ...)")
 	}
 
-	// Keep this intentionally small for MVP; richer capture/trace wiring comes in Phase 3 Step 2+.
-	res, runErr := clifunnel.Run(context.Background(), argv, r.Stdout, r.Stderr, schema.PreviewMaxBytesV1)
+	now := r.Now()
+	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
+	if cancel != nil {
+		defer cancel()
+	}
+
+	var (
+		res    clifunnel.Result
+		runErr error
+	)
+	if timedOut {
+		runErr = context.DeadlineExceeded
+	} else {
+		res, runErr = clifunnel.Run(ctx, argv, nil, r.Stdout, r.Stderr, schema.PreviewMaxBytesV1)
+	}
 
 	traceRes := trace.ResultForTrace{
 		ExitCode:     res.ExitCode,
@@ -496,11 +531,17 @@ func (r Runner) runRun(args []string) int {
 		OutTruncated: res.OutTruncated,
 		ErrTruncated: res.ErrTruncated,
 	}
-	if runErr != nil {
+	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		traceRes.SpawnError = "ZCL_E_TIMEOUT"
+	} else if runErr != nil {
 		traceRes.SpawnError = "ZCL_E_SPAWN"
 	}
 	if err := trace.AppendCLIRunEvent(r.Now(), env, argv, traceRes); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
+		return 1
+	}
+	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
 		return 1
 	}
 	if runErr != nil {
@@ -513,6 +554,27 @@ func (r Runner) runRun(args []string) int {
 		return res.ExitCode
 	}
 	return 0
+}
+
+func attemptCtxForDeadline(now time.Time, attemptDir string) (context.Context, context.CancelFunc, bool) {
+	a, err := attempt.ReadAttempt(attemptDir)
+	if err != nil {
+		return context.Background(), nil, false
+	}
+	if a.TimeoutMs <= 0 || strings.TrimSpace(a.StartedAt) == "" {
+		return context.Background(), nil, false
+	}
+	start, err := time.Parse(time.RFC3339Nano, a.StartedAt)
+	if err != nil {
+		return context.Background(), nil, false
+	}
+	deadline := start.Add(time.Duration(a.TimeoutMs) * time.Millisecond)
+	remaining := deadline.Sub(now)
+	if remaining <= 0 {
+		return context.Background(), nil, true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), remaining)
+	return ctx, cancel, false
 }
 
 func (r Runner) runReport(args []string) int {
@@ -831,7 +893,20 @@ func (r Runner) runMCPProxy(args []string) int {
 		return r.failUsage("mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)")
 	}
 
-	if err := mcpproxy.Proxy(context.Background(), env, argv, os.Stdin, r.Stdout, schema.PreviewMaxBytesV1); err != nil {
+	now := r.Now()
+	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
+	if cancel != nil {
+		defer cancel()
+	}
+	if timedOut {
+		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+		return 1
+	}
+	if err := mcpproxy.Proxy(ctx, env, argv, os.Stdin, r.Stdout, schema.PreviewMaxBytesV1); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+			return 1
+		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -878,6 +953,7 @@ Usage:
   zcl report [--strict] [--json] <attemptDir|runDir>
   zcl validate [--strict] [--json] <attemptDir|runDir>
   zcl replay --json <attemptDir>
+  zcl expect [--strict] --json <attemptDir|runDir>
   zcl doctor [--json]
   zcl gc [--dry-run] [--json]
   zcl enrich --runner codex --rollout <path> [<attemptDir>]
@@ -894,6 +970,7 @@ Commands:
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
   validate         Validate artifact integrity with typed error codes.
   replay           Best-effort replay of tool.calls.jsonl (use --json).
+  expect           Evaluate suite expectations against feedback.json (use --json).
   doctor           Check environment/config sanity for running ZCL.
   gc               Retention cleanup under .zcl/runs (supports pinning).
   enrich           Optional runner enrichment (does not affect scoring).
@@ -917,14 +994,14 @@ func printContractHelp(w io.Writer) {
 
 func printAttemptHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl attempt start --suite <suiteId> --mission <missionId> --json
+	  zcl attempt start --suite <suiteId> --mission <missionId> --json
 `)
 }
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
-`)
+		  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] --json
+	`)
 }
 
 func printSuiteHelp(w io.Writer) {
@@ -935,19 +1012,29 @@ func printSuiteHelp(w io.Writer) {
 
 func printSuitePlanHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--out-root .zcl] --json
+	  zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json
 `)
 }
 
 func printReplayHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl replay --json <attemptDir>
+  zcl replay [--execute] [--allow <cmd1,cmd2>] [--allow-all] [--max-steps N] [--stdin] --json <attemptDir>
+  
+Notes:
+  - Default is dry-run; use --execute to actually run replayable steps.
+  - When executing, commands are denied unless explicitly allowed (or --allow-all).
+`)
+}
+
+func printExpectHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl expect [--strict] --json <attemptDir|runDir>
 `)
 }
 
 func printRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-	  zcl run -- <cmd> [args...]
+		  zcl run -- <cmd> [args...]
 `)
 }
 
