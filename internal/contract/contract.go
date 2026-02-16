@@ -236,6 +236,11 @@ func Build(version string) Contract {
 				Summary: "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators).",
 			},
 			{
+				ID:      "suite run",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--strict] [--strict-expect] --json -- <runner-cmd> [args...]",
+				Summary: "Run a suite end-to-end: plan attempts, spawn a runner per mission with ZCL_* env, then finish/validate/expect each attempt.",
+			},
+			{
 				ID:      "replay",
 				Usage:   "zcl replay [--execute] [--allow <cmd1,cmd2>] [--allow-all] [--max-steps N] [--stdin] --json <attemptDir>",
 				Summary: "Best-effort replay of tool.calls.jsonl to reproduce failures (partial support by tool/op).",

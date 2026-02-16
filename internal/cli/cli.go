@@ -189,6 +189,8 @@ func (r Runner) runSuite(args []string) int {
 	switch args[0] {
 	case "plan":
 		return r.runSuitePlan(args[1:])
+	case "run":
+		return r.runSuiteRun(args[1:])
 	default:
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown suite subcommand %q\n", args[0])
 		printSuiteHelp(r.Stderr)
@@ -920,6 +922,7 @@ Usage:
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
+  zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
@@ -940,6 +943,7 @@ Commands:
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
+  suite run       Run a suite end-to-end (plan -> spawn runner per mission -> finish/validate/expect).
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
@@ -985,6 +989,7 @@ func printAttemptStartHelp(w io.Writer) {
 func printSuiteHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl suite plan --file <suite.(yaml|yml|json)> --json
+  zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]
 `)
 }
 

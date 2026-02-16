@@ -33,6 +33,7 @@ Repo validation (must be green after meaningful changes):
 2. Start attempt (JSON output is required for automation):
    - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --json`
    - Or batch-plan a full suite: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
+   - Or run a full suite end-to-end: `zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]`
 3. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
