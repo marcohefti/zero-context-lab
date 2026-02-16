@@ -187,7 +187,7 @@ func validateAttempt(attemptDir string, strict bool) Result {
 
 	if _, err := os.Stat(tracePath); err == nil {
 		if requireContained(attemptDir, tracePath, &res) {
-			validateTrace(tracePath, attempt, enforce, &res)
+			validateTrace(tracePath, attemptDir, attempt, enforce, &res)
 		}
 	}
 
@@ -227,12 +227,27 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		if rep.RunID != attempt.RunID || rep.AttemptID != attempt.AttemptID || rep.MissionID != attempt.MissionID {
 			addErr(&res, "ZCL_E_ID_MISMATCH", "attempt.report.json ids do not match attempt.json", reportPath)
 		}
+		if rep.Result != "" && rep.ResultJSON != nil {
+			addErr(&res, "ZCL_E_CONTRACT", "attempt.report.json must set only one of result or resultJson", reportPath)
+			return finalize(res)
+		}
+		if strings.TrimSpace(rep.Classification) != "" && !schema.IsValidClassificationV1(rep.Classification) {
+			addErr(&res, "ZCL_E_CONTRACT", "attempt.report.json classification is invalid", reportPath)
+			return finalize(res)
+		}
+		if strings.TrimSpace(rep.Artifacts.AttemptJSON) == "" || strings.TrimSpace(rep.Artifacts.TraceJSONL) == "" || strings.TrimSpace(rep.Artifacts.FeedbackJSON) == "" {
+			if enforce {
+				addErr(&res, "ZCL_E_CONTRACT", "attempt.report.json artifacts are missing required pointers", reportPath)
+				return finalize(res)
+			}
+			addWarn(&res, "ZCL_W_CONTRACT", "attempt.report.json artifacts missing pointers", reportPath)
+		}
 	}
 
 	return finalize(res)
 }
 
-func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
+func validateTrace(path string, attemptDir string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
 	f, err := os.Open(path)
 	if err != nil {
 		addErr(res, "ZCL_E_IO", err.Error(), path)
@@ -308,6 +323,8 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *
 				return
 			}
 			addWarn(res, "ZCL_W_CONTRACT", "trace enrichment is not valid json", path)
+		} else if len(ev.Enrichment) > 0 && ev.Tool == "cli" {
+			validateCLICaptureEnrichment(ev, attemptDir, strict, res, path)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -318,6 +335,59 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *
 		addErr(res, "ZCL_E_MISSING_EVIDENCE", "tool.calls.jsonl is empty", path)
 		return
 	}
+}
+
+func validateCLICaptureEnrichment(ev schema.TraceEventV1, attemptDir string, strict bool, res *Result, path string) {
+	var v any
+	if err := json.Unmarshal(ev.Enrichment, &v); err != nil {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "trace enrichment is not parseable json", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "trace enrichment is not parseable json", path)
+		return
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	capAny, ok := m["capture"]
+	if !ok {
+		return
+	}
+	capMap, ok := capAny.(map[string]any)
+	if !ok {
+		return
+	}
+
+	checkRel := func(key string) {
+		val, _ := capMap[key].(string)
+		val = strings.TrimSpace(val)
+		if val == "" {
+			return
+		}
+		if filepath.IsAbs(val) || strings.Contains(val, "..") {
+			addErr(res, "ZCL_E_CONTRACT", "trace capture path must be a safe relative path", path)
+			return
+		}
+		abs := filepath.Join(attemptDir, val)
+		if !requireContained(attemptDir, abs, res) {
+			return
+		}
+		if _, err := os.Stat(abs); err != nil {
+			if strict && os.IsNotExist(err) {
+				addErr(res, "ZCL_E_MISSING_ARTIFACT", "trace capture path does not exist", abs)
+				return
+			}
+			if os.IsNotExist(err) {
+				addWarn(res, "ZCL_W_MISSING_ARTIFACT", "trace capture path does not exist", abs)
+				return
+			}
+		}
+	}
+
+	checkRel("stdoutPath")
+	checkRel("stderrPath")
 }
 
 func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
@@ -365,6 +435,10 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, re
 	}
 	if fb.ResultJSON != nil && len(fb.ResultJSON) > schema.FeedbackMaxBytesV1 {
 		addErr(res, "ZCL_E_BOUNDS", "feedback resultJson exceeds bounds", path)
+		return
+	}
+	if strings.TrimSpace(fb.Classification) != "" && !schema.IsValidClassificationV1(fb.Classification) {
+		addErr(res, "ZCL_E_CONTRACT", "feedback classification is invalid", path)
 		return
 	}
 }

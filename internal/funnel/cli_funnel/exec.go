@@ -61,12 +61,18 @@ func (c *boundedCapture) snapshot() (preview string, bytesTotal int64, truncated
 	return c.buf.String(), c.total, c.truncated
 }
 
-func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, maxPreviewBytes int) (Result, error) {
+func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, outFull io.Writer, errFull io.Writer, maxPreviewBytes int) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, errors.New("missing command argv")
 	}
 	if maxPreviewBytes < 0 {
 		maxPreviewBytes = 0
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
 	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -99,11 +105,11 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(io.MultiWriter(stdout, &outCap), outPipe)
+		_, _ = io.Copy(multiWriter(stdout, outFull, &outCap), outPipe)
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(io.MultiWriter(stderr, &errCap), errPipe)
+		_, _ = io.Copy(multiWriter(stderr, errFull, &errCap), errPipe)
 	}()
 
 	waitErr := cmd.Wait()
@@ -132,4 +138,11 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, 
 		OutTruncated: outTrunc,
 		ErrTruncated: errTrunc,
 	}, nil
+}
+
+func multiWriter(a io.Writer, b io.Writer, c io.Writer) io.Writer {
+	if b == nil {
+		return io.MultiWriter(a, c)
+	}
+	return io.MultiWriter(a, b, c)
 }

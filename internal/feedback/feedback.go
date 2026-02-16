@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/redact"
@@ -14,9 +15,10 @@ import (
 )
 
 type WriteOpts struct {
-	OK         bool
-	Result     string
-	ResultJSON string
+	OK             bool
+	Result         string
+	ResultJSON     string
+	Classification string
 }
 
 func Write(now time.Time, env trace.Env, opts WriteOpts) error {
@@ -25,6 +27,11 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 	}
 	if opts.Result == "" && opts.ResultJSON == "" {
 		return fmt.Errorf("missing --result or --result-json")
+	}
+
+	classification := strings.TrimSpace(opts.Classification)
+	if classification != "" && !schema.IsValidClassificationV1(classification) {
+		return fmt.Errorf("invalid --classification (expected missing_primitive|naming_ux|output_shape|already_possible_better_way)")
 	}
 
 	if err := requireEvidenceForMode(env); err != nil {
@@ -68,6 +75,7 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		OK:                opts.OK,
 		Result:            resultText,
 		ResultJSON:        resultRaw,
+		Classification:    classification,
 		CreatedAt:         now.UTC().Format(time.RFC3339Nano),
 		RedactionsApplied: applied,
 	}

@@ -159,6 +159,7 @@ Exactly one of `result` or `resultJson` must be present:
   "attemptId": "001-latest-blog-title-r1",
   "ok": true,
   "result": "ARTICLE_TITLE=Example",
+  "classification": "output_shape",
   "createdAt": "2026-02-15T18:00:40.123456789Z",
   "redactionsApplied": []
 }
@@ -201,7 +202,18 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   "missionId": "latest-blog-title",
   "attemptId": "001-latest-blog-title-r1",
   "computedAt": "2026-02-15T18:00:55.123456789Z",
+  "startedAt": "2026-02-15T18:00:13.123456789Z",
+  "endedAt": "2026-02-15T18:00:40.123456789Z",
   "ok": true,
+  "result": "ARTICLE_TITLE=Example",
+  "classification": "output_shape",
+  "artifacts": {
+    "attemptJson": "attempt.json",
+    "toolCallsJsonl": "tool.calls.jsonl",
+    "feedbackJson": "feedback.json",
+    "notesJsonl": "notes.jsonl",
+    "promptTxt": "prompt.txt"
+  },
   "integrity": {
     "tracePresent": true,
     "traceNonEmpty": true,

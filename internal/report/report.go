@@ -25,6 +25,8 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	attemptPath := filepath.Join(attemptDir, "attempt.json")
 	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
 	feedbackPath := filepath.Join(attemptDir, "feedback.json")
+	notesPath := filepath.Join(attemptDir, "notes.jsonl")
+	promptPath := filepath.Join(attemptDir, "prompt.txt")
 
 	attemptBytes, err := os.ReadFile(attemptPath)
 	if err != nil {
@@ -38,6 +40,9 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		return schema.AttemptReportJSONV1{}, err
 	}
 
+	// In ci mode, treat report as strict even if the caller didn't pass --strict.
+	enforce := strict || attempt.Mode == "ci"
+
 	var okPtr *bool
 	var fb schema.FeedbackJSONV1
 	feedbackPresent := false
@@ -48,13 +53,13 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		}
 		ok := fb.OK
 		okPtr = &ok
-	} else if strict && os.IsNotExist(err) {
+	} else if enforce && os.IsNotExist(err) {
 		return schema.AttemptReportJSONV1{}, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing feedback.json"}
 	} else if err != nil && !os.IsNotExist(err) {
 		return schema.AttemptReportJSONV1{}, err
 	}
 
-	metrics, err := computeMetrics(tracePath, strict)
+	metrics, err := computeMetrics(tracePath, enforce)
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
 	}
@@ -64,7 +69,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		tracePresent = true
 		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 		if err != nil {
-			if strict {
+			if enforce {
 				return schema.AttemptReportJSONV1{}, err
 			}
 		} else {
@@ -79,9 +84,33 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		FunnelBypassSuspected: feedbackPresent && !traceNonEmpty,
 	}
 
+	artifacts := schema.AttemptArtifactsV1{
+		AttemptJSON:  "attempt.json",
+		TraceJSONL:   "tool.calls.jsonl",
+		FeedbackJSON: "feedback.json",
+	}
+	if _, err := os.Stat(notesPath); err == nil {
+		artifacts.NotesJSONL = "notes.jsonl"
+	}
+	if _, err := os.Stat(promptPath); err == nil {
+		artifacts.PromptTXT = "prompt.txt"
+	}
+
+	startedAt := attempt.StartedAt
+	endedAt := ""
+	if feedbackPresent && fb.CreatedAt != "" {
+		endedAt = fb.CreatedAt
+	} else if traceNonEmpty {
+		// Best-effort: endedAt = max trace ts. We already parsed TS in computeMetrics; re-scan cheaply here
+		// to avoid changing computeMetrics's signature.
+		if ts, ok := maxTraceTS(tracePath); ok {
+			endedAt = ts
+		}
+	}
+
 	var expects *schema.ExpectationResultV1
 	if sf, ok, err := loadSuiteForAttempt(attemptDir); err != nil {
-		if strict {
+		if enforce {
 			return schema.AttemptReportJSONV1{}, err
 		}
 	} else if ok && feedbackPresent {
@@ -99,21 +128,64 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	}
 
 	return schema.AttemptReportJSONV1{
-		SchemaVersion: schema.ArtifactSchemaV1,
-		RunID:         attempt.RunID,
-		SuiteID:       attempt.SuiteID,
-		MissionID:     attempt.MissionID,
-		AttemptID:     attempt.AttemptID,
-		ComputedAt:    now.UTC().Format(time.RFC3339Nano),
-		OK:            okPtr,
-		Metrics:       metrics,
-		Integrity:     integrity,
-		Expectations:  expects,
+		SchemaVersion:  schema.ArtifactSchemaV1,
+		RunID:          attempt.RunID,
+		SuiteID:        attempt.SuiteID,
+		MissionID:      attempt.MissionID,
+		AttemptID:      attempt.AttemptID,
+		ComputedAt:     now.UTC().Format(time.RFC3339Nano),
+		StartedAt:      startedAt,
+		EndedAt:        endedAt,
+		OK:             okPtr,
+		Result:         fb.Result,
+		ResultJSON:     fb.ResultJSON,
+		Classification: fb.Classification,
+		Metrics:        metrics,
+		Artifacts:      artifacts,
+		Integrity:      integrity,
+		Expectations:   expects,
 	}, nil
 }
 
 func WriteAttemptReportAtomic(path string, report schema.AttemptReportJSONV1) error {
 	return store.WriteJSONAtomic(path, report)
+}
+
+func maxTraceTS(tracePath string) (string, bool) {
+	f, err := os.Open(tracePath)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var (
+		maxTS  time.Time
+		maxStr string
+	)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev schema.TraceEventV1
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, ev.TS)
+		if err != nil {
+			continue
+		}
+		if maxTS.IsZero() || ts.After(maxTS) {
+			maxTS = ts
+			maxStr = ev.TS
+		}
+	}
+	if maxTS.IsZero() {
+		return "", false
+	}
+	return maxStr, true
 }
 
 func computeMetrics(tracePath string, strict bool) (schema.AttemptMetricsV1, error) {

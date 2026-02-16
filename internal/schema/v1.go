@@ -42,7 +42,10 @@ type FeedbackJSONV1 struct {
 	OK            bool            `json:"ok"`
 	Result        string          `json:"result,omitempty"`
 	ResultJSON    json.RawMessage `json:"resultJson,omitempty"`
-	CreatedAt     string          `json:"createdAt"` // RFC3339 UTC (use consistent precision)
+	// Classification is optional friction triage that must never override trace evidence.
+	// Allowed values: missing_primitive|naming_ux|output_shape|already_possible_better_way
+	Classification string `json:"classification,omitempty"`
+	CreatedAt      string `json:"createdAt"` // RFC3339 UTC (use consistent precision)
 	// RedactionsApplied is informational only; scoring must not depend on it.
 	RedactionsApplied []string `json:"redactionsApplied,omitempty"`
 }
@@ -56,12 +59,31 @@ type AttemptReportJSONV1 struct {
 	AttemptID     string `json:"attemptId"`
 	ComputedAt    string `json:"computedAt"` // RFC3339 UTC (use consistent precision)
 
+	StartedAt string `json:"startedAt,omitempty"`
+	EndedAt   string `json:"endedAt,omitempty"`
+
 	OK *bool `json:"ok,omitempty"` // copied from feedback when present
+
+	// Exactly one of Result or ResultJSON may be set (copied from feedback when present).
+	Result     string          `json:"result,omitempty"`
+	ResultJSON json.RawMessage `json:"resultJson,omitempty"`
+
+	Classification string `json:"classification,omitempty"`
 
 	Metrics AttemptMetricsV1 `json:"metrics"`
 
+	Artifacts AttemptArtifactsV1 `json:"artifacts"`
+
 	Integrity    *AttemptIntegrityV1  `json:"integrity,omitempty"`
 	Expectations *ExpectationResultV1 `json:"expectations,omitempty"`
+}
+
+type AttemptArtifactsV1 struct {
+	AttemptJSON  string `json:"attemptJson"`
+	TraceJSONL   string `json:"toolCallsJsonl"`
+	FeedbackJSON string `json:"feedbackJson"`
+	NotesJSONL   string `json:"notesJsonl,omitempty"`
+	PromptTXT    string `json:"promptTxt,omitempty"`
 }
 
 type AttemptIntegrityV1 struct {

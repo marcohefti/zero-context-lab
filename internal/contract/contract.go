@@ -110,7 +110,7 @@ func Build(version string) Contract {
 				SchemaVersions: []int{1},
 				Required:       false,
 				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json",
-				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "computedAt", "metrics"},
+				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "computedAt", "metrics", "artifacts"},
 			},
 			{
 				ID:             "runner.ref.json",
@@ -178,6 +178,11 @@ func Build(version string) Contract {
 				Summary: "Retention cleanup under .zcl/runs (age/size; respects pinned runs).",
 			},
 			{
+				ID:      "pin",
+				Usage:   "zcl pin --run-id <runId> --on|--off [--out-root .zcl] [--json]",
+				Summary: "Pin/unpin a run (toggles run.json.pinned) so gc will keep it.",
+			},
+			{
 				ID:      "enrich",
 				Usage:   "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
 				Summary: "Optional runner enrichment (writes runner.ref.json + runner.metrics.json).",
@@ -189,8 +194,8 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "run",
-				Usage:   "zcl run -- <cmd> [args...]",
-				Summary: "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces).",
+				Usage:   "zcl run [--capture] -- <cmd> [args...]",
+				Summary: "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope).",
 			},
 			{
 				ID:      "contract",

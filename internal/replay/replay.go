@@ -139,7 +139,7 @@ func ReplayAttempt(ctx context.Context, attemptDir string, opts Opts) (Result, e
 				stdin = strings.NewReader("")
 			}
 
-			res, err := clifunnel.Run(ctx, in.Argv, stdin, io.Discard, io.Discard, schema.PreviewMaxBytesV1)
+			res, err := clifunnel.Run(ctx, in.Argv, stdin, io.Discard, io.Discard, nil, nil, schema.PreviewMaxBytesV1)
 			if err != nil {
 				step.Error = err.Error()
 				ok := false

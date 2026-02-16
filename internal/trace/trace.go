@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/redact"
@@ -96,6 +97,18 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		},
 	}
 
+	if strings.TrimSpace(res.CapturedStdoutPath) != "" || strings.TrimSpace(res.CapturedStderrPath) != "" {
+		en := map[string]any{
+			"capture": map[string]any{
+				"stdoutPath": strings.TrimSpace(res.CapturedStdoutPath),
+				"stderrPath": strings.TrimSpace(res.CapturedStderrPath),
+			},
+		}
+		if b, err := store.CanonicalJSON(en); err == nil {
+			ev.Enrichment = b
+		}
+	}
+
 	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	return store.AppendJSONL(path, ev)
 }
@@ -111,6 +124,9 @@ type ResultForTrace struct {
 	ErrPreview   string
 	OutTruncated bool
 	ErrTruncated bool
+
+	CapturedStdoutPath string
+	CapturedStderrPath string
 }
 
 func redactStrings(in []string) ([]string, []string) {

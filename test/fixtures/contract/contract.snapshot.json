@@ -116,7 +116,8 @@
         "missionId",
         "attemptId",
         "computedAt",
-        "metrics"
+        "metrics",
+        "artifacts"
       ]
     },
     {
@@ -220,6 +221,11 @@
       "summary": "Retention cleanup under .zcl/runs (age/size; respects pinned runs)."
     },
     {
+      "id": "pin",
+      "usage": "zcl pin --run-id <runId> --on|--off [--out-root .zcl] [--json]",
+      "summary": "Pin/unpin a run (toggles run.json.pinned) so gc will keep it."
+    },
+    {
       "id": "enrich",
       "usage": "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
       "summary": "Optional runner enrichment (writes runner.ref.json + runner.metrics.json)."
@@ -231,8 +237,8 @@
     },
     {
       "id": "run",
-      "usage": "zcl run -- <cmd> [args...]",
-      "summary": "Run a command through the ZCL CLI funnel (passthrough stdout/stderr, bounded capture for traces)."
+      "usage": "zcl run [--capture] -- <cmd> [args...]",
+      "summary": "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope)."
     },
     {
       "id": "contract",

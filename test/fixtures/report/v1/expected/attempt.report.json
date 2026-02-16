@@ -5,7 +5,15 @@
   "missionId": "latest-blog-title",
   "attemptId": "001-latest-blog-title-r1",
   "computedAt": "2026-02-15T18:00:10Z",
+  "startedAt": "2026-02-15T18:00:00Z",
+  "endedAt": "2026-02-15T18:00:03Z",
   "ok": false,
+  "result": "ARTICLE_TITLE=Example",
+  "artifacts": {
+    "attemptJson": "attempt.json",
+    "toolCallsJsonl": "tool.calls.jsonl",
+    "feedbackJson": "feedback.json"
+  },
   "integrity": {
     "tracePresent": true,
     "traceNonEmpty": true,
