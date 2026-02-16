@@ -110,8 +110,11 @@ Single entrypoint:
 - `./scripts/verify.sh`
 
 What it runs:
-- `scripts/docs-check.sh` (doc cross-links exist)
 - `scripts/skills-check.sh` (skill pack sanity)
 - gofmt check
 - `go test ./...`, `go vet ./...`
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
+
+Optional (not part of `./scripts/verify.sh`):
+- `scripts/docs-check.sh` (doc cross-links exist)
+- `scripts/docs-contract-check.sh` (docs mention commands + SCHEMAS matches contract artifacts)

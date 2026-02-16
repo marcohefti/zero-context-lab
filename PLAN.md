@@ -20,7 +20,7 @@ Rules:
 3. [x] Implement a minimal `zcl` CLI with JSON-first output:
    `zcl contract --json` and `zcl attempt start --suite ... --mission ... --json`.
 4. [x] Add SurfWright-style repo validation scripts with minimal `PASS/FAIL` output:
-   `scripts/docs-check.sh`, `scripts/contract-snapshot.sh`, `scripts/verify.sh`.
+   `scripts/contract-snapshot.sh`, `scripts/verify.sh`.
 5. [x] Add initial contract snapshot at `test/fixtures/contract/contract.snapshot.json`.
 6. [x] Add `.gitignore` so `.zcl/` outputs and `artifacts/` do not get committed.
 7. [x] Initialize git, set `origin`, commit, and push `main`.

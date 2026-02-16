@@ -304,7 +304,6 @@ Principles:
 - Prefer sequential execution (avoid build races and half-updated artifacts).
 
 Suggested checks (repo/CI; distinct from runtime `zcl validate` which validates attempt artifacts):
-- `docs-check`: required docs exist and are cross-linked (`CONCEPT.md`, `ARCHITECTURE.md`, `AGENTS.md`).
 - `contract-snapshot-check`: `zcl contract --json` matches a normalized snapshot (sort arrays, drop volatile fields; update via an explicit `--update` path).
 - `skill-validate`: shipped skills/integration packs are structurally valid (frontmatter, directory names, no junk docs).
 - `release-check`: version/changelog/release artifact sanity (checksums present, reproducible naming, etc).

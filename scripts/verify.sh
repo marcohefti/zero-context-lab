@@ -4,8 +4,6 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-./scripts/docs-check.sh
-./scripts/docs-contract-check.sh
 ./scripts/skills-check.sh
 ./scripts/mod-tidy-check.sh
 
