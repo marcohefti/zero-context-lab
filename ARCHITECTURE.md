@@ -40,6 +40,7 @@ Boundaries (ownership + responsibilities):
 - ZCL core: owns artifact layout, trace writing, validation, and report generation.
 - Runner adapters: optional enrichment only (`runner.*.json`); must not affect scoring.
 - Write boundary: ZCL writes only under `.zcl/` (project) and optionally `~/.zcl/` (global); it must not mutate repo source/git state unless explicitly permitted.
+- Scratch space: funnels/tools that need temporary files should use `<outRoot>/tmp/<runId>/<attemptId>/` (exported as `ZCL_TMP_DIR`) and reference any important outputs via attempt artifacts.
 
 ## Command Surface (MVP)
 ZCL should stay small: a few composable commands with deterministic JSON output and deterministic artifacts.

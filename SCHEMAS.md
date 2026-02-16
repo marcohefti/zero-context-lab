@@ -103,6 +103,7 @@ Required fields:
 Optional fields:
 - `agentId` (runner-provided correlation id)
 - `timeoutMs` (attempt deadline in ms from `startedAt`; funnels should enforce this as a mission-level deadline)
+- `scratchDir` (path relative to `<outRoot>/` for per-attempt scratch space under `<outRoot>/tmp/<runId>/<attemptId>`)
 
 ## `prompt.txt` (snapshot; optional)
 

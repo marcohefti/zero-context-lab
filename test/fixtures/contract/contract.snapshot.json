@@ -66,6 +66,7 @@
       ],
       "required": false,
       "requiredInModes": [
+        "discovery",
         "ci"
       ],
       "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl",
@@ -79,6 +80,7 @@
       ],
       "required": false,
       "requiredInModes": [
+        "discovery",
         "ci"
       ],
       "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
@@ -261,6 +263,11 @@
       "id": "mcp proxy",
       "usage": "zcl mcp proxy -- <server-cmd> [args...]",
       "summary": "MCP stdio proxy funnel (records initialize/tools/list/tools/call)."
+    },
+    {
+      "id": "http proxy",
+      "usage": "zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]",
+      "summary": "HTTP reverse proxy funnel (records inbound requests/responses as tool=http op=request)."
     },
     {
       "id": "run",

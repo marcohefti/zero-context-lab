@@ -36,6 +36,7 @@ Repo validation (must be green after meaningful changes):
 3. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
+   - HTTP: `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]` (writes `tool.calls.jsonl`)
 4. Finish with authoritative outcome:
    - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
 5. Optional secondary evidence:

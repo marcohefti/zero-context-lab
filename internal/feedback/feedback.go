@@ -85,7 +85,7 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 }
 
 func requireEvidenceForMode(env trace.Env) error {
-	// Enforce "ci" semantics: primary evidence must exist before we accept a final outcome.
+	// Enforce "funnel-first" semantics: primary evidence must exist before we accept a final outcome.
 	// This makes it harder to accidentally record a result without funnel-backed actions.
 	rawAttempt, err := os.ReadFile(filepath.Join(env.OutDirAbs, "attempt.json"))
 	if err != nil {
@@ -98,15 +98,12 @@ func requireEvidenceForMode(env trace.Env) error {
 	if err := json.Unmarshal(rawAttempt, &a); err != nil {
 		return fmt.Errorf("invalid attempt.json (cannot determine mode): %w", err)
 	}
-	if a.Mode != "ci" {
-		return nil
-	}
 
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	f, err := os.Open(tracePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("ci mode requires tool.calls.jsonl before feedback")
+			return fmt.Errorf("tool.calls.jsonl is required before feedback")
 		}
 		return err
 	}
@@ -127,5 +124,5 @@ func requireEvidenceForMode(env trace.Env) error {
 			break
 		}
 	}
-	return fmt.Errorf("ci mode requires non-empty tool.calls.jsonl before feedback")
+	return fmt.Errorf("tool.calls.jsonl must be non-empty before feedback")
 }

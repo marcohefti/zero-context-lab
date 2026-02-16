@@ -251,7 +251,7 @@ Minimal ZCL error code set (starting point):
 - `ZCL_E_MISSING_ARTIFACT` (required artifact missing)
 - `ZCL_E_INVALID_JSON` (artifact not parseable JSON/JSONL)
 - `ZCL_E_SCHEMA_UNSUPPORTED` (unknown/unsupported schema version)
-- `ZCL_E_BOUNDS_EXCEEDED` (capture/preview exceeded configured bounds)
+- `ZCL_E_BOUNDS` (capture/preview exceeded configured bounds)
 - `ZCL_E_REDACTION_FAILED` (secrets could not be safely redacted)
 - `ZCL_E_FUNNEL_BYPASS` (actions detected outside the funnel, if detectable)
 - `ZCL_E_TOOL_FAILED` (wrapped tool failed without a typed code; include exit code and stderr preview)

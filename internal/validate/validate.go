@@ -845,7 +845,7 @@ func finalize(res Result) Result {
 
 func validateKnownInputShape(ev schema.TraceEventV1, strict bool, res *Result, path string) {
 	// Only enforce for tools that ZCL itself emits. Unknown tools are allowed.
-	if ev.Tool != "cli" && ev.Tool != "mcp" {
+	if ev.Tool != "cli" && ev.Tool != "mcp" && ev.Tool != "http" {
 		return
 	}
 
@@ -882,6 +882,9 @@ func validateKnownInputShape(ev schema.TraceEventV1, strict bool, res *Result, p
 			addWarn(res, "ZCL_W_CONTRACT", "cli exec input should include non-empty argv", path)
 		}
 	case "mcp":
+		if ev.Op == "spawn" || ev.Op == "stderr" || ev.Op == "timeout" {
+			return
+		}
 		method, ok := m["method"].(string)
 		if !ok || strings.TrimSpace(method) == "" {
 			if strict {
@@ -889,6 +892,23 @@ func validateKnownInputShape(ev schema.TraceEventV1, strict bool, res *Result, p
 				return
 			}
 			addWarn(res, "ZCL_W_CONTRACT", "mcp input should include method", path)
+		}
+	case "http":
+		method, ok := m["method"].(string)
+		if !ok || strings.TrimSpace(method) == "" {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "http input must include method", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "http input should include method", path)
+		}
+		url, ok := m["url"].(string)
+		if !ok || strings.TrimSpace(url) == "" {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "http input must include url", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "http input should include url", path)
 		}
 	}
 }

@@ -102,6 +102,36 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	redServerArgv, argvApplied := redactStrings(serverArgv)
 
+	// Spawn evidence event (for replayability and operator debugging).
+	{
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "spawn",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         true,
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
 	var errCap boundedCapture
 	errCap.max = maxPreviewBytes
 	// Drain stderr to avoid deadlocks; capture a bounded preview for evidence.

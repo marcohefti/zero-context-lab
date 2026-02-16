@@ -84,6 +84,8 @@ func (r Runner) Run(args []string) int {
 		return r.runEnrich(args[1:])
 	case "mcp":
 		return r.runMCP(args[1:])
+	case "http":
+		return r.runHTTP(args[1:])
 	case "run":
 		return r.runRun(args[1:])
 	case "attempt":
@@ -929,6 +931,7 @@ Usage:
   zcl pin --run-id <runId> --on|--off [--json]
   zcl enrich --runner codex --rollout <path> [<attemptDir>]
   zcl mcp proxy -- <server-cmd> [args...]
+  zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]
   zcl run -- <cmd> [args...]
 
 Commands:
@@ -948,6 +951,7 @@ Commands:
   pin              Pin/unpin a run so gc will keep it.
   enrich           Optional runner enrichment (does not affect scoring).
   mcp proxy        MCP stdio proxy funnel (records initialize/tools/list/tools/call).
+  http proxy       HTTP reverse proxy funnel (records method/url/status/latency/bytes).
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
 `)

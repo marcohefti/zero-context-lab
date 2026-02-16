@@ -42,6 +42,9 @@ func InitProject(configPath string, outRoot string) (*InitResult, error) {
 	if err := os.MkdirAll(filepath.Join(outRoot, "runs"), 0o755); err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(filepath.Join(outRoot, "tmp"), 0o755); err != nil {
+		return nil, err
+	}
 
 	created := false
 	if _, err := os.Stat(configPath); err == nil {

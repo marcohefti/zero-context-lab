@@ -198,6 +198,17 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	if opts.TimeoutMs > 0 {
 		attemptMeta.TimeoutMs = opts.TimeoutMs
 	}
+
+	// Scratch dir under outRoot/tmp (project-local).
+	scratchRel := filepath.Join("tmp", runID, attemptID)
+	scratchAbs, err := filepath.Abs(filepath.Join(outRoot, scratchRel))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(scratchAbs, 0o755); err != nil {
+		return nil, err
+	}
+	attemptMeta.ScratchDir = scratchRel
 	if err := store.WriteJSONAtomic(filepath.Join(outDir, "attempt.json"), attemptMeta); err != nil {
 		return nil, err
 	}
@@ -208,6 +219,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		"ZCL_MISSION_ID": opts.MissionID,
 		"ZCL_ATTEMPT_ID": attemptID,
 		"ZCL_OUT_DIR":    outDirAbs,
+		"ZCL_TMP_DIR":    scratchAbs,
 	}
 	if opts.AgentID != "" {
 		env["ZCL_AGENT_ID"] = opts.AgentID

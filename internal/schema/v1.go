@@ -31,6 +31,9 @@ type AttemptJSONV1 struct {
 	Mode          string `json:"mode"`      // discovery|ci
 	StartedAt     string `json:"startedAt"` // RFC3339 UTC (use consistent precision)
 	TimeoutMs     int64  `json:"timeoutMs,omitempty"`
+	// ScratchDir is a per-attempt scratch directory under <outRoot>/tmp.
+	// It is optional but recommended for tools that need temporary files.
+	ScratchDir string `json:"scratchDir,omitempty"`
 }
 
 // FeedbackJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/feedback.json

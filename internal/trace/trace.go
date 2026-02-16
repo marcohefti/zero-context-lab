@@ -21,6 +21,7 @@ type Env struct {
 	AttemptID string
 	AgentID   string
 	OutDirAbs string
+	TmpDirAbs string
 }
 
 func EnvFromProcess() (Env, error) {
@@ -31,6 +32,7 @@ func EnvFromProcess() (Env, error) {
 		AttemptID: os.Getenv("ZCL_ATTEMPT_ID"),
 		AgentID:   os.Getenv("ZCL_AGENT_ID"),
 		OutDirAbs: os.Getenv("ZCL_OUT_DIR"),
+		TmpDirAbs: os.Getenv("ZCL_TMP_DIR"),
 	}
 	if e.OutDirAbs == "" {
 		return Env{}, fmt.Errorf("missing ZCL_OUT_DIR")

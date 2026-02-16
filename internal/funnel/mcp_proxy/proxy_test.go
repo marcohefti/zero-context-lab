@@ -50,11 +50,11 @@ func TestProxy_TracesInitializeToolsListToolsCall(t *testing.T) {
 
 	// Validate trace events.
 	events := readAllTraceEvents(t, filepath.Join(outDir, "tool.calls.jsonl"))
-	if len(events) != 3 {
-		t.Fatalf("expected 3 trace events, got %d", len(events))
+	if len(events) != 4 {
+		t.Fatalf("expected 4 trace events, got %d", len(events))
 	}
-	if events[0].Op != "initialize" || events[1].Op != "tools/list" || events[2].Op != "tools/call" {
-		t.Fatalf("unexpected ops: %+v", []string{events[0].Op, events[1].Op, events[2].Op})
+	if events[0].Op != "spawn" || events[1].Op != "initialize" || events[2].Op != "tools/list" || events[3].Op != "tools/call" {
+		t.Fatalf("unexpected ops: %+v", []string{events[0].Op, events[1].Op, events[2].Op, events[3].Op})
 	}
 	for _, ev := range events {
 		if ev.Tool != "mcp" {
@@ -96,10 +96,10 @@ func TestProxy_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
 	}
 
 	events := readAllTraceEvents(t, filepath.Join(outDir, "tool.calls.jsonl"))
-	if len(events) != 2 {
-		t.Fatalf("expected 2 trace events, got %d", len(events))
+	if len(events) != 3 {
+		t.Fatalf("expected 3 trace events, got %d", len(events))
 	}
-	ev := events[1]
+	ev := events[2]
 	if strings.Contains(string(ev.Input), openAIKey) || strings.Contains(ev.IO.OutPreview, openAIKey) {
 		t.Fatalf("expected redaction in trace, got input=%q out=%q", string(ev.Input), ev.IO.OutPreview)
 	}

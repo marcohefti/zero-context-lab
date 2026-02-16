@@ -23,6 +23,7 @@ func TestWrite_ResultStringRedactsAndBounds(t *testing.T) {
 		OutDirAbs: outDir,
 	}
 	writeAttemptJSON(t, outDir, env, "discovery")
+	writeDummyTrace(t, outDir, env)
 
 	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
 	if err := Write(now, env, WriteOpts{
@@ -66,6 +67,7 @@ func TestWrite_ResultJSONCanonicalizes(t *testing.T) {
 		OutDirAbs: outDir,
 	}
 	writeAttemptJSON(t, outDir, env, "discovery")
+	writeDummyTrace(t, outDir, env)
 
 	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
 	if err := Write(now, env, WriteOpts{
@@ -115,5 +117,14 @@ func writeAttemptJSON(t *testing.T, outDir string, env trace.Env, mode string) {
 	}
 	if err := os.WriteFile(filepath.Join(outDir, "attempt.json"), b, 0o644); err != nil {
 		t.Fatalf("write attempt.json: %v", err)
+	}
+}
+
+func writeDummyTrace(t *testing.T, outDir string, env trace.Env) {
+	t.Helper()
+	// Minimal valid trace line so feedback can't be written without evidence.
+	line := `{"v":1,"ts":"2026-02-15T18:00:01Z","runId":"` + env.RunID + `","suiteId":"` + env.SuiteID + `","missionId":"` + env.MissionID + `","attemptId":"` + env.AttemptID + `","tool":"cli","op":"exec","input":{"argv":["echo","x"]},"result":{"ok":true,"durationMs":1},"io":{"outBytes":0,"errBytes":0}}` + "\n"
+	if err := os.WriteFile(filepath.Join(outDir, "tool.calls.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatalf("write tool.calls.jsonl: %v", err)
 	}
 }
