@@ -50,6 +50,7 @@ Core commands:
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--agent-id <runnerAgentId>] [--mode discovery|ci] [--json]`: allocates an attempt dir + canonical IDs and prints env/pointers for the spawned agent.
 - `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`: convenience command that writes `attempt.report.json`, then runs `zcl validate` and `zcl expect`.
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`: allocates attempt dirs for every mission in a suite file and prints env/pointers per mission (for orchestrators).
+- `zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]`: orchestration command that plans attempts, spawns an external runner per mission, then finishes (report/validate/expect) per attempt.
 - `zcl run -- <cmd> [args...]`: CLI funnel wrapper; appends one trace event per invocation.
 - `zcl feedback --ok|--fail --result <string|json>`: writes `feedback.json` (authoritative outcome).
 - `zcl report [--strict] <attemptDir|runDir>`: computes `attempt.report.json` from `tool.calls.jsonl` + `feedback.json`.
@@ -69,6 +70,10 @@ Optional (later) commands:
 Output rules:
 - Any command intended for automation/agents must support a stable `--json` output mode.
 - Avoid log spam; default stderr should be concise and typed (code + message).
+
+Stdout/stderr contract (operator UX + automation):
+- When `--json` is present, **stdout is reserved for machine-readable JSON only**.
+- Human progress logs, runner passthrough, and diagnostics should go to **stderr** so operators can watch work without breaking parsers.
 
 ## `zcl attempt start --json` Output Contract (v1)
 
@@ -93,6 +98,7 @@ Top-level keys (exact):
 - `ZCL_MISSION_ID`
 - `ZCL_ATTEMPT_ID`
 - `ZCL_OUT_DIR`
+- `ZCL_TMP_DIR` (recommended scratch directory under `<outRoot>/tmp/<runId>/<attemptId>/`)
 - `ZCL_AGENT_ID` (only when `--agent-id` is provided)
 
 Example:
@@ -227,12 +233,30 @@ Suggested package split (compile-time, not a plugin runtime):
 - `internal/ids`: run/attempt/mission id generation, stable formatting.
 - `internal/store`: artifact directory layout, atomic writes, file locking, retention metadata.
 - `internal/trace`: JSONL append writer + bounding + redaction hooks.
-- `internal/funnel`: interfaces + implementations (`cli`, `mcp`, later `http`).
+- `internal/funnel`: interfaces + implementations (`cli`, `mcp`, `http`).
+- `internal/attempt`: attempt lifecycle (allocate attempt dirs, write attempt.json, effective strict mode).
+- `internal/planner`: suite planning (plan a suite file into per-mission attempts + env).
+- `internal/suite`: suite parsing + expectations (runner-agnostic).
 - `internal/report`: metrics computation and report emission (`attempt.report.json`).
-- `internal/runner`: optional adapters (`codex` first), normalized runner metrics schema.
+- `internal/enrich`: optional runner enrichment (`codex` first), normalized runner metrics schema.
 - `internal/redact`: redaction rules (allowlists, regexes, hashing).
 
 Keep each package small and agent-legible (files not huge; no "framework").
+
+## Design Notes (Codex-Style Docs, Lightweight)
+Codex does not rely on a single monolithic `ARCHITECTURE.md` for complex subsystems. Instead, it writes small, focused design notes that are easy to review and hard to misinterpret.
+
+Template that works well (steal this):
+- **Problem** (what breaks / what users feel)
+- **Design goals** (measurable)
+- **Non-goals** (explicit constraints)
+- **Where the logic lives** (file pointers)
+- **Runtime flow** (step-by-step)
+- **Invariants / guardrails** (what must always be true)
+- **Observability** (what we log/emit so failures are explainable)
+- **Testing expectations** (what tests pin the behavior)
+
+For ZCL, the places that benefit most from this style are: trace append safety + locks, bounds/redaction, attempt deadlines, and suite orchestration (`suite run`).
 
 ## Funnels (Adapters)
 ZCL should implement funnels at protocol boundaries.
