@@ -845,6 +845,13 @@ func (r Runner) runMCPProxy(args []string) int {
 		printMCPProxyHelp(r.Stderr)
 		return r.failUsage("mcp proxy: missing ZCL attempt context (need ZCL_* env)")
 	}
+	if a, err := attempt.ReadAttempt(env.OutDirAbs); err != nil {
+		printMCPProxyHelp(r.Stderr)
+		return r.failUsage("mcp proxy: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
+	} else if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
+		printMCPProxyHelp(r.Stderr)
+		return r.failUsage("mcp proxy: attempt.json ids do not match ZCL_* env (refuse to run)")
+	}
 
 	argv := fs.Args()
 	if len(argv) >= 1 && argv[0] == "--" {

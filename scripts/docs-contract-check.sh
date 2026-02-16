@@ -4,14 +4,11 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-contract_json="$(go run ./cmd/zcl contract --json)"
-
 python3 -c "$(cat <<'PY'
 import json
-import sys
 from pathlib import Path
 
-contract = json.load(sys.stdin)
+contract = json.loads(Path("test/fixtures/contract/contract.snapshot.json").read_text(encoding="utf-8", errors="replace"))
 
 docs = [
     Path("AGENTS.md"),
@@ -57,4 +54,4 @@ if failures:
 
 print("docs-contract-check: PASS")
 PY
-)" <<<"$contract_json"
+)"

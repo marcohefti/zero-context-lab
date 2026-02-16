@@ -15,4 +15,8 @@ const (
 	// CaptureMaxBytesV1 is the default cap for `zcl run --capture`.
 	// Large outputs should go to dedicated artifacts, but still bounded by default.
 	CaptureMaxBytesV1 = 4 * 1024 * 1024
+
+	// Redaction metadata bounds (avoid unbounded arrays in traces/captures).
+	RedactionsAppliedMaxCountV1 = 64
+	RedactionNameMaxBytesV1     = 64
 )

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,13 @@ func (r Runner) runRun(args []string) int {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: missing ZCL attempt context (run `zcl attempt start --json` and pass the returned env)")
 	}
+	if a, err := attempt.ReadAttempt(env.OutDirAbs); err != nil {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
+	} else if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: attempt.json ids do not match ZCL_* env (refuse to run)")
+	}
 
 	argv := fs.Args()
 	if len(argv) >= 1 && argv[0] == "--" {
@@ -73,12 +81,13 @@ func (r Runner) runRun(args []string) int {
 	}
 
 	var (
-		outFull io.Writer
-		errFull io.Writer
-		outRel  string
-		errRel  string
-		outBuf  *boundedBuffer
-		errBuf  *boundedBuffer
+		outFull                  io.Writer
+		errFull                  io.Writer
+		outRel                   string
+		errRel                   string
+		outBuf                   *boundedBuffer
+		errBuf                   *boundedBuffer
+		captureRedactionsApplied []string
 	)
 	if *capture {
 		if *captureMaxBytes <= 0 {
@@ -132,16 +141,17 @@ func (r Runner) runRun(args []string) int {
 		traceRes.CapturedStdoutPath = outRel
 		traceRes.CapturedStderrPath = errRel
 
-		writeCap := func(rel string, buf *boundedBuffer) (written int64, shaHex string, truncated bool, ok bool) {
+		writeCap := func(rel string, buf *boundedBuffer) (written int64, shaHex string, truncated bool, applied []string, ok bool) {
 			if buf == nil {
-				return 0, "", false, true
+				return 0, "", false, nil, true
 			}
 			b := buf.Bytes()
 			trunc := buf.Truncated()
 
 			if !*captureRaw {
-				red, _ := redact.Text(string(b))
+				red, a := redact.Text(string(b))
 				b = []byte(red)
+				applied = a.Names
 			}
 			if *captureMaxBytes > 0 && int64(len(b)) > *captureMaxBytes {
 				b = b[:*captureMaxBytes]
@@ -154,27 +164,46 @@ func (r Runner) runRun(args []string) int {
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err != nil {
 				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-				return 0, "", false, false
+				return 0, "", false, nil, false
 			}
 			if _, err := f.Write(b); err != nil {
 				_ = f.Close()
 				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-				return 0, "", false, false
+				return 0, "", false, nil, false
 			}
 			_ = f.Sync()
 			_ = f.Close()
-			return int64(len(b)), sha, trunc, true
+			return int64(len(b)), sha, trunc, applied, true
 		}
 
-		var ok bool
-		traceRes.CapturedStdoutBytes, traceRes.CapturedStdoutSHA256, traceRes.CapturedStdoutTruncated, ok = writeCap(outRel, outBuf)
+		var (
+			ok         bool
+			outApplied []string
+			errApplied []string
+			capApplied []string
+		)
+		traceRes.CapturedStdoutBytes, traceRes.CapturedStdoutSHA256, traceRes.CapturedStdoutTruncated, outApplied, ok = writeCap(outRel, outBuf)
 		if !ok {
 			return 1
 		}
-		traceRes.CapturedStderrBytes, traceRes.CapturedStderrSHA256, traceRes.CapturedStderrTruncated, ok = writeCap(errRel, errBuf)
+		traceRes.CapturedStderrBytes, traceRes.CapturedStderrSHA256, traceRes.CapturedStderrTruncated, errApplied, ok = writeCap(errRel, errBuf)
 		if !ok {
 			return 1
 		}
+
+		seen := map[string]bool{}
+		for _, s := range append(append([]string(nil), outApplied...), errApplied...) {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			capApplied = append(capApplied, s)
+		}
+		// Keep deterministic ordering for diffability.
+		sort.Strings(capApplied)
+
+		// Stash for captures.jsonl event below.
+		captureRedactionsApplied = capApplied
 	}
 	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		traceRes.SpawnError = "ZCL_E_TIMEOUT"
@@ -193,26 +222,29 @@ func (r Runner) runRun(args []string) int {
 			red, _ := redact.Text(s)
 			redArgv = append(redArgv, red)
 		}
+		capApplied := captureRedactionsApplied
 		ev := schema.CaptureEventV1{
-			V:               1,
-			TS:              now.UTC().Format(time.RFC3339Nano),
-			RunID:           env.RunID,
-			SuiteID:         env.SuiteID,
-			MissionID:       env.MissionID,
-			AttemptID:       env.AttemptID,
-			AgentID:         env.AgentID,
-			Tool:            "cli",
-			Op:              "exec",
-			Input:           boundedArgvInputJSON(redArgv),
-			StdoutPath:      outRel,
-			StderrPath:      errRel,
-			StdoutBytes:     traceRes.CapturedStdoutBytes,
-			StderrBytes:     traceRes.CapturedStderrBytes,
-			StdoutSHA256:    traceRes.CapturedStdoutSHA256,
-			StderrSHA256:    traceRes.CapturedStderrSHA256,
-			StdoutTruncated: traceRes.CapturedStdoutTruncated,
-			StderrTruncated: traceRes.CapturedStderrTruncated,
-			MaxBytes:        *captureMaxBytes,
+			V:                 1,
+			TS:                now.UTC().Format(time.RFC3339Nano),
+			RunID:             env.RunID,
+			SuiteID:           env.SuiteID,
+			MissionID:         env.MissionID,
+			AttemptID:         env.AttemptID,
+			AgentID:           env.AgentID,
+			Tool:              "cli",
+			Op:                "exec",
+			Input:             boundedArgvInputJSON(redArgv),
+			StdoutPath:        outRel,
+			StderrPath:        errRel,
+			StdoutBytes:       traceRes.CapturedStdoutBytes,
+			StderrBytes:       traceRes.CapturedStderrBytes,
+			StdoutSHA256:      traceRes.CapturedStdoutSHA256,
+			StderrSHA256:      traceRes.CapturedStderrSHA256,
+			StdoutTruncated:   traceRes.CapturedStdoutTruncated,
+			StderrTruncated:   traceRes.CapturedStderrTruncated,
+			Redacted:          !*captureRaw,
+			RedactionsApplied: capApplied,
+			MaxBytes:          *captureMaxBytes,
 		}
 		if err := store.AppendJSONL(filepath.Join(env.OutDirAbs, "captures.jsonl"), ev); err != nil {
 			fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append captures.jsonl: %s\n", err.Error())

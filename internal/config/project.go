@@ -18,8 +18,9 @@ const (
 // ProjectConfigV1 is the minimal per-repo config created by `zcl init`.
 // It is intentionally tiny; richer config merge logic comes later.
 type ProjectConfigV1 struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	OutRoot       string `json:"outRoot"`
+	SchemaVersion int                `json:"schemaVersion"`
+	OutRoot       string             `json:"outRoot"`
+	Redaction     *RedactionConfigV1 `json:"redaction,omitempty"`
 }
 
 type InitResult struct {

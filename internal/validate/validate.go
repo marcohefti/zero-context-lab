@@ -427,6 +427,16 @@ func validateTrace(path string, attemptDir string, attempt schema.AttemptJSONV1,
 		} else if len(ev.Enrichment) > 0 && ev.Tool == "cli" {
 			validateCLICaptureEnrichment(ev, attemptDir, strict, res, path)
 		}
+		if len(ev.RedactionsApplied) > schema.RedactionsAppliedMaxCountV1 {
+			addErr(res, "ZCL_E_BOUNDS", "trace redactionsApplied exceeds bounds", path)
+			return
+		}
+		for _, n := range ev.RedactionsApplied {
+			if len([]byte(n)) > schema.RedactionNameMaxBytesV1 {
+				addErr(res, "ZCL_E_BOUNDS", "trace redaction name exceeds bounds", path)
+				return
+			}
+		}
 	}
 	if err := sc.Err(); err != nil {
 		addErr(res, "ZCL_E_IO", err.Error(), path)
@@ -692,6 +702,16 @@ func validateCaptures(path string, attemptDir string, attempt schema.AttemptJSON
 		if ev.MaxBytes <= 0 {
 			addErr(res, "ZCL_E_CONTRACT", "capture maxBytes must be > 0", path)
 			return
+		}
+		if len(ev.RedactionsApplied) > schema.RedactionsAppliedMaxCountV1 {
+			addErr(res, "ZCL_E_BOUNDS", "capture redactionsApplied exceeds bounds", path)
+			return
+		}
+		for _, n := range ev.RedactionsApplied {
+			if len([]byte(n)) > schema.RedactionNameMaxBytesV1 {
+				addErr(res, "ZCL_E_BOUNDS", "capture redaction name exceeds bounds", path)
+				return
+			}
 		}
 		if len(ev.Input) > 0 {
 			if len(ev.Input) > schema.ToolInputMaxBytesV1 {

@@ -24,8 +24,9 @@ func DefaultGlobalConfigPath() (string, error) {
 }
 
 type GlobalConfigV1 struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	OutRoot       string `json:"outRoot"`
+	SchemaVersion int                `json:"schemaVersion"`
+	OutRoot       string             `json:"outRoot,omitempty"`
+	Redaction     *RedactionConfigV1 `json:"redaction,omitempty"`
 }
 
 func LoadMerged(flagOutRoot string) (Merged, error) {
@@ -52,7 +53,7 @@ func LoadMerged(flagOutRoot string) (Merged, error) {
 	}
 	if g, ok, err := loadGlobal(globalPath); err != nil {
 		return Merged{}, err
-	} else if ok {
+	} else if ok && strings.TrimSpace(g.OutRoot) != "" {
 		return Merged{OutRoot: g.OutRoot, Source: globalPath}, nil
 	}
 	return Merged{OutRoot: ".zcl", Source: "default"}, nil
@@ -93,9 +94,6 @@ func loadGlobal(path string) (GlobalConfigV1, bool, error) {
 	}
 	if cfg.SchemaVersion != 1 {
 		return GlobalConfigV1{}, false, fmt.Errorf("global config unsupported schemaVersion=%d", cfg.SchemaVersion)
-	}
-	if strings.TrimSpace(cfg.OutRoot) == "" {
-		return GlobalConfigV1{}, false, fmt.Errorf("global config outRoot is empty")
 	}
 	return cfg, true, nil
 }

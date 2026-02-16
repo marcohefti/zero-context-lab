@@ -30,5 +30,11 @@ type CaptureEventV1 struct {
 	StdoutTruncated bool `json:"stdoutTruncated,omitempty"`
 	StderrTruncated bool `json:"stderrTruncated,omitempty"`
 
+	// Redacted indicates whether captured files were redacted before writing.
+	// When false, captures may contain secrets and should be treated as unsafe evidence.
+	Redacted bool `json:"redacted,omitempty"`
+	// RedactionsApplied is informational only; it lists rule IDs that were applied.
+	RedactionsApplied []string `json:"redactionsApplied,omitempty"`
+
 	MaxBytes int64 `json:"maxBytes"`
 }

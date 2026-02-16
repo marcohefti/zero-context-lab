@@ -1,6 +1,12 @@
 package redact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+	"sync"
+
+	"github.com/marcohefti/zero-context-lab/internal/config"
+)
 
 type Applied struct {
 	Names []string
@@ -19,7 +25,46 @@ var (
 	rePrivateKeyBlock    = regexp.MustCompile(`(?s)-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----`)
 )
 
+type compiledExtraRule struct {
+	id          string
+	re          *regexp.Regexp
+	replacement string
+}
+
+var (
+	loadOnce   sync.Once
+	extraRules []compiledExtraRule
+)
+
+func loadExtraRulesOnce() {
+	loadOnce.Do(func() {
+		rules, err := config.LoadRedactionMerged()
+		if err != nil || len(rules) == 0 {
+			return
+		}
+		out := make([]compiledExtraRule, 0, len(rules))
+		for _, r := range rules {
+			re, err := regexp.Compile(strings.TrimSpace(r.Regex))
+			if err != nil {
+				continue
+			}
+			repl := strings.TrimSpace(r.Replacement)
+			if repl == "" {
+				repl = "[REDACTED:" + strings.ToUpper(r.ID) + "]"
+			}
+			out = append(out, compiledExtraRule{
+				id:          strings.TrimSpace(r.ID),
+				re:          re,
+				replacement: repl,
+			})
+		}
+		extraRules = out
+	})
+}
+
 func Text(s string) (string, Applied) {
+	loadExtraRulesOnce()
+
 	applied := Applied{}
 	out := s
 
@@ -58,6 +103,13 @@ func Text(s string) (string, Applied) {
 	if rePrivateKeyBlock.MatchString(out) {
 		out = rePrivateKeyBlock.ReplaceAllString(out, "[REDACTED:PRIVATE_KEY]")
 		applied.Names = append(applied.Names, "private_key")
+	}
+
+	for _, r := range extraRules {
+		if r.re.MatchString(out) {
+			out = r.re.ReplaceAllString(out, r.replacement)
+			applied.Names = append(applied.Names, r.id)
+		}
 	}
 
 	return out, applied

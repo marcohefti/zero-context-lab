@@ -244,6 +244,24 @@ func setAttemptEnv(t *testing.T, outDir string) {
 	t.Setenv("ZCL_SUITE_ID", "heftiweb-smoke")
 	t.Setenv("ZCL_MISSION_ID", "latest-blog-title")
 	t.Setenv("ZCL_ATTEMPT_ID", "001-latest-blog-title-r1")
+
+	// New invariant: funnels must have real attempt.json in ZCL_OUT_DIR.
+	meta := schema.AttemptJSONV1{
+		SchemaVersion: schema.AttemptSchemaV1,
+		RunID:         os.Getenv("ZCL_RUN_ID"),
+		SuiteID:       os.Getenv("ZCL_SUITE_ID"),
+		MissionID:     os.Getenv("ZCL_MISSION_ID"),
+		AttemptID:     os.Getenv("ZCL_ATTEMPT_ID"),
+		Mode:          "discovery",
+		StartedAt:     "2026-02-15T18:00:00Z",
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal attempt.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "attempt.json"), b, 0o644); err != nil {
+		t.Fatalf("write attempt.json: %v", err)
+	}
 }
 
 func readSingleTraceEvent(t *testing.T, path string) schema.TraceEventV1 {

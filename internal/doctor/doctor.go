@@ -56,6 +56,14 @@ func Run(outRootFlag string) (Result, error) {
 		res.Checks = append(res.Checks, Check{ID: "project_config", OK: true, Message: "missing (ok)"})
 	}
 
+	// Redaction config parse/compile (best-effort): if present, it must be valid.
+	if _, err := config.LoadRedactionMerged(); err != nil {
+		res.OK = false
+		res.Checks = append(res.Checks, Check{ID: "redaction_config", OK: false, Message: err.Error()})
+	} else {
+		res.Checks = append(res.Checks, Check{ID: "redaction_config", OK: true})
+	}
+
 	// Optional runner availability: codex binary.
 	if _, err := exec.LookPath("codex"); err == nil {
 		res.Checks = append(res.Checks, Check{ID: "runner_codex", OK: true})
