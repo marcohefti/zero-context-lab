@@ -128,7 +128,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	}
 
 	return schema.AttemptReportJSONV1{
-		SchemaVersion:  schema.ArtifactSchemaV1,
+		SchemaVersion:  schema.AttemptReportSchemaV1,
 		RunID:          attempt.RunID,
 		SuiteID:        attempt.SuiteID,
 		MissionID:      attempt.MissionID,

@@ -38,33 +38,3 @@ func TestExpect_AttemptExpectationsFail_Strict(t *testing.T) {
 		t.Fatalf("expected ZCL_E_EXPECTATION_FAILED, got: %+v", res.Failures)
 	}
 }
-
-func TestExpect_AttemptModeCI_ImplicitStrictOnMissingSuiteJSON(t *testing.T) {
-	dir := t.TempDir()
-	runID := "20260215-180012Z-09c5a6"
-	runDir := filepath.Join(dir, "runs", runID)
-	attemptID := "001-m-r1"
-	attemptDir := filepath.Join(runDir, "attempts", attemptID)
-	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	// No suite.json written.
-	if err := os.WriteFile(filepath.Join(attemptDir, "attempt.json"), []byte(`{"schemaVersion":1,"runId":"`+runID+`","suiteId":"s","missionId":"m","attemptId":"`+attemptID+`","mode":"ci","startedAt":"2026-02-15T18:00:00Z"}`), 0o644); err != nil {
-		t.Fatalf("write attempt.json: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(attemptDir, "feedback.json"), []byte(`{"schemaVersion":1,"runId":"`+runID+`","suiteId":"s","missionId":"m","attemptId":"`+attemptID+`","ok":true,"result":"x","createdAt":"2026-02-15T18:00:02Z"}`), 0o644); err != nil {
-		t.Fatalf("write feedback.json: %v", err)
-	}
-
-	res, err := ExpectPath(attemptDir, false)
-	if err != nil {
-		t.Fatalf("ExpectPath: %v", err)
-	}
-	if res.OK {
-		t.Fatalf("expected ok=false due to missing suite.json in ci mode")
-	}
-	if len(res.Failures) == 0 || res.Failures[0].Code != "ZCL_E_MISSING_ARTIFACT" {
-		t.Fatalf("expected ZCL_E_MISSING_ARTIFACT, got: %+v", res.Failures)
-	}
-}

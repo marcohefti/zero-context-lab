@@ -67,7 +67,7 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 	}
 
 	payload := schema.FeedbackJSONV1{
-		SchemaVersion:     schema.ArtifactSchemaV1,
+		SchemaVersion:     schema.FeedbackSchemaV1,
 		RunID:             env.RunID,
 		SuiteID:           env.SuiteID,
 		MissionID:         env.MissionID,

@@ -149,7 +149,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		}
 	} else if os.IsNotExist(err) {
 		runMeta := schema.RunJSONV1{
-			SchemaVersion: schema.ArtifactSchemaV1,
+			SchemaVersion: schema.RunSchemaV1,
 			RunID:         runID,
 			SuiteID:       opts.SuiteID,
 			CreatedAt:     now.UTC().Format(time.RFC3339Nano),
@@ -182,7 +182,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	}
 
 	attemptMeta := schema.AttemptJSONV1{
-		SchemaVersion: schema.ArtifactSchemaV1,
+		SchemaVersion: schema.AttemptSchemaV1,
 		RunID:         runID,
 		SuiteID:       opts.SuiteID,
 		MissionID:     opts.MissionID,

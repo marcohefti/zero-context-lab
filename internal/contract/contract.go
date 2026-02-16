@@ -105,6 +105,14 @@ func Build(version string) Contract {
 				RequiredFields: []string{},
 			},
 			{
+				ID:             "captures.jsonl",
+				Kind:           "jsonl",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/captures.jsonl",
+				RequiredFields: []string{},
+			},
+			{
 				ID:             "attempt.report.json",
 				Kind:           "json",
 				SchemaVersions: []int{1},
@@ -139,6 +147,11 @@ func Build(version string) Contract {
 				Stream:         "notes.jsonl",
 				SchemaVersions: []int{1},
 				RequiredFields: []string{"v", "ts", "runId", "missionId", "attemptId", "kind"},
+			},
+			{
+				Stream:         "captures.jsonl",
+				SchemaVersions: []int{1},
+				RequiredFields: []string{"v", "ts", "runId", "missionId", "attemptId", "tool", "op", "maxBytes"},
 			},
 		},
 		Commands: []Command{
@@ -194,7 +207,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "run",
-				Usage:   "zcl run [--capture] -- <cmd> [args...]",
+				Usage:   "zcl run [--capture --capture-max-bytes N] -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope).",
 			},
 			{
@@ -206,6 +219,11 @@ func Build(version string) Contract {
 				ID:      "attempt start",
 				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
 				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
+			},
+			{
+				ID:      "attempt finish",
+				Usage:   "zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]",
+				Summary: "Write attempt.report.json, then run validate + expect (uses ZCL_OUT_DIR when <attemptDir> is omitted).",
 			},
 			{
 				ID:      "suite plan",

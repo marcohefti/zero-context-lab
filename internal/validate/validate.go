@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
@@ -69,9 +71,30 @@ func validateRun(runDir string, strict bool) Result {
 		addErr(&res, "ZCL_E_INVALID_JSON", "run.json is not valid json", runJSONPath)
 		return finalize(res)
 	}
-	if run.SchemaVersion != schema.ArtifactSchemaV1 {
+	if run.SchemaVersion != schema.RunSchemaV1 {
 		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported run.json schemaVersion", runJSONPath)
 		return finalize(res)
+	}
+	if strings.TrimSpace(run.RunID) == "" || !ids.IsValidRunID(run.RunID) {
+		addErr(&res, "ZCL_E_CONTRACT", "runId is missing/invalid", runJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(run.SuiteID) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "suiteId is missing", runJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(run.CreatedAt) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "createdAt is missing", runJSONPath)
+		return finalize(res)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, run.CreatedAt); err != nil {
+		if _, err2 := time.Parse(time.RFC3339, run.CreatedAt); err2 != nil {
+			if strict {
+				addErr(&res, "ZCL_E_CONTRACT", "createdAt is not RFC3339", runJSONPath)
+				return finalize(res)
+			}
+			addWarn(&res, "ZCL_W_CONTRACT", "createdAt is not RFC3339", runJSONPath)
+		}
 	}
 	if base := filepath.Base(runDir); run.RunID != base {
 		addErr(&res, "ZCL_E_ID_MISMATCH", "runId does not match directory name", runJSONPath)
@@ -127,9 +150,52 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		addErr(&res, "ZCL_E_INVALID_JSON", "attempt.json is not valid json", attemptJSONPath)
 		return finalize(res)
 	}
-	if attempt.SchemaVersion != schema.ArtifactSchemaV1 {
+	if attempt.SchemaVersion != schema.AttemptSchemaV1 {
 		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported attempt.json schemaVersion", attemptJSONPath)
 		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.RunID) == "" || !ids.IsValidRunID(attempt.RunID) {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt runId is missing/invalid", attemptJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.SuiteID) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt suiteId is missing", attemptJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.MissionID) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt missionId is missing", attemptJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.AttemptID) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt attemptId is missing", attemptJSONPath)
+		return finalize(res)
+	}
+	if attempt.Mode != "discovery" && attempt.Mode != "ci" {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt mode is invalid (expected discovery|ci)", attemptJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.StartedAt) == "" {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt startedAt is missing", attemptJSONPath)
+		return finalize(res)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, attempt.StartedAt); err != nil {
+		if _, err2 := time.Parse(time.RFC3339, attempt.StartedAt); err2 != nil {
+			if strict {
+				addErr(&res, "ZCL_E_CONTRACT", "attempt startedAt is not RFC3339", attemptJSONPath)
+				return finalize(res)
+			}
+			addWarn(&res, "ZCL_W_CONTRACT", "attempt startedAt is not RFC3339", attemptJSONPath)
+		}
+	}
+	if strict {
+		if ids.SanitizeComponent(attempt.SuiteID) != attempt.SuiteID {
+			addErr(&res, "ZCL_E_CONTRACT", "attempt suiteId is not canonicalized", attemptJSONPath)
+			return finalize(res)
+		}
+		if ids.SanitizeComponent(attempt.MissionID) != attempt.MissionID {
+			addErr(&res, "ZCL_E_CONTRACT", "attempt missionId is not canonicalized", attemptJSONPath)
+			return finalize(res)
+		}
 	}
 	if base := filepath.Base(attemptDir); attempt.AttemptID != base {
 		addErr(&res, "ZCL_E_ID_MISMATCH", "attemptId does not match directory name", attemptJSONPath)
@@ -204,6 +270,13 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		}
 	}
 
+	capturesPath := filepath.Join(attemptDir, "captures.jsonl")
+	if _, err := os.Stat(capturesPath); err == nil {
+		if requireContained(attemptDir, capturesPath, &res) {
+			validateCaptures(capturesPath, attemptDir, attempt, enforce, &res)
+		}
+	}
+
 	// Optional attempt.report.json integrity (if present).
 	reportPath := filepath.Join(attemptDir, "attempt.report.json")
 	if _, err := os.Stat(reportPath); err == nil {
@@ -220,7 +293,7 @@ func validateAttempt(attemptDir string, strict bool) Result {
 			addErr(&res, "ZCL_E_INVALID_JSON", "attempt.report.json is not valid json", reportPath)
 			return finalize(res)
 		}
-		if rep.SchemaVersion != schema.ArtifactSchemaV1 {
+		if rep.SchemaVersion != schema.AttemptReportSchemaV1 {
 			addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported attempt.report.json schemaVersion", reportPath)
 			return finalize(res)
 		}
@@ -277,6 +350,23 @@ func validateTrace(path string, attemptDir string, attempt schema.AttemptJSONV1,
 		n++
 		if ev.V != schema.TraceSchemaV1 {
 			addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported trace event version", path)
+			return
+		}
+		if strings.TrimSpace(ev.TS) == "" {
+			addErr(res, "ZCL_E_CONTRACT", "trace ts is missing", path)
+			return
+		}
+		if _, err := time.Parse(time.RFC3339Nano, ev.TS); err != nil {
+			if _, err2 := time.Parse(time.RFC3339, ev.TS); err2 != nil {
+				if strict {
+					addErr(res, "ZCL_E_CONTRACT", "trace ts is not RFC3339", path)
+					return
+				}
+				addWarn(res, "ZCL_W_CONTRACT", "trace ts is not RFC3339", path)
+			}
+		}
+		if strings.TrimSpace(ev.Tool) == "" || strings.TrimSpace(ev.Op) == "" {
+			addErr(res, "ZCL_E_CONTRACT", "trace tool/op is missing", path)
 			return
 		}
 		if ev.RunID != attempt.RunID || ev.AttemptID != attempt.AttemptID || ev.MissionID != attempt.MissionID {
@@ -406,9 +496,26 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, re
 		addErr(res, "ZCL_E_INVALID_JSON", "feedback.json is not valid json", path)
 		return
 	}
-	if fb.SchemaVersion != schema.ArtifactSchemaV1 {
+	if fb.SchemaVersion != schema.FeedbackSchemaV1 {
 		addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported feedback.json schemaVersion", path)
 		return
+	}
+	if strings.TrimSpace(fb.RunID) == "" || strings.TrimSpace(fb.SuiteID) == "" || strings.TrimSpace(fb.MissionID) == "" || strings.TrimSpace(fb.AttemptID) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "feedback ids are missing", path)
+		return
+	}
+	if strings.TrimSpace(fb.CreatedAt) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "feedback createdAt is missing", path)
+		return
+	}
+	if _, err := time.Parse(time.RFC3339Nano, fb.CreatedAt); err != nil {
+		if _, err2 := time.Parse(time.RFC3339, fb.CreatedAt); err2 != nil {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "feedback createdAt is not RFC3339", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "feedback createdAt is not RFC3339", path)
+		}
 	}
 	if fb.RunID != attempt.RunID || fb.AttemptID != attempt.AttemptID || fb.MissionID != attempt.MissionID {
 		addErr(res, "ZCL_E_ID_MISMATCH", "feedback ids do not match attempt.json", path)
@@ -501,6 +608,123 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool, res *
 			addErr(res, "ZCL_E_BOUNDS", "note data exceeds bounds", path)
 			return
 		}
+	}
+	if err := sc.Err(); err != nil {
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
+	}
+}
+
+func validateCaptures(path string, attemptDir string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
+	f, err := os.Open(path)
+	if err != nil {
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(bytesTrim(line)) == 0 {
+			if strict {
+				addErr(res, "ZCL_E_INVALID_JSONL", "empty line in captures.jsonl", path)
+				return
+			}
+			continue
+		}
+		var ev schema.CaptureEventV1
+		if err := json.Unmarshal(line, &ev); err != nil {
+			addErr(res, "ZCL_E_INVALID_JSONL", "invalid jsonl line in captures.jsonl", path)
+			return
+		}
+		if ev.V != 1 {
+			addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported capture event version", path)
+			return
+		}
+		if ev.RunID != attempt.RunID || ev.AttemptID != attempt.AttemptID || ev.MissionID != attempt.MissionID {
+			addErr(res, "ZCL_E_ID_MISMATCH", "capture ids do not match attempt.json", path)
+			return
+		}
+		if attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "capture suiteId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "capture suiteId does not match attempt.json", path)
+		}
+		if ev.AgentID != "" && attempt.AgentID != "" && ev.AgentID != attempt.AgentID {
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "capture agentId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "capture agentId does not match attempt.json", path)
+		}
+		if strings.TrimSpace(ev.TS) == "" {
+			addErr(res, "ZCL_E_CONTRACT", "capture ts is missing", path)
+			return
+		}
+		if _, err := time.Parse(time.RFC3339Nano, ev.TS); err != nil {
+			if _, err2 := time.Parse(time.RFC3339, ev.TS); err2 != nil {
+				if strict {
+					addErr(res, "ZCL_E_CONTRACT", "capture ts is not RFC3339", path)
+					return
+				}
+				addWarn(res, "ZCL_W_CONTRACT", "capture ts is not RFC3339", path)
+			}
+		}
+		if strings.TrimSpace(ev.Tool) == "" || strings.TrimSpace(ev.Op) == "" {
+			addErr(res, "ZCL_E_CONTRACT", "capture tool/op is missing", path)
+			return
+		}
+		if ev.MaxBytes <= 0 {
+			addErr(res, "ZCL_E_CONTRACT", "capture maxBytes must be > 0", path)
+			return
+		}
+		if len(ev.Input) > 0 {
+			if len(ev.Input) > schema.ToolInputMaxBytesV1 {
+				addErr(res, "ZCL_E_BOUNDS", "capture input exceeds bounds", path)
+				return
+			}
+			if !json.Valid(ev.Input) {
+				addErr(res, "ZCL_E_CONTRACT", "capture input is not valid json", path)
+				return
+			}
+		}
+
+		checkRel := func(val string) {
+			val = strings.TrimSpace(val)
+			if val == "" {
+				return
+			}
+			if filepath.IsAbs(val) || strings.Contains(val, "..") {
+				addErr(res, "ZCL_E_CONTRACT", "capture path must be a safe relative path", path)
+				return
+			}
+			abs := filepath.Join(attemptDir, val)
+			if !requireContained(attemptDir, abs, res) {
+				return
+			}
+			info, err := os.Stat(abs)
+			if err != nil {
+				if strict && os.IsNotExist(err) {
+					addErr(res, "ZCL_E_MISSING_ARTIFACT", "capture file is missing", abs)
+					return
+				}
+				if os.IsNotExist(err) {
+					addWarn(res, "ZCL_W_MISSING_ARTIFACT", "capture file is missing", abs)
+				}
+				return
+			}
+			if info.Size() > ev.MaxBytes {
+				addErr(res, "ZCL_E_BOUNDS", "capture file exceeds maxBytes", abs)
+				return
+			}
+		}
+
+		checkRel(ev.StdoutPath)
+		checkRel(ev.StderrPath)
 	}
 	if err := sc.Err(); err != nil {
 		addErr(res, "ZCL_E_IO", err.Error(), path)

@@ -102,6 +102,16 @@
       "requiredFields": []
     },
     {
+      "id": "captures.jsonl",
+      "kind": "jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/captures.jsonl",
+      "requiredFields": []
+    },
+    {
       "id": "attempt.report.json",
       "kind": "json",
       "schemaVersions": [
@@ -182,6 +192,22 @@
         "attemptId",
         "kind"
       ]
+    },
+    {
+      "stream": "captures.jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "requiredFields": [
+        "v",
+        "ts",
+        "runId",
+        "missionId",
+        "attemptId",
+        "tool",
+        "op",
+        "maxBytes"
+      ]
     }
   ],
   "commands": [
@@ -237,7 +263,7 @@
     },
     {
       "id": "run",
-      "usage": "zcl run [--capture] -- <cmd> [args...]",
+      "usage": "zcl run [--capture --capture-max-bytes N] -- <cmd> [args...]",
       "summary": "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope)."
     },
     {
@@ -249,6 +275,11 @@
       "id": "attempt start",
       "usage": "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
       "summary": "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent."
+    },
+    {
+      "id": "attempt finish",
+      "usage": "zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]",
+      "summary": "Write attempt.report.json, then run validate + expect (uses ZCL_OUT_DIR when <attemptDir> is omitted)."
     },
     {
       "id": "suite plan",

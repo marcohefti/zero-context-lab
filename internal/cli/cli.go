@@ -19,11 +19,9 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/enrich"
 	"github.com/marcohefti/zero-context-lab/internal/expect"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
-	clifunnel "github.com/marcohefti/zero-context-lab/internal/funnel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/funnel/mcp_proxy"
 	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
-	"github.com/marcohefti/zero-context-lab/internal/pin"
 	"github.com/marcohefti/zero-context-lab/internal/planner"
 	"github.com/marcohefti/zero-context-lab/internal/replay"
 	"github.com/marcohefti/zero-context-lab/internal/report"
@@ -172,6 +170,8 @@ func (r Runner) runAttempt(args []string) int {
 	switch args[0] {
 	case "start":
 		return r.runAttemptStart(args[1:])
+	case "finish":
+		return r.runAttemptFinish(args[1:])
 	default:
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown attempt subcommand %q\n", args[0])
 		printAttemptHelp(r.Stderr)
@@ -525,211 +525,6 @@ func (r Runner) runAttemptStart(args []string) int {
 	return r.writeJSON(out)
 }
 
-func (r Runner) runRun(args []string) int {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	capture := fs.Bool("capture", false, "capture full stdout/stderr to files under the attempt dir (in addition to bounded previews in tool.calls.jsonl)")
-	envelope := fs.Bool("envelope", false, "print a JSON envelope instead of passthrough tool output (requires --json)")
-	jsonOut := fs.Bool("json", false, "print JSON output (required with --envelope)")
-	help := fs.Bool("help", false, "show help")
-	if err := fs.Parse(args); err != nil {
-		return r.failUsage("run: invalid flags")
-	}
-	if *help {
-		printRunHelp(r.Stdout)
-		return 0
-	}
-	if *envelope && !*jsonOut {
-		printRunHelp(r.Stderr)
-		return r.failUsage("run: --envelope requires --json")
-	}
-	if !*envelope && *jsonOut {
-		printRunHelp(r.Stderr)
-		return r.failUsage("run: --json is only supported with --envelope")
-	}
-
-	env, err := trace.EnvFromProcess()
-	if err != nil {
-		printRunHelp(r.Stderr)
-		return r.failUsage("run: missing ZCL attempt context (run `zcl attempt start --json` and pass the returned env)")
-	}
-
-	argv := fs.Args()
-	if len(argv) >= 1 && argv[0] == "--" {
-		argv = argv[1:]
-	}
-	if len(argv) == 0 {
-		printRunHelp(r.Stderr)
-		return r.failUsage("run: missing command (use: zcl run -- <cmd> ...)")
-	}
-
-	now := r.Now()
-	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
-	if cancel != nil {
-		defer cancel()
-	}
-
-	var (
-		outFull io.Writer
-		errFull io.Writer
-		outRel  string
-		errRel  string
-		outF    *os.File
-		errF    *os.File
-	)
-	if *capture {
-		dir := filepath.Join(env.OutDirAbs, "captures", "cli")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		id := fmt.Sprintf("%d", now.UTC().UnixNano())
-		outRel = filepath.Join("captures", "cli", id+".stdout.log")
-		errRel = filepath.Join("captures", "cli", id+".stderr.log")
-
-		outPath := filepath.Join(env.OutDirAbs, outRel)
-		errPath := filepath.Join(env.OutDirAbs, errRel)
-
-		outF, err = os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		errF, err = os.OpenFile(errPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			_ = outF.Close()
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		defer func() {
-			_ = outF.Close()
-			_ = errF.Close()
-		}()
-		outFull = outF
-		errFull = errF
-	}
-
-	var (
-		res    clifunnel.Result
-		runErr error
-	)
-	if timedOut {
-		runErr = context.DeadlineExceeded
-	} else {
-		var toolStdout io.Writer = r.Stdout
-		var toolStderr io.Writer = r.Stderr
-		if *envelope {
-			toolStdout = io.Discard
-			toolStderr = io.Discard
-		}
-		res, runErr = clifunnel.Run(ctx, argv, nil, toolStdout, toolStderr, outFull, errFull, schema.PreviewMaxBytesV1)
-	}
-
-	traceRes := trace.ResultForTrace{
-		ExitCode:           res.ExitCode,
-		DurationMs:         res.DurationMs,
-		OutBytes:           res.OutBytes,
-		ErrBytes:           res.ErrBytes,
-		OutPreview:         res.OutPreview,
-		ErrPreview:         res.ErrPreview,
-		OutTruncated:       res.OutTruncated,
-		ErrTruncated:       res.ErrTruncated,
-		CapturedStdoutPath: outRel,
-		CapturedStderrPath: errRel,
-	}
-	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		traceRes.SpawnError = "ZCL_E_TIMEOUT"
-	} else if runErr != nil {
-		traceRes.SpawnError = "ZCL_E_SPAWN"
-	}
-	if err := trace.AppendCLIRunEvent(r.Now(), env, argv, traceRes); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
-		return 1
-	}
-	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
-		return 1
-	}
-	if runErr != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: run failed: %s\n", runErr.Error())
-		return 1
-	}
-
-	if *envelope {
-		type runEnvelopeJSON struct {
-			OK       bool   `json:"ok"`
-			Code     string `json:"code,omitempty"`
-			ExitCode int    `json:"exitCode"`
-
-			DurationMs int64 `json:"durationMs"`
-			OutBytes   int64 `json:"outBytes"`
-			ErrBytes   int64 `json:"errBytes"`
-
-			OutPreview   string `json:"outPreview,omitempty"`
-			ErrPreview   string `json:"errPreview,omitempty"`
-			OutTruncated bool   `json:"outTruncated,omitempty"`
-			ErrTruncated bool   `json:"errTruncated,omitempty"`
-
-			CapturedStdoutPath string `json:"capturedStdoutPath,omitempty"`
-			CapturedStderrPath string `json:"capturedStderrPath,omitempty"`
-
-			RunID     string `json:"runId"`
-			SuiteID   string `json:"suiteId"`
-			MissionID string `json:"missionId"`
-			AttemptID string `json:"attemptId"`
-		}
-		envOut := runEnvelopeJSON{
-			OK:                 traceRes.SpawnError == "" && res.ExitCode == 0,
-			Code:               traceRes.SpawnError,
-			ExitCode:           res.ExitCode,
-			DurationMs:         res.DurationMs,
-			OutBytes:           res.OutBytes,
-			ErrBytes:           res.ErrBytes,
-			OutPreview:         res.OutPreview,
-			ErrPreview:         res.ErrPreview,
-			OutTruncated:       res.OutTruncated,
-			ErrTruncated:       res.ErrTruncated,
-			CapturedStdoutPath: outRel,
-			CapturedStderrPath: errRel,
-			RunID:              env.RunID,
-			SuiteID:            env.SuiteID,
-			MissionID:          env.MissionID,
-			AttemptID:          env.AttemptID,
-		}
-		if exit := r.writeJSON(envOut); exit != 0 {
-			return exit
-		}
-	}
-
-	// Preserve the wrapped command's exit code for operator parity.
-	if res.ExitCode != 0 {
-		return res.ExitCode
-	}
-	return 0
-}
-
-func attemptCtxForDeadline(now time.Time, attemptDir string) (context.Context, context.CancelFunc, bool) {
-	a, err := attempt.ReadAttempt(attemptDir)
-	if err != nil {
-		return context.Background(), nil, false
-	}
-	if a.TimeoutMs <= 0 || strings.TrimSpace(a.StartedAt) == "" {
-		return context.Background(), nil, false
-	}
-	start, err := time.Parse(time.RFC3339Nano, a.StartedAt)
-	if err != nil {
-		return context.Background(), nil, false
-	}
-	deadline := start.Add(time.Duration(a.TimeoutMs) * time.Millisecond)
-	remaining := deadline.Sub(now)
-	if remaining <= 0 {
-		return context.Background(), nil, true
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), remaining)
-	return ctx, cancel, false
-}
-
 func (r Runner) runReport(args []string) int {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -762,15 +557,7 @@ func (r Runner) runReport(args []string) int {
 		return r.failUsage("report: target must be a directory")
 	}
 
-	// If the attempt was allocated in ci mode, treat report as strict by default.
-	if !*strict {
-		if b, err := os.ReadFile(filepath.Join(target, "attempt.json")); err == nil {
-			var a schema.AttemptJSONV1
-			if err := json.Unmarshal(b, &a); err == nil && a.Mode == "ci" {
-				*strict = true
-			}
-		}
-	}
+	*strict = attempt.EffectiveStrict(target, *strict)
 
 	// If target is a run dir, compute for each attempt under attempts/.
 	if _, err := os.Stat(filepath.Join(target, "run.json")); err == nil {
@@ -840,16 +627,7 @@ func (r Runner) runValidate(args []string) int {
 		return r.failUsage("validate: require exactly one <attemptDir|runDir>")
 	}
 
-	// If the attempt was allocated in ci mode, treat validate as strict by default.
-	if !*strict {
-		target := paths[0]
-		if b, err := os.ReadFile(filepath.Join(target, "attempt.json")); err == nil {
-			var a schema.AttemptJSONV1
-			if err := json.Unmarshal(b, &a); err == nil && a.Mode == "ci" {
-				*strict = true
-			}
-		}
-	}
+	*strict = attempt.EffectiveStrict(paths[0], *strict)
 
 	res, err := validate.ValidatePath(paths[0], *strict)
 	if err != nil {
@@ -934,51 +712,6 @@ func (r Runner) runDoctor(args []string) int {
 		}
 	}
 	return 1
-}
-
-func (r Runner) runPin(args []string) int {
-	fs := flag.NewFlagSet("pin", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	runID := fs.String("run-id", "", "run id to pin/unpin (required)")
-	on := fs.Bool("on", false, "pin the run")
-	off := fs.Bool("off", false, "unpin the run")
-	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
-	jsonOut := fs.Bool("json", false, "print JSON output")
-	help := fs.Bool("help", false, "show help")
-
-	if err := fs.Parse(args); err != nil {
-		return r.failUsage("pin: invalid flags")
-	}
-	if *help {
-		printPinHelp(r.Stdout)
-		return 0
-	}
-	if (*on && *off) || (!*on && !*off) {
-		printPinHelp(r.Stderr)
-		return r.failUsage("pin: require exactly one of --on or --off")
-	}
-
-	m, err := config.LoadMerged(*outRoot)
-	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-		return 1
-	}
-
-	res, err := pin.Set(pin.Opts{OutRoot: m.OutRoot, RunID: *runID, Pinned: *on})
-	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
-		return 2
-	}
-	if *jsonOut {
-		return r.writeJSON(res)
-	}
-	if res.Pinned {
-		fmt.Fprintf(r.Stdout, "pin: OK runId=%s pinned=true\n", res.RunID)
-	} else {
-		fmt.Fprintf(r.Stdout, "pin: OK runId=%s pinned=false\n", res.RunID)
-	}
-	return 0
 }
 
 func (r Runner) runGC(args []string) int {
@@ -1176,6 +909,7 @@ Usage:
   zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
@@ -1194,6 +928,7 @@ Commands:
   init            Initialize the project (.zcl output root + zcl.config.json).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
+  attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
@@ -1225,7 +960,8 @@ func printContractHelp(w io.Writer) {
 
 func printAttemptHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-	  zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl attempt finish [--strict] [--json] [<attemptDir>]
 `)
 }
 
@@ -1260,13 +996,6 @@ Notes:
 func printExpectHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl expect [--strict] --json <attemptDir|runDir>
-`)
-}
-
-func printRunHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
-  zcl run [--capture] -- <cmd> [args...]
-  zcl run --envelope --json [--capture] -- <cmd> [args...]
 `)
 }
 
@@ -1306,12 +1035,6 @@ func printDoctorHelp(w io.Writer) {
 func printGCHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl gc [--out-root .zcl] [--max-age-days 30] [--max-total-bytes 0] [--dry-run] [--json]
-`)
-}
-
-func printPinHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
-  zcl pin --run-id <runId> --on|--off [--out-root .zcl] [--json]
 `)
 }
 

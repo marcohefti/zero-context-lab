@@ -67,7 +67,7 @@ func Set(opts Opts) (Result, error) {
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return Result{}, fmt.Errorf("invalid run.json: %w", err)
 	}
-	if meta.SchemaVersion != schema.ArtifactSchemaV1 {
+	if meta.SchemaVersion != schema.RunSchemaV1 {
 		return Result{}, fmt.Errorf("unsupported run.json schemaVersion=%d", meta.SchemaVersion)
 	}
 	if meta.RunID != runID {

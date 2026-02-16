@@ -189,6 +189,34 @@ Notes:
 - Use `message` for free-form (bounded) notes.
 - Use `data` for structured notes.
 
+## `captures.jsonl` capture index events (v1)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/captures.jsonl`
+
+Each line is one v1 `CaptureEvent` (secondary evidence index for `zcl run --capture` outputs):
+```json
+{
+  "v": 1,
+  "ts": "2026-02-15T18:00:41.123456789Z",
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "missionId": "latest-blog-title",
+  "attemptId": "001-latest-blog-title-r1",
+  "tool": "cli",
+  "op": "exec",
+  "input": {"argv":["echo","hello"]},
+  "stdoutPath": "captures/cli/1771241714107678000.stdout.log",
+  "stderrPath": "captures/cli/1771241714107678000.stderr.log",
+  "stdoutBytes": 6,
+  "stderrBytes": 0,
+  "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "maxBytes": 4194304
+}
+```
+
 ## `attempt.report.json` (v1)
 
 Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json`

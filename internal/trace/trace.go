@@ -100,8 +100,15 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 	if strings.TrimSpace(res.CapturedStdoutPath) != "" || strings.TrimSpace(res.CapturedStderrPath) != "" {
 		en := map[string]any{
 			"capture": map[string]any{
-				"stdoutPath": strings.TrimSpace(res.CapturedStdoutPath),
-				"stderrPath": strings.TrimSpace(res.CapturedStderrPath),
+				"stdoutPath":      strings.TrimSpace(res.CapturedStdoutPath),
+				"stderrPath":      strings.TrimSpace(res.CapturedStderrPath),
+				"stdoutBytes":     res.CapturedStdoutBytes,
+				"stderrBytes":     res.CapturedStderrBytes,
+				"stdoutSha256":    strings.TrimSpace(res.CapturedStdoutSHA256),
+				"stderrSha256":    strings.TrimSpace(res.CapturedStderrSHA256),
+				"stdoutTruncated": res.CapturedStdoutTruncated,
+				"stderrTruncated": res.CapturedStderrTruncated,
+				"maxBytes":        res.CaptureMaxBytes,
 			},
 		}
 		if b, err := store.CanonicalJSON(en); err == nil {
@@ -125,8 +132,15 @@ type ResultForTrace struct {
 	OutTruncated bool
 	ErrTruncated bool
 
-	CapturedStdoutPath string
-	CapturedStderrPath string
+	CapturedStdoutPath      string
+	CapturedStderrPath      string
+	CapturedStdoutBytes     int64
+	CapturedStderrBytes     int64
+	CapturedStdoutSHA256    string
+	CapturedStderrSHA256    string
+	CapturedStdoutTruncated bool
+	CapturedStderrTruncated bool
+	CaptureMaxBytes         int64
 }
 
 func redactStrings(in []string) ([]string, []string) {

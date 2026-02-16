@@ -101,7 +101,7 @@ func writeAttemptJSON(t *testing.T, outDir string, env trace.Env, mode string) {
 	t.Helper()
 	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
 	payload := schema.AttemptJSONV1{
-		SchemaVersion: schema.ArtifactSchemaV1,
+		SchemaVersion: schema.AttemptSchemaV1,
 		RunID:         env.RunID,
 		SuiteID:       env.SuiteID,
 		MissionID:     env.MissionID,

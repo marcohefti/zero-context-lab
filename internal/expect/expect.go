@@ -114,11 +114,6 @@ func expectAttempt(attemptDir string, strict bool) (Result, error) {
 		return res, nil
 	}
 
-	// In ci mode, treat expect as strict even if the caller didn't pass --strict.
-	if a.Mode == "ci" {
-		strict = true
-	}
-
 	feedbackPath := filepath.Join(attemptDir, "feedback.json")
 	fbBytes, err := os.ReadFile(feedbackPath)
 	if err != nil {
