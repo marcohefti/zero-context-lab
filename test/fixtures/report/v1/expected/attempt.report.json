@@ -19,6 +19,15 @@
     "traceNonEmpty": true,
     "feedbackPresent": true
   },
+  "signals": {
+    "repeatMaxStreak": 1,
+    "distinctCommandSignatures": 2,
+    "failureRateBps": 5000,
+    "commandNamesSeen": [
+      "echo",
+      "false"
+    ]
+  },
   "metrics": {
     "toolCallsTotal": 2,
     "failuresTotal": 1,

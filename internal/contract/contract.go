@@ -231,13 +231,18 @@ func Build(version string) Contract {
 				Summary: "Write attempt.report.json, then run validate + expect (uses ZCL_OUT_DIR when <attemptDir> is omitted).",
 			},
 			{
+				ID:      "attempt explain",
+				Usage:   "zcl attempt explain [--strict] [--json] [--tail N] [<attemptDir>]",
+				Summary: "Fast post-mortem view: show ids/outcome, validate/expect status, and a tail of tool.calls.jsonl (uses ZCL_OUT_DIR when <attemptDir> is omitted).",
+			},
+			{
 				ID:      "suite plan",
 				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json",
 				Summary: "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators).",
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--strict] [--strict-expect] --json -- <runner-cmd> [args...]",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
 				Summary: "Run a suite end-to-end: plan attempts, spawn a runner per mission with ZCL_* env, then finish/validate/expect each attempt.",
 			},
 			{

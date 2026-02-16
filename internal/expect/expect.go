@@ -1,9 +1,12 @@
 package expect
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/suite"
@@ -150,7 +153,23 @@ func expectAttempt(attemptDir string, strict bool) (Result, error) {
 		return res, nil
 	}
 
-	er := suite.Evaluate(sf, a.MissionID, fb)
+	m := suite.FindMission(sf, a.MissionID)
+	var tf *suite.TraceFacts
+	if m != nil && m.Expects != nil && m.Expects.Trace != nil {
+		facts, findErr := traceFactsForAttempt(attemptDir, strict)
+		if findErr != nil {
+			// Hard IO error.
+			return Result{}, findErr
+		}
+		if facts == nil {
+			// Strict mode already emitted missing evidence as failures.
+			tf = nil
+		} else {
+			tf = facts
+		}
+	}
+
+	er := suite.Evaluate(sf, a.MissionID, fb, tf)
 	if !er.Evaluated {
 		res.Evaluated = false
 		return res, nil
@@ -165,4 +184,110 @@ func expectAttempt(attemptDir string, strict bool) (Result, error) {
 		res.Failures = append(res.Failures, Finding{Code: "ZCL_E_EXPECTATION_FAILED", Message: f.Code + ": " + f.Message, Path: feedbackPath})
 	}
 	return res, nil
+}
+
+func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, error) {
+	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
+	f, err := os.Open(tracePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if strict {
+				// Surface as a typed failure via expectation failure path.
+				// Callers will end up failing anyway; keep this explicit.
+				return nil, nil
+			}
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	var (
+		sc           = bufio.NewScanner(f)
+		total        int64
+		failures     int64
+		timeouts     int64
+		lastSig      string
+		streak       int64
+		maxStreak    int64
+		distinct     = map[string]bool{}
+		cmdNames     = map[string]bool{}
+		seenNonEmpty bool
+	)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		seenNonEmpty = true
+		var ev schema.TraceEventV1
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return nil, err
+		}
+		total++
+		if !ev.Result.OK {
+			failures++
+			if ev.Result.Code == "ZCL_E_TIMEOUT" {
+				timeouts++
+			}
+		}
+
+		sig := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
+		distinct[sig] = true
+		if sig == lastSig {
+			streak++
+		} else {
+			lastSig = sig
+			streak = 1
+		}
+		if streak > maxStreak {
+			maxStreak = streak
+		}
+
+		if ev.Op == "exec" && len(ev.Input) > 0 {
+			var in struct {
+				Argv []string `json:"argv"`
+			}
+			if err := json.Unmarshal(ev.Input, &in); err == nil {
+				if len(in.Argv) > 0 && in.Argv[0] != "" {
+					cmdNames[in.Argv[0]] = true
+				}
+			}
+		} else if ev.Op == "exec" && ev.Tool != "" && ev.Tool != "cli" && ev.Tool != "http" && ev.Tool != "mcp" {
+			cmdNames[ev.Tool] = true
+		}
+
+		// Defensive: ensure TS is parseable in strict mode.
+		if strict {
+			if _, err := time.Parse(time.RFC3339Nano, ev.TS); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if !seenNonEmpty {
+		if strict {
+			return nil, nil
+		}
+		return nil, nil
+	}
+
+	var cmdList []string
+	for s := range cmdNames {
+		cmdList = append(cmdList, s)
+	}
+	sort.Strings(cmdList)
+
+	return &suite.TraceFacts{
+		ToolCallsTotal:            total,
+		FailuresTotal:             failures,
+		TimeoutsTotal:             timeouts,
+		RepeatMaxStreak:           maxStreak,
+		DistinctCommandSignatures: int64(len(distinct)),
+		CommandNamesSeen:          cmdList,
+	}, nil
 }

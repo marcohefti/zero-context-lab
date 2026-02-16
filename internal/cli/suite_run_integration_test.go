@@ -53,6 +53,7 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 		Failed   int  `json:"failed"`
 		Attempts []struct {
 			MissionID      string `json:"missionId"`
+			AttemptDir     string `json:"attemptDir"`
 			RunnerExitCode *int   `json:"runnerExitCode"`
 			Finish         struct {
 				OK bool `json:"ok"`
@@ -72,6 +73,19 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 		}
 		if !a.Finish.OK || !a.OK {
 			t.Fatalf("expected attempt ok, got: %+v", a)
+		}
+		// Runner IO artifacts should exist for post-mortems.
+		if a.AttemptDir == "" {
+			t.Fatalf("expected attemptDir in suite run JSON")
+		}
+		for _, p := range []string{
+			filepath.Join(a.AttemptDir, "runner.command.txt"),
+			filepath.Join(a.AttemptDir, "runner.stdout.log"),
+			filepath.Join(a.AttemptDir, "runner.stderr.log"),
+		} {
+			if _, err := os.Stat(p); err != nil {
+				t.Fatalf("expected runner artifact %s, got err=%v", p, err)
+			}
 		}
 	}
 

@@ -1,3 +1,8 @@
+---
+name: zcl
+description: Orchestrator workflow for running ZeroContext Lab (ZCL) attempts/suites with deterministic artifacts, trace-backed evidence, and fast post-mortems (shim support for "agent only types tool name").
+---
+
 # ZCL Orchestrator (Codex Skill)
 
 This skill is for the *orchestrator* (you), not the spawned "zero context" agent.
@@ -13,6 +18,7 @@ Primary evidence:
 Secondary evidence (optional):
 - `.zcl/.../notes.jsonl`
 - `.zcl/.../runner.*.json`
+- `.zcl/.../runner.command.txt`, `.zcl/.../runner.stdout.log`, `.zcl/.../runner.stderr.log` (suite runner IO capture)
 
 ## Operator Invocation Story
 
@@ -20,32 +26,54 @@ When an operator says "run this through ZCL: <mission>", do this:
 
 1. Resolve entrypoint: prefer `zcl` on `PATH`.
 2. Initialize project if needed: `zcl init` (idempotent).
-3. Start an attempt (JSON output is required):
+3. Prefer suite-driven runs for repeatability (Mode A):
+   - `zcl suite run --file <suite.(yaml|yml|json)> --shim surfwright --json -- <runner-cmd> [args...]`
+   - `--shim surfwright` lets the agent *visibly* type `surfwright ...` while ZCL still records every invocation to `tool.calls.jsonl`.
+   - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
+4. For ad-hoc single attempts (Mode B):
    - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <promptText> --json`
    - Capture the returned `env` map and pass it to the spawned agent process.
-4. Spawn a fresh "zero context" agent with:
-   - a fixed harness preamble (funnel-only rule + finish rule)
-   - Turn 2 is one unstructured sentence mission prompt (no recipes)
+   - If you need "agent only types surfwright", prefer `zcl suite run --shim surfwright` (attempt start does not install shims).
 5. Require the agent to finish by running:
    - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
 6. Optionally ask for self-report feedback and persist it as secondary evidence:
    - `zcl note --kind agent --message "..."`
-7. Report back from artifacts (not from transcript): `tool.calls.jsonl`, `feedback.json`, and `attempt.report.json` (if computed).
+7. Report back from artifacts (not from transcript):
+   - Primary: `tool.calls.jsonl`, `feedback.json`
+   - Derived: `attempt.report.json`
+   - Post-mortem: `zcl attempt explain [<attemptDir>]` (tail trace + pointers)
 
 ## Fixed Harness Preamble (Turn 1)
 
 You must tell the spawned agent:
-- Funnel-only: all actions must go through ZCL funnels (e.g. `zcl run -- ...`).
 - Finish rule: must end with `zcl feedback ...` (required for scoring).
 - Attempt context: ZCL attempt env vars are already provided (do not invent ids).
+- Tool execution rule depends on how you launched the attempt:
+  - If running under `zcl suite run --shim surfwright`: the agent should invoke `surfwright ...` normally (no `zcl run` ceremony).
+  - If no shim is installed: all actions must go through ZCL funnels (e.g. `zcl run -- ...`) so evidence exists.
 
 ## Turn 2 (Default)
 
 One sentence mission prompt. Example:
 
-"Use SurfWright through ZCL to navigate to https://example.com and record TITLE=<...> via `zcl feedback --ok --result ...`."
+"Use the SurfWright CLI to navigate to https://example.com and record TITLE=<...> via `zcl feedback --ok --result ...`."
 
 ## Turn 3 (Optional)
 
 Only if needed: request structured formatting or classification, but do not lead the agent during discovery.
 
+## Expectations (Suite Guardrails)
+
+Suite `expects` can be grounded in:
+- `feedback.json` (`expects.ok`, `expects.result.*`)
+- trace-derived constraints (`expects.trace.*`), e.g.:
+  - `maxToolCallsTotal`, `maxFailuresTotal`, `maxRepeatStreak`
+  - `requireCommandPrefix: ["surfwright"]` to ensure SurfWright was actually invoked
+
+## Local Install (CLI + Skill)
+
+If `zcl` is not on `PATH` (or you want it auto-updated from this checkout):
+1. Build + install the CLI and link the skill:
+   - `scripts/dev-local-install.sh`
+2. Optional: auto-install on `git pull` / branch switch:
+   - `scripts/dev-install-git-hooks.sh`

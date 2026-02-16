@@ -24,6 +24,7 @@ type MissionV1 struct {
 type ExpectsV1 struct {
 	OK     *bool            `json:"ok,omitempty" yaml:"ok,omitempty"`
 	Result *ResultExpectsV1 `json:"result,omitempty" yaml:"result,omitempty"`
+	Trace  *TraceExpectsV1  `json:"trace,omitempty" yaml:"trace,omitempty"`
 }
 
 type ResultExpectsV1 struct {
@@ -35,4 +36,19 @@ type ResultExpectsV1 struct {
 
 	// Equals is an exact match applied to feedback.result when Type=="string".
 	Equals string `json:"equals,omitempty" yaml:"equals,omitempty"`
+}
+
+// TraceExpectsV1 are expectations derived from tool.calls.jsonl evidence (not from agent claims).
+// They are evaluated against attempt metrics/signals computed from the trace.
+type TraceExpectsV1 struct {
+	MaxToolCallsTotal int64 `json:"maxToolCallsTotal,omitempty" yaml:"maxToolCallsTotal,omitempty"`
+	MaxFailuresTotal  int64 `json:"maxFailuresTotal,omitempty" yaml:"maxFailuresTotal,omitempty"`
+	MaxTimeoutsTotal  int64 `json:"maxTimeoutsTotal,omitempty" yaml:"maxTimeoutsTotal,omitempty"`
+
+	// MaxRepeatStreak guards against obvious looping (consecutive identical tool calls).
+	MaxRepeatStreak int64 `json:"maxRepeatStreak,omitempty" yaml:"maxRepeatStreak,omitempty"`
+
+	// RequireCommandPrefix requires that at least one CLI exec argv[0] has one of these prefixes.
+	// Example: ["surfwright"] ensures the attempt actually exercised SurfWright.
+	RequireCommandPrefix []string `json:"requireCommandPrefix,omitempty" yaml:"requireCommandPrefix,omitempty"`
 }

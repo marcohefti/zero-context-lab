@@ -81,6 +81,7 @@ type AttemptReportJSONV1 struct {
 	Artifacts AttemptArtifactsV1 `json:"artifacts"`
 
 	Integrity    *AttemptIntegrityV1  `json:"integrity,omitempty"`
+	Signals      *AttemptSignalsV1    `json:"signals,omitempty"`
 	Expectations *ExpectationResultV1 `json:"expectations,omitempty"`
 }
 
@@ -90,6 +91,10 @@ type AttemptArtifactsV1 struct {
 	FeedbackJSON string `json:"feedbackJson"`
 	NotesJSONL   string `json:"notesJsonl,omitempty"`
 	PromptTXT    string `json:"promptTxt,omitempty"`
+	// Runner* are produced by suite orchestration when runner IO capture is enabled.
+	RunnerCommandTXT string `json:"runnerCommandTxt,omitempty"`
+	RunnerStdoutLOG  string `json:"runnerStdoutLog,omitempty"`
+	RunnerStderrLOG  string `json:"runnerStderrLog,omitempty"`
 }
 
 type AttemptIntegrityV1 struct {
@@ -97,6 +102,21 @@ type AttemptIntegrityV1 struct {
 	TraceNonEmpty         bool `json:"traceNonEmpty"`
 	FeedbackPresent       bool `json:"feedbackPresent"`
 	FunnelBypassSuspected bool `json:"funnelBypassSuspected,omitempty"`
+}
+
+// AttemptSignalsV1 are lightweight, trace-derived “stuck/thrash” signals intended for quick triage.
+// They must be explainable from evidence and deterministic to compute.
+type AttemptSignalsV1 struct {
+	// RepeatMaxStreak is the maximum consecutive streak of identical tool/op/input signatures.
+	RepeatMaxStreak int64 `json:"repeatMaxStreak"`
+	// DistinctCommandSignatures counts unique tool/op/input signatures observed.
+	DistinctCommandSignatures int64 `json:"distinctCommandSignatures"`
+	// FailureRateBps is failures/total expressed in basis points (0..10000).
+	FailureRateBps int64 `json:"failureRateBps"`
+	// NoProgressSuspected is a conservative heuristic based on repeats + low diversity.
+	NoProgressSuspected bool `json:"noProgressSuspected,omitempty"`
+	// CommandNamesSeen is a best-effort list of distinct command names (argv[0]) observed for CLI exec calls.
+	CommandNamesSeen []string `json:"commandNamesSeen,omitempty"`
 }
 
 type ExpectationResultV1 struct {

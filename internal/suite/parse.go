@@ -76,6 +76,24 @@ func ParseFile(path string) (ParsedSuite, error) {
 			}
 			m.Expects.Result.Type = rt
 		}
+		if m.Expects != nil && m.Expects.Trace != nil {
+			tr := m.Expects.Trace
+			if tr.MaxToolCallsTotal < 0 || tr.MaxFailuresTotal < 0 || tr.MaxTimeoutsTotal < 0 || tr.MaxRepeatStreak < 0 {
+				return ParsedSuite{}, fmt.Errorf("mission %q: expects.trace numeric fields must be >= 0", m.MissionID)
+			}
+			// Normalize prefixes: trim and drop empties, keep stable order as provided.
+			if len(tr.RequireCommandPrefix) > 0 {
+				out := make([]string, 0, len(tr.RequireCommandPrefix))
+				for _, p := range tr.RequireCommandPrefix {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+					out = append(out, p)
+				}
+				tr.RequireCommandPrefix = out
+			}
+		}
 	}
 
 	// Canonical representation is the parsed/normalized struct.

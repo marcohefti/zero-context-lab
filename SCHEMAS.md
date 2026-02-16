@@ -76,6 +76,12 @@ Minimal v1 suite shape (example):
         "result": {
           "type": "string",
           "pattern": "^ARTICLE_TITLE=.*"
+        },
+        "trace": {
+          "maxToolCallsTotal": 30,
+          "maxFailuresTotal": 5,
+          "maxRepeatStreak": 10,
+          "requireCommandPrefix": ["surfwright"]
         }
       }
     }
@@ -247,12 +253,22 @@ Required fields (metrics fields may be zero when computed from partial evidence 
     "toolCallsJsonl": "tool.calls.jsonl",
     "feedbackJson": "feedback.json",
     "notesJsonl": "notes.jsonl",
-    "promptTxt": "prompt.txt"
+    "promptTxt": "prompt.txt",
+    "runnerCommandTxt": "runner.command.txt",
+    "runnerStdoutLog": "runner.stdout.log",
+    "runnerStderrLog": "runner.stderr.log"
   },
   "integrity": {
     "tracePresent": true,
     "traceNonEmpty": true,
     "feedbackPresent": true
+  },
+  "signals": {
+    "repeatMaxStreak": 12,
+    "distinctCommandSignatures": 3,
+    "failureRateBps": 7000,
+    "noProgressSuspected": true,
+    "commandNamesSeen": ["surfwright", "curl"]
   },
   "metrics": {
     "toolCallsTotal": 3,

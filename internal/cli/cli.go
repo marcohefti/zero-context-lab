@@ -174,6 +174,8 @@ func (r Runner) runAttempt(args []string) int {
 		return r.runAttemptStart(args[1:])
 	case "finish":
 		return r.runAttemptFinish(args[1:])
+	case "explain":
+		return r.runAttemptExplain(args[1:])
 	default:
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown attempt subcommand %q\n", args[0])
 		printAttemptHelp(r.Stderr)
@@ -921,6 +923,7 @@ Usage:
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl attempt finish [--strict] [--json] [<attemptDir>]
+  zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
   zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]
   zcl feedback --ok|--fail --result <string>|--result-json <json>
@@ -942,6 +945,7 @@ Commands:
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
+  attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   suite run       Run a suite end-to-end (plan -> spawn runner per mission -> finish/validate/expect).
   feedback        Write the canonical attempt outcome to feedback.json.
@@ -977,6 +981,7 @@ func printAttemptHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl attempt finish [--strict] [--json] [<attemptDir>]
+  zcl attempt explain [--json] [--tail N] [<attemptDir>]
 `)
 }
 
