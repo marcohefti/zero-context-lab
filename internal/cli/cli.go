@@ -700,19 +700,43 @@ func (r Runner) runValidate(args []string) int {
 
 	res, err := validate.ValidatePath(paths[0], *strict)
 	if err != nil {
-		var ce *validate.CliError
-		if errors.As(err, &ce) {
-			fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
-			return 2
-		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
-		return r.writeJSON(res)
+		exit := r.writeJSON(res)
+		if exit != 0 {
+			return exit
+		}
+		if res.OK {
+			return 0
+		}
+		// Distinguish I/O-ish failures vs contract/usage failures for automation.
+		for _, f := range res.Errors {
+			if f.Code == "ZCL_E_IO" {
+				return 1
+			}
+		}
+		return 2
 	}
-	fmt.Fprintf(r.Stdout, "validate: OK\n")
-	return 0
+	if res.OK {
+		fmt.Fprintf(r.Stdout, "validate: OK\n")
+		return 0
+	}
+	fmt.Fprintf(r.Stderr, "validate: FAIL\n")
+	for _, f := range res.Errors {
+		if f.Path != "" {
+			fmt.Fprintf(r.Stderr, "  %s: %s (%s)\n", f.Code, f.Message, f.Path)
+		} else {
+			fmt.Fprintf(r.Stderr, "  %s: %s\n", f.Code, f.Message)
+		}
+	}
+	for _, f := range res.Errors {
+		if f.Code == "ZCL_E_IO" {
+			return 1
+		}
+	}
+	return 2
 }
 
 func (r Runner) runDoctor(args []string) int {

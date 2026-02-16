@@ -3,7 +3,6 @@ package validate
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,19 +10,6 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
-
-type CliError struct {
-	Code    string
-	Message string
-	Path    string
-}
-
-func (e *CliError) Error() string {
-	if e.Path == "" {
-		return e.Code + ": " + e.Message
-	}
-	return e.Code + ": " + e.Message + " (" + e.Path + ")"
-}
 
 type Finding struct {
 	Code    string `json:"code"`
@@ -43,96 +29,106 @@ type Result struct {
 func ValidatePath(targetDir string, strict bool) (Result, error) {
 	abs, err := filepath.Abs(targetDir)
 	if err != nil {
-		return Result{}, err
+		return Result{OK: false, Strict: strict, Target: "unknown", Path: targetDir, Errors: []Finding{{Code: "ZCL_E_IO", Message: err.Error(), Path: targetDir}}}, nil
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return Result{}, err
+		return Result{OK: false, Strict: strict, Target: "unknown", Path: abs, Errors: []Finding{{Code: "ZCL_E_IO", Message: err.Error(), Path: abs}}}, nil
 	}
 	if !info.IsDir() {
-		return Result{}, &CliError{Code: "ZCL_E_USAGE", Message: "target must be a directory", Path: abs}
+		return Result{OK: false, Strict: strict, Target: "unknown", Path: abs, Errors: []Finding{{Code: "ZCL_E_USAGE", Message: "target must be a directory", Path: abs}}}, nil
 	}
 
 	// Determine type by presence of attempt.json vs run.json.
 	if _, err := os.Stat(filepath.Join(abs, "attempt.json")); err == nil {
-		return validateAttempt(abs, strict)
+		return validateAttempt(abs, strict), nil
 	}
 	if _, err := os.Stat(filepath.Join(abs, "run.json")); err == nil {
-		return validateRun(abs, strict)
+		return validateRun(abs, strict), nil
 	}
-	return Result{}, &CliError{Code: "ZCL_E_USAGE", Message: "target does not look like an attemptDir or runDir", Path: abs}
+	return Result{OK: false, Strict: strict, Target: "unknown", Path: abs, Errors: []Finding{{Code: "ZCL_E_USAGE", Message: "target does not look like an attemptDir or runDir", Path: abs}}}, nil
 }
 
-func validateRun(runDir string, strict bool) (Result, error) {
+func validateRun(runDir string, strict bool) Result {
 	res := Result{OK: true, Strict: strict, Target: "run", Path: runDir}
 
 	runJSONPath := filepath.Join(runDir, "run.json")
-	if err := requireFile(runJSONPath, strict, &res); err != nil {
-		return Result{}, err
+	if !requireFile(runJSONPath, strict, &res) {
+		return finalize(res)
 	}
-	if err := requireContained(runDir, runJSONPath); err != nil {
-		return Result{}, err
+	if !requireContained(runDir, runJSONPath, &res) {
+		return finalize(res)
 	}
 	raw, err := os.ReadFile(runJSONPath)
 	if err != nil {
-		return Result{}, err
+		addErr(&res, "ZCL_E_IO", err.Error(), runJSONPath)
+		return finalize(res)
 	}
 	var run schema.RunJSONV1
 	if err := json.Unmarshal(raw, &run); err != nil {
-		return Result{}, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "run.json is not valid json", Path: runJSONPath}
+		addErr(&res, "ZCL_E_INVALID_JSON", "run.json is not valid json", runJSONPath)
+		return finalize(res)
 	}
 	if run.SchemaVersion != schema.ArtifactSchemaV1 {
-		return Result{}, &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported run.json schemaVersion", Path: runJSONPath}
+		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported run.json schemaVersion", runJSONPath)
+		return finalize(res)
 	}
 	if base := filepath.Base(runDir); run.RunID != base {
-		return Result{}, &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "runId does not match directory name", Path: runJSONPath}
+		addErr(&res, "ZCL_E_ID_MISMATCH", "runId does not match directory name", runJSONPath)
 	}
 
 	attemptsDir := filepath.Join(runDir, "attempts")
 	entries, err := os.ReadDir(attemptsDir)
 	if err != nil {
 		if strict && os.IsNotExist(err) {
-			return Result{}, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing attempts directory", Path: attemptsDir}
+			addErr(&res, "ZCL_E_MISSING_ARTIFACT", "missing attempts directory", attemptsDir)
+			return finalize(res)
 		}
 		// Best effort: no attempts, still OK.
-		return res, nil
+		return finalize(res)
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		attemptDir := filepath.Join(attemptsDir, e.Name())
-		if _, err := validateAttempt(attemptDir, strict); err != nil {
-			return Result{}, err
+		ar := validateAttempt(attemptDir, strict)
+		if !ar.OK {
+			res.OK = false
 		}
+		res.Errors = append(res.Errors, ar.Errors...)
+		res.Warnings = append(res.Warnings, ar.Warnings...)
 	}
 
-	return res, nil
+	return finalize(res)
 }
 
-func validateAttempt(attemptDir string, strict bool) (Result, error) {
+func validateAttempt(attemptDir string, strict bool) Result {
 	res := Result{OK: true, Strict: strict, Target: "attempt", Path: attemptDir}
 
 	attemptJSONPath := filepath.Join(attemptDir, "attempt.json")
-	if err := requireFile(attemptJSONPath, true, &res); err != nil { // attempt.json is always required
-		return Result{}, err
+	if !requireFile(attemptJSONPath, true, &res) { // attempt.json is always required
+		return finalize(res)
 	}
-	if err := requireContained(attemptDir, attemptJSONPath); err != nil {
-		return Result{}, err
+	if !requireContained(attemptDir, attemptJSONPath, &res) {
+		return finalize(res)
 	}
 	raw, err := os.ReadFile(attemptJSONPath)
 	if err != nil {
-		return Result{}, err
+		addErr(&res, "ZCL_E_IO", err.Error(), attemptJSONPath)
+		return finalize(res)
 	}
 	var attempt schema.AttemptJSONV1
 	if err := json.Unmarshal(raw, &attempt); err != nil {
-		return Result{}, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "attempt.json is not valid json", Path: attemptJSONPath}
+		addErr(&res, "ZCL_E_INVALID_JSON", "attempt.json is not valid json", attemptJSONPath)
+		return finalize(res)
 	}
 	if attempt.SchemaVersion != schema.ArtifactSchemaV1 {
-		return Result{}, &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported attempt.json schemaVersion", Path: attemptJSONPath}
+		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported attempt.json schemaVersion", attemptJSONPath)
+		return finalize(res)
 	}
 	if base := filepath.Base(attemptDir); attempt.AttemptID != base {
-		return Result{}, &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "attemptId does not match directory name", Path: attemptJSONPath}
+		addErr(&res, "ZCL_E_ID_MISMATCH", "attemptId does not match directory name", attemptJSONPath)
 	}
 	// Validate runId vs the path segment if it matches the standard layout: .../runs/<runId>/attempts/<attemptId>
 	if runDir := filepath.Dir(filepath.Dir(attemptDir)); filepath.Base(runDir) == attempt.RunID {
@@ -151,83 +147,78 @@ func validateAttempt(attemptDir string, strict bool) (Result, error) {
 	if strict && feedbackExists {
 		if _, err := os.Stat(tracePath); err != nil {
 			if os.IsNotExist(err) {
-				return Result{}, &CliError{Code: "ZCL_E_FUNNEL_BYPASS", Message: "feedback.json exists but tool.calls.jsonl is missing", Path: attemptDir}
+				addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is missing", attemptDir)
+				return finalize(res)
 			}
-			return Result{}, err
+			addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
+			return finalize(res)
 		}
 		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 		if err != nil {
-			return Result{}, err
+			addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
+			return finalize(res)
 		}
 		if !nonEmpty {
-			return Result{}, &CliError{Code: "ZCL_E_FUNNEL_BYPASS", Message: "feedback.json exists but tool.calls.jsonl is empty", Path: tracePath}
+			addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is empty", tracePath)
+			return finalize(res)
 		}
 	}
 
-	if err := requireFile(tracePath, strict, &res); err != nil {
-		return Result{}, err
-	}
-	if err := requireFile(feedbackPath, strict, &res); err != nil {
-		return Result{}, err
-	}
+	requireFile(tracePath, strict, &res)
+	requireFile(feedbackPath, strict, &res)
 
 	if _, err := os.Stat(tracePath); err == nil {
-		if err := requireContained(attemptDir, tracePath); err != nil {
-			return Result{}, err
-		}
-		if err := validateTrace(tracePath, attempt, strict); err != nil {
-			return Result{}, err
+		if requireContained(attemptDir, tracePath, &res) {
+			validateTrace(tracePath, attempt, strict, &res)
 		}
 	}
 
 	if _, err := os.Stat(feedbackPath); err == nil {
-		if err := requireContained(attemptDir, feedbackPath); err != nil {
-			return Result{}, err
-		}
-		if err := validateFeedback(feedbackPath, attempt, strict); err != nil {
-			return Result{}, err
+		if requireContained(attemptDir, feedbackPath, &res) {
+			validateFeedback(feedbackPath, attempt, strict, &res)
 		}
 	}
 
 	notesPath := filepath.Join(attemptDir, "notes.jsonl")
 	if _, err := os.Stat(notesPath); err == nil {
-		if err := requireContained(attemptDir, notesPath); err != nil {
-			return Result{}, err
-		}
-		if err := validateNotes(notesPath, attempt, strict); err != nil {
-			return Result{}, err
+		if requireContained(attemptDir, notesPath, &res) {
+			validateNotes(notesPath, attempt, strict, &res)
 		}
 	}
 
 	// Optional attempt.report.json integrity (if present).
 	reportPath := filepath.Join(attemptDir, "attempt.report.json")
 	if _, err := os.Stat(reportPath); err == nil {
-		if err := requireContained(attemptDir, reportPath); err != nil {
-			return Result{}, err
+		if !requireContained(attemptDir, reportPath, &res) {
+			return finalize(res)
 		}
 		raw, err := os.ReadFile(reportPath)
 		if err != nil {
-			return Result{}, err
+			addErr(&res, "ZCL_E_IO", err.Error(), reportPath)
+			return finalize(res)
 		}
 		var rep schema.AttemptReportJSONV1
 		if err := json.Unmarshal(raw, &rep); err != nil {
-			return Result{}, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "attempt.report.json is not valid json", Path: reportPath}
+			addErr(&res, "ZCL_E_INVALID_JSON", "attempt.report.json is not valid json", reportPath)
+			return finalize(res)
 		}
 		if rep.SchemaVersion != schema.ArtifactSchemaV1 {
-			return Result{}, &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported attempt.report.json schemaVersion", Path: reportPath}
+			addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported attempt.report.json schemaVersion", reportPath)
+			return finalize(res)
 		}
 		if rep.RunID != attempt.RunID || rep.AttemptID != attempt.AttemptID || rep.MissionID != attempt.MissionID {
-			return Result{}, &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "attempt.report.json ids do not match attempt.json", Path: reportPath}
+			addErr(&res, "ZCL_E_ID_MISMATCH", "attempt.report.json ids do not match attempt.json", reportPath)
 		}
 	}
 
-	return res, nil
+	return finalize(res)
 }
 
-func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool) error {
+func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
 	}
 	defer func() { _ = f.Close() }()
 
@@ -240,77 +231,109 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool) error
 		line := sc.Bytes()
 		if len(bytesTrim(line)) == 0 {
 			if strict {
-				return &CliError{Code: "ZCL_E_INVALID_JSONL", Message: "empty line in tool.calls.jsonl", Path: path}
+				addErr(res, "ZCL_E_INVALID_JSONL", "empty line in tool.calls.jsonl", path)
+				return
 			}
 			continue
 		}
 		var ev schema.TraceEventV1
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return &CliError{Code: "ZCL_E_INVALID_JSONL", Message: "invalid jsonl line in tool.calls.jsonl", Path: path}
+			addErr(res, "ZCL_E_INVALID_JSONL", "invalid jsonl line in tool.calls.jsonl", path)
+			return
 		}
 		n++
 		if ev.V != schema.TraceSchemaV1 {
-			return &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported trace event version", Path: path}
+			addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported trace event version", path)
+			return
 		}
 		if ev.RunID != attempt.RunID || ev.AttemptID != attempt.AttemptID || ev.MissionID != attempt.MissionID {
-			return &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "trace ids do not match attempt.json", Path: path}
+			addErr(res, "ZCL_E_ID_MISMATCH", "trace ids do not match attempt.json", path)
+			return
+		}
+		if ev.SuiteID != "" && attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
+			addErr(res, "ZCL_E_ID_MISMATCH", "trace suiteId does not match attempt.json", path)
+			return
+		}
+		if ev.AgentID != "" && attempt.AgentID != "" && ev.AgentID != attempt.AgentID {
+			addErr(res, "ZCL_E_ID_MISMATCH", "trace agentId does not match attempt.json", path)
+			return
 		}
 		if len(ev.IO.OutPreview) > schema.PreviewMaxBytesV1 || len(ev.IO.ErrPreview) > schema.PreviewMaxBytesV1 {
-			return &CliError{Code: "ZCL_E_BOUNDS", Message: "trace preview exceeds bounds", Path: path}
+			addErr(res, "ZCL_E_BOUNDS", "trace preview exceeds bounds", path)
+			return
 		}
 		if len(ev.Input) > schema.ToolInputMaxBytesV1 {
-			return &CliError{Code: "ZCL_E_BOUNDS", Message: "trace input exceeds bounds", Path: path}
+			addErr(res, "ZCL_E_BOUNDS", "trace input exceeds bounds", path)
+			return
+		}
+		if len(ev.Input) > 0 && !json.Valid(ev.Input) {
+			addErr(res, "ZCL_E_CONTRACT", "trace input is not valid json", path)
+			return
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
 	}
 	if strict && n == 0 {
-		return &CliError{Code: "ZCL_E_MISSING_EVIDENCE", Message: "tool.calls.jsonl is empty", Path: path}
+		addErr(res, "ZCL_E_MISSING_EVIDENCE", "tool.calls.jsonl is empty", path)
+		return
 	}
-	return nil
 }
 
-func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool) error {
+func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
 	}
 	if len(raw) > schema.FeedbackMaxBytesV1*2 {
 		// feedback.json includes envelope + possible pretty-print; enforce loose cap.
-		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback.json exceeds bounds", Path: path}
+		addErr(res, "ZCL_E_BOUNDS", "feedback.json exceeds bounds", path)
+		return
 	}
 	var fb schema.FeedbackJSONV1
 	if err := json.Unmarshal(raw, &fb); err != nil {
-		return &CliError{Code: "ZCL_E_INVALID_JSON", Message: "feedback.json is not valid json", Path: path}
+		addErr(res, "ZCL_E_INVALID_JSON", "feedback.json is not valid json", path)
+		return
 	}
 	if fb.SchemaVersion != schema.ArtifactSchemaV1 {
-		return &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported feedback.json schemaVersion", Path: path}
+		addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported feedback.json schemaVersion", path)
+		return
 	}
 	if fb.RunID != attempt.RunID || fb.AttemptID != attempt.AttemptID || fb.MissionID != attempt.MissionID {
-		return &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "feedback ids do not match attempt.json", Path: path}
+		addErr(res, "ZCL_E_ID_MISMATCH", "feedback ids do not match attempt.json", path)
+		return
+	}
+	if fb.SuiteID != attempt.SuiteID {
+		addErr(res, "ZCL_E_ID_MISMATCH", "feedback suiteId does not match attempt.json", path)
+		return
 	}
 	if fb.Result != "" && fb.ResultJSON != nil {
-		return &CliError{Code: "ZCL_E_CONTRACT", Message: "feedback must set exactly one of result or resultJson", Path: path}
+		addErr(res, "ZCL_E_CONTRACT", "feedback must set exactly one of result or resultJson", path)
+		return
 	}
 	if fb.Result == "" && fb.ResultJSON == nil {
 		if strict {
-			return &CliError{Code: "ZCL_E_CONTRACT", Message: "feedback missing result/resultJson", Path: path}
+			addErr(res, "ZCL_E_CONTRACT", "feedback missing result/resultJson", path)
+			return
 		}
 	}
 	if fb.Result != "" && len([]byte(fb.Result)) > schema.FeedbackMaxBytesV1 {
-		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback result exceeds bounds", Path: path}
+		addErr(res, "ZCL_E_BOUNDS", "feedback result exceeds bounds", path)
+		return
 	}
 	if fb.ResultJSON != nil && len(fb.ResultJSON) > schema.FeedbackMaxBytesV1 {
-		return &CliError{Code: "ZCL_E_BOUNDS", Message: "feedback resultJson exceeds bounds", Path: path}
+		addErr(res, "ZCL_E_BOUNDS", "feedback resultJson exceeds bounds", path)
+		return
 	}
-	return nil
 }
 
-func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool) error {
+func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool, res *Result) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
 	}
 	defer func() { _ = f.Close() }()
 
@@ -320,78 +343,89 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool) error
 		line := sc.Bytes()
 		if len(bytesTrim(line)) == 0 {
 			if strict {
-				return &CliError{Code: "ZCL_E_INVALID_JSONL", Message: "empty line in notes.jsonl", Path: path}
+				addErr(res, "ZCL_E_INVALID_JSONL", "empty line in notes.jsonl", path)
+				return
 			}
 			continue
 		}
 		var ev schema.NoteEventV1
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return &CliError{Code: "ZCL_E_INVALID_JSONL", Message: "invalid jsonl line in notes.jsonl", Path: path}
+			addErr(res, "ZCL_E_INVALID_JSONL", "invalid jsonl line in notes.jsonl", path)
+			return
 		}
 		if ev.V != schema.TraceSchemaV1 {
-			return &CliError{Code: "ZCL_E_SCHEMA_UNSUPPORTED", Message: "unsupported note event version", Path: path}
+			addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported note event version", path)
+			return
 		}
 		if ev.RunID != attempt.RunID || ev.AttemptID != attempt.AttemptID || ev.MissionID != attempt.MissionID {
-			return &CliError{Code: "ZCL_E_ID_MISMATCH", Message: "note ids do not match attempt.json", Path: path}
+			addErr(res, "ZCL_E_ID_MISMATCH", "note ids do not match attempt.json", path)
+			return
+		}
+		if ev.SuiteID != "" && attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
+			addErr(res, "ZCL_E_ID_MISMATCH", "note suiteId does not match attempt.json", path)
+			return
+		}
+		if ev.AgentID != "" && attempt.AgentID != "" && ev.AgentID != attempt.AgentID {
+			addErr(res, "ZCL_E_ID_MISMATCH", "note agentId does not match attempt.json", path)
+			return
 		}
 		if ev.Message != "" && ev.Data != nil {
-			return &CliError{Code: "ZCL_E_CONTRACT", Message: "note must set only one of message or data", Path: path}
+			addErr(res, "ZCL_E_CONTRACT", "note must set only one of message or data", path)
+			return
 		}
 		if ev.Message != "" && len([]byte(ev.Message)) > schema.NoteMessageMaxBytesV1 {
-			return &CliError{Code: "ZCL_E_BOUNDS", Message: "note message exceeds bounds", Path: path}
+			addErr(res, "ZCL_E_BOUNDS", "note message exceeds bounds", path)
+			return
 		}
 		if ev.Data != nil && len(ev.Data) > schema.NoteDataMaxBytesV1 {
-			return &CliError{Code: "ZCL_E_BOUNDS", Message: "note data exceeds bounds", Path: path}
+			addErr(res, "ZCL_E_BOUNDS", "note data exceeds bounds", path)
+			return
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
 	}
-	return nil
 }
 
-func requireFile(path string, required bool, res *Result) error {
+func requireFile(path string, required bool, res *Result) bool {
 	_, err := os.Stat(path)
 	if err == nil {
-		return nil
+		return true
 	}
 	if os.IsNotExist(err) {
 		if required {
-			return &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing required artifact", Path: path}
+			addErr(res, "ZCL_E_MISSING_ARTIFACT", "missing required artifact", path)
 		}
-		return nil
+		return false
 	}
-	return err
+	addErr(res, "ZCL_E_IO", err.Error(), path)
+	return false
 }
 
-func requireContained(root, path string) error {
+func requireContained(root, path string, res *Result) bool {
 	rootEval, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), root)
+		return false
 	}
 	pEval, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		// If the artifact doesn't exist yet, containment doesn't apply.
 		if os.IsNotExist(err) {
-			return nil
+			return true
 		}
-		return err
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return false
 	}
 	rootEval = filepath.Clean(rootEval)
 	pEval = filepath.Clean(pEval)
 	sep := string(os.PathSeparator)
 	if !strings.HasPrefix(pEval, rootEval+sep) && pEval != rootEval {
-		return &CliError{Code: "ZCL_E_CONTAINMENT", Message: "artifact path escapes attempt/run directory (symlink traversal)", Path: path}
+		addErr(res, "ZCL_E_CONTAINMENT", "artifact path escapes attempt/run directory (symlink traversal)", path)
+		return false
 	}
-	return nil
-}
-
-func IsCliError(err error, code string) bool {
-	var e *CliError
-	if errors.As(err, &e) {
-		return e.Code == code
-	}
-	return false
+	return true
 }
 
 func bytesTrim(b []byte) []byte {
@@ -412,4 +446,16 @@ func bytesTrim(b []byte) []byte {
 		j--
 	}
 	return b[i:j]
+}
+
+func addErr(res *Result, code, msg, path string) {
+	res.OK = false
+	res.Errors = append(res.Errors, Finding{Code: code, Message: msg, Path: path})
+}
+
+func finalize(res Result) Result {
+	if len(res.Errors) > 0 {
+		res.OK = false
+	}
+	return res
 }

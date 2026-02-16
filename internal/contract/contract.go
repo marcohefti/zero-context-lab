@@ -78,12 +78,28 @@ func Build(version string) Contract {
 				RequiredFields: []string{},
 			},
 			{
+				ID:             "tool.calls.jsonl",
+				Kind:           "jsonl",
+				SchemaVersions: []int{1},
+				Required:       true,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl",
+				RequiredFields: []string{},
+			},
+			{
 				ID:             "feedback.json",
 				Kind:           "json",
 				SchemaVersions: []int{1},
 				Required:       true,
 				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
 				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "ok", "createdAt"},
+			},
+			{
+				ID:             "notes.jsonl",
+				Kind:           "jsonl",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/notes.jsonl",
+				RequiredFields: []string{},
 			},
 			{
 				ID:             "attempt.report.json",

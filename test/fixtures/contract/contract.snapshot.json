@@ -58,6 +58,16 @@
       "requiredFields": []
     },
     {
+      "id": "tool.calls.jsonl",
+      "kind": "jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "required": true,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl",
+      "requiredFields": []
+    },
+    {
       "id": "feedback.json",
       "kind": "json",
       "schemaVersions": [
@@ -74,6 +84,16 @@
         "ok",
         "createdAt"
       ]
+    },
+    {
+      "id": "notes.jsonl",
+      "kind": "jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/notes.jsonl",
+      "requiredFields": []
     },
     {
       "id": "attempt.report.json",

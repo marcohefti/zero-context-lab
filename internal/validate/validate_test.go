@@ -10,12 +10,15 @@ import (
 
 func TestValidate_MissingArtifact_Strict(t *testing.T) {
 	dir := t.TempDir()
-	_, err := ValidatePath(dir, true)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !IsCliError(err, "ZCL_E_USAGE") && !IsCliError(err, "ZCL_E_MISSING_ARTIFACT") {
+	res, err := ValidatePath(dir, true)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("expected ok=false, got ok=true")
+	}
+	if !hasCode(res.Errors, "ZCL_E_USAGE") {
+		t.Fatalf("expected ZCL_E_USAGE, got: %+v", res.Errors)
 	}
 }
 
@@ -24,12 +27,15 @@ func TestValidate_InvalidJSON_Attempt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(attemptDir, "attempt.json"), []byte("{nope"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := ValidatePath(attemptDir, true)
-	if err == nil {
-		t.Fatalf("expected error")
+	res, err := ValidatePath(attemptDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !IsCliError(err, "ZCL_E_INVALID_JSON") {
-		t.Fatalf("expected ZCL_E_INVALID_JSON, got: %v", err)
+	if res.OK {
+		t.Fatalf("expected ok=false, got ok=true")
+	}
+	if !hasCode(res.Errors, "ZCL_E_INVALID_JSON") {
+		t.Fatalf("expected ZCL_E_INVALID_JSON, got: %+v", res.Errors)
 	}
 }
 
@@ -38,12 +44,15 @@ func TestValidate_SchemaUnsupported(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(attemptDir, "attempt.json"), []byte(`{"schemaVersion":999,"runId":"r","suiteId":"s","missionId":"m","attemptId":"`+filepath.Base(attemptDir)+`","mode":"discovery","startedAt":"t"}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := ValidatePath(attemptDir, true)
-	if err == nil {
-		t.Fatalf("expected error")
+	res, err := ValidatePath(attemptDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !IsCliError(err, "ZCL_E_SCHEMA_UNSUPPORTED") {
-		t.Fatalf("expected ZCL_E_SCHEMA_UNSUPPORTED, got: %v", err)
+	if res.OK {
+		t.Fatalf("expected ok=false, got ok=true")
+	}
+	if !hasCode(res.Errors, "ZCL_E_SCHEMA_UNSUPPORTED") {
+		t.Fatalf("expected ZCL_E_SCHEMA_UNSUPPORTED, got: %+v", res.Errors)
 	}
 }
 
@@ -65,12 +74,15 @@ func TestValidate_BoundsExceeded(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_, err := ValidatePath(attemptDir, true)
-	if err == nil {
-		t.Fatalf("expected error")
+	res, err := ValidatePath(attemptDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !IsCliError(err, "ZCL_E_BOUNDS") {
-		t.Fatalf("expected ZCL_E_BOUNDS, got: %v", err)
+	if res.OK {
+		t.Fatalf("expected ok=false, got ok=true")
+	}
+	if !hasCode(res.Errors, "ZCL_E_BOUNDS") {
+		t.Fatalf("expected ZCL_E_BOUNDS, got: %+v", res.Errors)
 	}
 }
 
@@ -84,11 +96,23 @@ func TestValidate_FunnelBypass_Strict(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_, err := ValidatePath(attemptDir, true)
-	if err == nil {
-		t.Fatalf("expected error")
+	res, err := ValidatePath(attemptDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !IsCliError(err, "ZCL_E_FUNNEL_BYPASS") {
-		t.Fatalf("expected ZCL_E_FUNNEL_BYPASS, got: %v", err)
+	if res.OK {
+		t.Fatalf("expected ok=false, got ok=true")
 	}
+	if !hasCode(res.Errors, "ZCL_E_FUNNEL_BYPASS") {
+		t.Fatalf("expected ZCL_E_FUNNEL_BYPASS, got: %+v", res.Errors)
+	}
+}
+
+func hasCode(fs []Finding, code string) bool {
+	for _, f := range fs {
+		if f.Code == code {
+			return true
+		}
+	}
+	return false
 }

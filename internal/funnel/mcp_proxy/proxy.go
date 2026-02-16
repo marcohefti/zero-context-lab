@@ -20,9 +20,10 @@ import (
 )
 
 type reqInfo struct {
-	start  time.Time
-	method string
-	input  []byte
+	start          time.Time
+	method         string
+	input          json.RawMessage
+	inputTruncated bool
 }
 
 type boundedCapture struct {
@@ -129,8 +130,15 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			if id == "" {
 				continue
 			}
+			inputRaw, truncated := boundedJSONRPCInput(msg, schema.ToolInputMaxBytesV1)
+
 			mu.Lock()
-			inflight[id] = reqInfo{start: time.Now(), method: method, input: append([]byte(nil), line...)}
+			inflight[id] = reqInfo{
+				start:          time.Now(),
+				method:         method,
+				input:          inputRaw,
+				inputTruncated: truncated,
+			}
 			mu.Unlock()
 		}
 		_ = serverIn.Close()
@@ -198,18 +206,17 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			}
 		}
 
+		// Input is canonical JSON (and bounded) from the request side. Redact secrets in its string form.
 		input := info.input
-		inputTruncated := false
-		// Tool input is bounded by ToolInputMaxBytesV1 (independent of preview caps).
-		inputMax := schema.ToolInputMaxBytesV1
-		if len(input) > inputMax {
-			input = input[:inputMax]
-			inputTruncated = true
-		}
-
 		inStr, inApplied := redact.Text(string(input))
-		inStr, inCapped := capStringBytes(inStr, inputMax)
 		input = []byte(inStr)
+		inCapped := false
+		// Defensive: ensure input stays within bounds even after redaction.
+		if len(input) > schema.ToolInputMaxBytesV1 {
+			// Fall back to a minimal shape rather than emitting invalid JSON.
+			input = []byte(`{"method":"[TRUNCATED]"}`)
+			inCapped = true
+		}
 
 		outPreview := line
 		outTruncated := false
@@ -244,13 +251,20 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			},
 			RedactionsApplied: unionStrings(inApplied.Names, a.Names),
 			Warnings: func() []schema.TraceWarningV1 {
-				if !unknownMethod {
+				var w []schema.TraceWarningV1
+				if info.inputTruncated || inCapped {
+					w = append(w, schema.TraceWarningV1{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"})
+				}
+				if unknownMethod {
+					w = append(w, schema.TraceWarningV1{Code: "ZCL_W_MCP_UNKNOWN_METHOD", Message: "unrecognized MCP method; recorded as op=unknown"})
+				}
+				if len(w) == 0 {
 					return nil
 				}
-				return []schema.TraceWarningV1{{Code: "ZCL_W_MCP_UNKNOWN_METHOD", Message: "unrecognized MCP method; recorded as op=unknown"}}
+				return w
 			}(),
 			Integrity: &schema.TraceIntegrityV1{
-				Truncated: inputTruncated || inCapped || outTruncated || outCapped,
+				Truncated: info.inputTruncated || inCapped || outTruncated || outCapped,
 			},
 		}
 		if enrichment != nil {
@@ -381,6 +395,34 @@ func jsonRPCID(v any) string {
 	default:
 		return ""
 	}
+}
+
+func boundedJSONRPCInput(msg map[string]any, maxBytes int) (json.RawMessage, bool) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	method, _ := msg["method"].(string)
+	id := msg["id"]
+	params := msg["params"]
+
+	candidates := []map[string]any{
+		{"method": method, "id": id, "params": params},
+		{"method": method, "id": id},
+		{"method": method},
+	}
+
+	for i, c := range candidates {
+		b, err := store.CanonicalJSON(c)
+		if err != nil {
+			continue
+		}
+		if len(b) <= maxBytes {
+			return b, i != 0
+		}
+	}
+
+	// Last resort: always valid JSON.
+	return json.RawMessage(`{}`), true
 }
 
 func bytesTrim(b []byte) []byte {
