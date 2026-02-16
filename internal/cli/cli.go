@@ -27,6 +27,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/replay"
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
+	"github.com/marcohefti/zero-context-lab/internal/store"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
@@ -428,6 +429,9 @@ func (r Runner) runAttemptStart(args []string) int {
 	timeoutMs := fs.Int64("timeout-ms", 0, "attempt timeout in ms (optional; also used by funnels as a mission deadline)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	retry := fs.Int("retry", 1, "attempt retry number (default 1)")
+	envFile := fs.String("env-file", "", "optional path to write attempt env in sh/dotenv format (does not affect JSON output)")
+	envFormat := fs.String("env-format", "sh", "env format for --env-file: sh|dotenv")
+	printEnv := fs.String("print-env", "", "print env to stderr in given format: sh|dotenv (does not affect JSON output)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
 
@@ -474,7 +478,46 @@ func (r Runner) runAttemptStart(args []string) int {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
 		return 2
 	}
-	return r.writeJSON(res)
+
+	var (
+		envOut     string
+		envOutOK   bool
+		envOutUsed bool
+	)
+	if strings.TrimSpace(*envFile) != "" {
+		envOut, envOutOK = formatEnv(res.Env, *envFormat)
+		if !envOutOK {
+			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: attempt start: invalid --env-format (expected sh|dotenv)\n")
+			return 2
+		}
+		if err := store.WriteFileAtomic(*envFile, []byte(envOut)); err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
+		envOutUsed = true
+	}
+	if strings.TrimSpace(*printEnv) != "" {
+		envOut, envOutOK = formatEnv(res.Env, *printEnv)
+		if !envOutOK {
+			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: attempt start: invalid --print-env (expected sh|dotenv)\n")
+			return 2
+		}
+		fmt.Fprint(r.Stderr, envOut)
+		envOutUsed = true
+	}
+
+	// Wrap JSON output so we can surface env-file metadata without changing attempt.Start.
+	type attemptStartJSON struct {
+		*attempt.StartResult
+		EnvFile   string `json:"envFile,omitempty"`
+		EnvFormat string `json:"envFormat,omitempty"`
+	}
+	out := attemptStartJSON{StartResult: res}
+	if envOutUsed && strings.TrimSpace(*envFile) != "" {
+		out.EnvFile = *envFile
+		out.EnvFormat = *envFormat
+	}
+	return r.writeJSON(out)
 }
 
 func (r Runner) runRun(args []string) int {
@@ -721,6 +764,13 @@ func (r Runner) runValidate(args []string) int {
 	}
 	if res.OK {
 		fmt.Fprintf(r.Stdout, "validate: OK\n")
+		for _, f := range res.Warnings {
+			if f.Path != "" {
+				fmt.Fprintf(r.Stderr, "  WARN %s: %s (%s)\n", f.Code, f.Message, f.Path)
+			} else {
+				fmt.Fprintf(r.Stderr, "  WARN %s: %s\n", f.Code, f.Message)
+			}
+		}
 		return 0
 	}
 	fmt.Fprintf(r.Stderr, "validate: FAIL\n")
@@ -1024,7 +1074,7 @@ func printAttemptHelp(w io.Writer) {
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-		  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] --json
+		  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
 	`)
 }
 

@@ -53,7 +53,7 @@ func validateRun(runDir string, strict bool) Result {
 	res := Result{OK: true, Strict: strict, Target: "run", Path: runDir}
 
 	runJSONPath := filepath.Join(runDir, "run.json")
-	if !requireFile(runJSONPath, strict, &res) {
+	if !requireFile(runJSONPath, true, true, &res) {
 		return finalize(res)
 	}
 	if !requireContained(runDir, runJSONPath, &res) {
@@ -84,7 +84,11 @@ func validateRun(runDir string, strict bool) Result {
 			addErr(&res, "ZCL_E_MISSING_ARTIFACT", "missing attempts directory", attemptsDir)
 			return finalize(res)
 		}
-		// Best effort: no attempts, still OK.
+		// Best effort: no attempts.
+		if os.IsNotExist(err) {
+			addWarn(&res, "ZCL_W_MISSING_ARTIFACT", "missing attempts directory", attemptsDir)
+			return finalize(res)
+		}
 		return finalize(res)
 	}
 	for _, e := range entries {
@@ -107,7 +111,7 @@ func validateAttempt(attemptDir string, strict bool) Result {
 	res := Result{OK: true, Strict: strict, Target: "attempt", Path: attemptDir}
 
 	attemptJSONPath := filepath.Join(attemptDir, "attempt.json")
-	if !requireFile(attemptJSONPath, true, &res) { // attempt.json is always required
+	if !requireFile(attemptJSONPath, true, true, &res) { // attempt.json is always required
 		return finalize(res)
 	}
 	if !requireContained(attemptDir, attemptJSONPath, &res) {
@@ -135,6 +139,8 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		// ok
 	}
 
+	enforce := strict || attempt.Mode == "ci"
+
 	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
 	feedbackPath := filepath.Join(attemptDir, "feedback.json")
 
@@ -144,45 +150,57 @@ func validateAttempt(attemptDir string, strict bool) Result {
 	if _, err := os.Stat(feedbackPath); err == nil {
 		feedbackExists = true
 	}
-	if strict && feedbackExists {
+	if feedbackExists {
 		if _, err := os.Stat(tracePath); err != nil {
 			if os.IsNotExist(err) {
-				addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is missing", attemptDir)
+				if enforce {
+					addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is missing", attemptDir)
+					return finalize(res)
+				}
+				addWarn(&res, "ZCL_W_FUNNEL_BYPASS_SUSPECTED", "feedback.json exists but tool.calls.jsonl is missing", attemptDir)
+				// continue validation best-effort
+			} else {
+				addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
 				return finalize(res)
 			}
-			addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
-			return finalize(res)
 		}
-		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
-		if err != nil {
-			addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
-			return finalize(res)
-		}
-		if !nonEmpty {
-			addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is empty", tracePath)
-			return finalize(res)
+		if _, err := os.Stat(tracePath); err == nil {
+			nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
+			if err != nil {
+				addErr(&res, "ZCL_E_IO", err.Error(), tracePath)
+				return finalize(res)
+			}
+			if !nonEmpty {
+				if enforce {
+					addErr(&res, "ZCL_E_FUNNEL_BYPASS", "feedback.json exists but tool.calls.jsonl is empty", tracePath)
+					return finalize(res)
+				}
+				addWarn(&res, "ZCL_W_FUNNEL_BYPASS_SUSPECTED", "feedback.json exists but tool.calls.jsonl is empty", tracePath)
+			}
 		}
 	}
 
-	requireFile(tracePath, strict, &res)
-	requireFile(feedbackPath, strict, &res)
+	// Requiredness is mode-dependent. In discovery mode we still warn on missing
+	// primary evidence, but we don't fail unless strict is requested.
+	requireFile(tracePath, true, enforce, &res)
+	requireFile(feedbackPath, true, enforce, &res)
 
 	if _, err := os.Stat(tracePath); err == nil {
 		if requireContained(attemptDir, tracePath, &res) {
-			validateTrace(tracePath, attempt, strict, &res)
+			validateTrace(tracePath, attempt, enforce, &res)
 		}
 	}
 
 	if _, err := os.Stat(feedbackPath); err == nil {
 		if requireContained(attemptDir, feedbackPath, &res) {
-			validateFeedback(feedbackPath, attempt, strict, &res)
+			validateFeedback(feedbackPath, attempt, enforce, &res)
 		}
 	}
 
 	notesPath := filepath.Join(attemptDir, "notes.jsonl")
 	if _, err := os.Stat(notesPath); err == nil {
 		if requireContained(attemptDir, notesPath, &res) {
-			validateNotes(notesPath, attempt, strict, &res)
+			validateNotes(notesPath, attempt, enforce, &res)
 		}
 	}
 
@@ -250,13 +268,19 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *
 			addErr(res, "ZCL_E_ID_MISMATCH", "trace ids do not match attempt.json", path)
 			return
 		}
-		if ev.SuiteID != "" && attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
-			addErr(res, "ZCL_E_ID_MISMATCH", "trace suiteId does not match attempt.json", path)
-			return
+		if attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "trace suiteId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "trace suiteId does not match attempt.json", path)
 		}
 		if ev.AgentID != "" && attempt.AgentID != "" && ev.AgentID != attempt.AgentID {
-			addErr(res, "ZCL_E_ID_MISMATCH", "trace agentId does not match attempt.json", path)
-			return
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "trace agentId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "trace agentId does not match attempt.json", path)
 		}
 		if len(ev.IO.OutPreview) > schema.PreviewMaxBytesV1 || len(ev.IO.ErrPreview) > schema.PreviewMaxBytesV1 {
 			addErr(res, "ZCL_E_BOUNDS", "trace preview exceeds bounds", path)
@@ -266,9 +290,24 @@ func validateTrace(path string, attempt schema.AttemptJSONV1, strict bool, res *
 			addErr(res, "ZCL_E_BOUNDS", "trace input exceeds bounds", path)
 			return
 		}
-		if len(ev.Input) > 0 && !json.Valid(ev.Input) {
+		if len(ev.Input) == 0 {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "trace input is missing", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "trace input is missing", path)
+		} else if !json.Valid(ev.Input) {
 			addErr(res, "ZCL_E_CONTRACT", "trace input is not valid json", path)
 			return
+		} else {
+			validateKnownInputShape(ev, strict, res, path)
+		}
+		if len(ev.Enrichment) > 0 && !json.Valid(ev.Enrichment) {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "trace enrichment is not valid json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "trace enrichment is not valid json", path)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -318,6 +357,7 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, re
 			addErr(res, "ZCL_E_CONTRACT", "feedback missing result/resultJson", path)
 			return
 		}
+		addWarn(res, "ZCL_W_CONTRACT", "feedback missing result/resultJson", path)
 	}
 	if fb.Result != "" && len([]byte(fb.Result)) > schema.FeedbackMaxBytesV1 {
 		addErr(res, "ZCL_E_BOUNDS", "feedback result exceeds bounds", path)
@@ -361,13 +401,19 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool, res *
 			addErr(res, "ZCL_E_ID_MISMATCH", "note ids do not match attempt.json", path)
 			return
 		}
-		if ev.SuiteID != "" && attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
-			addErr(res, "ZCL_E_ID_MISMATCH", "note suiteId does not match attempt.json", path)
-			return
+		if attempt.SuiteID != "" && ev.SuiteID != attempt.SuiteID {
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "note suiteId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "note suiteId does not match attempt.json", path)
 		}
 		if ev.AgentID != "" && attempt.AgentID != "" && ev.AgentID != attempt.AgentID {
-			addErr(res, "ZCL_E_ID_MISMATCH", "note agentId does not match attempt.json", path)
-			return
+			if strict {
+				addErr(res, "ZCL_E_ID_MISMATCH", "note agentId does not match attempt.json", path)
+				return
+			}
+			addWarn(res, "ZCL_W_ID_MISMATCH", "note agentId does not match attempt.json", path)
 		}
 		if ev.Message != "" && ev.Data != nil {
 			addErr(res, "ZCL_E_CONTRACT", "note must set only one of message or data", path)
@@ -388,14 +434,18 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool, res *
 	}
 }
 
-func requireFile(path string, required bool, res *Result) bool {
+func requireFile(path string, required bool, strict bool, res *Result) bool {
 	_, err := os.Stat(path)
 	if err == nil {
 		return true
 	}
 	if os.IsNotExist(err) {
 		if required {
-			addErr(res, "ZCL_E_MISSING_ARTIFACT", "missing required artifact", path)
+			if strict {
+				addErr(res, "ZCL_E_MISSING_ARTIFACT", "missing required artifact", path)
+			} else {
+				addWarn(res, "ZCL_W_MISSING_ARTIFACT", "missing artifact", path)
+			}
 		}
 		return false
 	}
@@ -453,9 +503,63 @@ func addErr(res *Result, code, msg, path string) {
 	res.Errors = append(res.Errors, Finding{Code: code, Message: msg, Path: path})
 }
 
+func addWarn(res *Result, code, msg, path string) {
+	res.Warnings = append(res.Warnings, Finding{Code: code, Message: msg, Path: path})
+}
+
 func finalize(res Result) Result {
 	if len(res.Errors) > 0 {
 		res.OK = false
 	}
 	return res
+}
+
+func validateKnownInputShape(ev schema.TraceEventV1, strict bool, res *Result, path string) {
+	// Only enforce for tools that ZCL itself emits. Unknown tools are allowed.
+	if ev.Tool != "cli" && ev.Tool != "mcp" {
+		return
+	}
+
+	var v any
+	if err := json.Unmarshal(ev.Input, &v); err != nil {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "trace input is not parseable json", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "trace input is not parseable json", path)
+		return
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "trace input must be a json object", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "trace input must be a json object", path)
+		return
+	}
+
+	switch ev.Tool {
+	case "cli":
+		if ev.Op != "exec" {
+			return
+		}
+		argv, ok := m["argv"].([]any)
+		if !ok || len(argv) == 0 {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "cli exec input must include non-empty argv", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "cli exec input should include non-empty argv", path)
+		}
+	case "mcp":
+		method, ok := m["method"].(string)
+		if !ok || strings.TrimSpace(method) == "" {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "mcp input must include method", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "mcp input should include method", path)
+		}
+	}
 }

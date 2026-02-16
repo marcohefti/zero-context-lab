@@ -12,12 +12,13 @@ type Contract struct {
 }
 
 type Artifact struct {
-	ID             string   `json:"id"`
-	Kind           string   `json:"kind"` // json|jsonl
-	SchemaVersions []int    `json:"schemaVersions"`
-	Required       bool     `json:"required"`
-	PathPattern    string   `json:"pathPattern"`
-	RequiredFields []string `json:"requiredFields"`
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind"` // json|jsonl
+	SchemaVersions  []int    `json:"schemaVersions"`
+	Required        bool     `json:"required"`
+	RequiredInModes []string `json:"requiredInModes,omitempty"`
+	PathPattern     string   `json:"pathPattern"`
+	RequiredFields  []string `json:"requiredFields"`
 }
 
 type Event struct {
@@ -78,20 +79,22 @@ func Build(version string) Contract {
 				RequiredFields: []string{},
 			},
 			{
-				ID:             "tool.calls.jsonl",
-				Kind:           "jsonl",
-				SchemaVersions: []int{1},
-				Required:       true,
-				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl",
-				RequiredFields: []string{},
+				ID:              "tool.calls.jsonl",
+				Kind:            "jsonl",
+				SchemaVersions:  []int{1},
+				Required:        false,
+				RequiredInModes: []string{"ci"},
+				PathPattern:     ".zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl",
+				RequiredFields:  []string{},
 			},
 			{
-				ID:             "feedback.json",
-				Kind:           "json",
-				SchemaVersions: []int{1},
-				Required:       true,
-				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
-				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "ok", "createdAt"},
+				ID:              "feedback.json",
+				Kind:            "json",
+				SchemaVersions:  []int{1},
+				Required:        false,
+				RequiredInModes: []string{"ci"},
+				PathPattern:     ".zcl/runs/<runId>/attempts/<attemptId>/feedback.json",
+				RequiredFields:  []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "ok", "createdAt"},
 			},
 			{
 				ID:             "notes.jsonl",
@@ -196,7 +199,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "attempt start",
-				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] --json",
+				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
 				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
 			},
 			{
