@@ -141,6 +141,9 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		if err := json.Unmarshal(raw, &existing); err != nil {
 			return nil, err
 		}
+		if existing.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
+			return nil, fmt.Errorf("run.json mismatch: expected artifactLayoutVersion=%d", schema.ArtifactLayoutVersionV1)
+		}
 		if existing.RunID != runID {
 			return nil, fmt.Errorf("run.json mismatch: expected runId=%s", runID)
 		}
@@ -149,10 +152,11 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		}
 	} else if os.IsNotExist(err) {
 		runMeta := schema.RunJSONV1{
-			SchemaVersion: schema.RunSchemaV1,
-			RunID:         runID,
-			SuiteID:       opts.SuiteID,
-			CreatedAt:     now.UTC().Format(time.RFC3339Nano),
+			SchemaVersion:         schema.RunSchemaV1,
+			ArtifactLayoutVersion: schema.ArtifactLayoutVersionV1,
+			RunID:                 runID,
+			SuiteID:               opts.SuiteID,
+			CreatedAt:             now.UTC().Format(time.RFC3339Nano),
 		}
 		if err := store.WriteJSONAtomic(runJSONPath, runMeta); err != nil {
 			return nil, err

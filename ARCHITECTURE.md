@@ -47,6 +47,7 @@ ZCL should stay small: a few composable commands with deterministic JSON output 
 Core commands:
 - `zcl init`: writes a minimal project config and creates `.zcl/` output root.
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--agent-id <runnerAgentId>] [--mode discovery|ci] [--json]`: allocates an attempt dir + canonical IDs and prints env/pointers for the spawned agent.
+- `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`: convenience command that writes `attempt.report.json`, then runs `zcl validate` and `zcl expect`.
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`: allocates attempt dirs for every mission in a suite file and prints env/pointers per mission (for orchestrators).
 - `zcl run -- <cmd> [args...]`: CLI funnel wrapper; appends one trace event per invocation.
 - `zcl feedback --ok|--fail --result <string|json>`: writes `feedback.json` (authoritative outcome).
@@ -56,6 +57,7 @@ Core commands:
 - `zcl contract --json`: prints the supported artifact layout version(s) + trace schema version(s) and required fields (the "surface contract").
 - `zcl doctor`: environment checks (write access, config parse, optional runner availability).
 - `zcl gc`: retention (age/size cleanup, pinning support).
+- `zcl pin --run-id <runId> --on|--off`: pin/unpin a run so `zcl gc` will keep it.
 - `zcl replay <attemptDir> --json`: best-effort replay of a trace to reproduce failures (partial support by tool/op).
 
 Optional (later) commands:

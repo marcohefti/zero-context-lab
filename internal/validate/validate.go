@@ -75,6 +75,14 @@ func validateRun(runDir string, strict bool) Result {
 		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported run.json schemaVersion", runJSONPath)
 		return finalize(res)
 	}
+	if run.ArtifactLayoutVersion == 0 {
+		addErr(&res, "ZCL_E_CONTRACT", "artifactLayoutVersion is missing", runJSONPath)
+		return finalize(res)
+	}
+	if run.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
+		addErr(&res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported artifactLayoutVersion", runJSONPath)
+		return finalize(res)
+	}
 	if strings.TrimSpace(run.RunID) == "" || !ids.IsValidRunID(run.RunID) {
 		addErr(&res, "ZCL_E_CONTRACT", "runId is missing/invalid", runJSONPath)
 		return finalize(res)
@@ -413,6 +421,9 @@ func validateTrace(path string, attemptDir string, attempt schema.AttemptJSONV1,
 				return
 			}
 			addWarn(res, "ZCL_W_CONTRACT", "trace enrichment is not valid json", path)
+		} else if len(ev.Enrichment) > schema.EnrichmentMaxBytesV1 {
+			addErr(res, "ZCL_E_BOUNDS", "trace enrichment exceeds bounds", path)
+			return
 		} else if len(ev.Enrichment) > 0 && ev.Tool == "cli" {
 			validateCLICaptureEnrichment(ev, attemptDir, strict, res, path)
 		}

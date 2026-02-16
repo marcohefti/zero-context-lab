@@ -70,6 +70,9 @@ func Set(opts Opts) (Result, error) {
 	if meta.SchemaVersion != schema.RunSchemaV1 {
 		return Result{}, fmt.Errorf("unsupported run.json schemaVersion=%d", meta.SchemaVersion)
 	}
+	if meta.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
+		return Result{}, fmt.Errorf("unsupported run.json artifactLayoutVersion=%d", meta.ArtifactLayoutVersion)
+	}
 	if meta.RunID != runID {
 		return Result{}, fmt.Errorf("run.json mismatch: expected runId=%s", runID)
 	}

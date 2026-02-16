@@ -52,7 +52,7 @@ func Build(version string) Contract {
 				SchemaVersions: []int{1},
 				Required:       true,
 				PathPattern:    ".zcl/runs/<runId>/run.json",
-				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "createdAt"},
+				RequiredFields: []string{"schemaVersion", "artifactLayoutVersion", "runId", "suiteId", "createdAt"},
 			},
 			{
 				ID:             "suite.json",
@@ -207,7 +207,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "run",
-				Usage:   "zcl run [--capture --capture-max-bytes N] -- <cmd> [args...]",
+				Usage:   "zcl run [--capture [--capture-raw] --capture-max-bytes N] -- <cmd> [args...]",
 				Summary: "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope).",
 			},
 			{

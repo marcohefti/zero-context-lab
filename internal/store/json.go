@@ -43,6 +43,7 @@ func WriteJSONAtomic(path string, v any) error {
 		return err
 	}
 
-	// Atomic on POSIX when within the same filesystem.
-	return os.Rename(tmp, path)
+	// Atomic replace within the same directory. On Windows, this must use a
+	// replace-capable rename primitive.
+	return replaceFile(tmp, path)
 }

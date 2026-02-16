@@ -44,7 +44,7 @@ func writeRun(t *testing.T, runsDir, runID, createdAt string, pinned bool) {
 	if pinned {
 		pinField = ",\"pinned\":true"
 	}
-	body := `{"schemaVersion":1,"runId":"` + runID + `","suiteId":"s","createdAt":"` + createdAt + `"` + pinField + `}`
+	body := `{"schemaVersion":1,"artifactLayoutVersion":1,"runId":"` + runID + `","suiteId":"s","createdAt":"` + createdAt + `"` + pinField + `}`
 	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write run.json: %v", err)
 	}

@@ -4,17 +4,20 @@ import "encoding/json"
 
 // Version constants for v1 artifacts/traces.
 const (
-	ArtifactSchemaV1 = 1
-	TraceSchemaV1    = 1
+	ArtifactSchemaV1        = 1
+	TraceSchemaV1           = 1
+	ArtifactLayoutVersionV1 = 1
 )
 
 // RunJSONV1 is written to: .zcl/runs/<runId>/run.json
 type RunJSONV1 struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	RunID         string `json:"runId"`
-	SuiteID       string `json:"suiteId"`
-	CreatedAt     string `json:"createdAt"` // RFC3339 UTC (use consistent precision)
-	Pinned        bool   `json:"pinned,omitempty"`
+	SchemaVersion int `json:"schemaVersion"`
+	// ArtifactLayoutVersion makes the directory contract explicit in evidence.
+	ArtifactLayoutVersion int    `json:"artifactLayoutVersion"`
+	RunID                 string `json:"runId"`
+	SuiteID               string `json:"suiteId"`
+	CreatedAt             string `json:"createdAt"` // RFC3339 UTC (use consistent precision)
+	Pinned                bool   `json:"pinned,omitempty"`
 }
 
 // AttemptJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/attempt.json

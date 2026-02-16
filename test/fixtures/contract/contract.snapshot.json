@@ -14,6 +14,7 @@
       "pathPattern": ".zcl/runs/<runId>/run.json",
       "requiredFields": [
         "schemaVersion",
+        "artifactLayoutVersion",
         "runId",
         "suiteId",
         "createdAt"
@@ -263,7 +264,7 @@
     },
     {
       "id": "run",
-      "usage": "zcl run [--capture --capture-max-bytes N] -- <cmd> [args...]",
+      "usage": "zcl run [--capture [--capture-raw] --capture-max-bytes N] -- <cmd> [args...]",
       "summary": "Run a command through the ZCL CLI funnel (default passthrough; bounded trace capture; optional full capture + JSON envelope)."
     },
     {

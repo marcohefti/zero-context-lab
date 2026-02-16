@@ -19,11 +19,12 @@ func TestSet_TogglesPinned(t *testing.T) {
 	}
 
 	meta := schema.RunJSONV1{
-		SchemaVersion: 1,
-		RunID:         runID,
-		SuiteID:       "s",
-		CreatedAt:     "2026-02-15T18:00:00Z",
-		Pinned:        false,
+		SchemaVersion:         1,
+		ArtifactLayoutVersion: schema.ArtifactLayoutVersionV1,
+		RunID:                 runID,
+		SuiteID:               "s",
+		CreatedAt:             "2026-02-15T18:00:00Z",
+		Pinned:                false,
 	}
 	b, _ := json.Marshal(meta)
 	if err := os.WriteFile(filepath.Join(runDir, "run.json"), b, 0o644); err != nil {

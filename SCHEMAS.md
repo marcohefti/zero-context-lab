@@ -39,6 +39,7 @@ Required fields:
 ```json
 {
   "schemaVersion": 1,
+  "artifactLayoutVersion": 1,
   "runId": "20260215-180012Z-09c5a6",
   "suiteId": "heftiweb-smoke",
   "createdAt": "2026-02-15T18:00:12.123456789Z",
@@ -216,6 +217,9 @@ Each line is one v1 `CaptureEvent` (secondary evidence index for `zcl run --capt
   "maxBytes": 4194304
 }
 ```
+
+Notes:
+- Captured `captures/**` files are redacted by default. Use `zcl run --capture --capture-raw` to store raw output (unsafe).
 
 ## `attempt.report.json` (v1)
 

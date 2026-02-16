@@ -66,6 +66,7 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 
 	redactions := unionStrings(argvApplied, outApplied.Names, errApplied.Names)
 	warnings := append([]schema.TraceWarningV1(nil), inputWarn...)
+	enrichmentCapped := false
 
 	ev := schema.TraceEventV1{
 		V:         schema.TraceSchemaV1,
@@ -112,8 +113,19 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 			},
 		}
 		if b, err := store.CanonicalJSON(en); err == nil {
-			ev.Enrichment = b
+			if len(b) <= schema.EnrichmentMaxBytesV1 {
+				ev.Enrichment = b
+			} else {
+				enrichmentCapped = true
+			}
 		}
+	}
+	if enrichmentCapped {
+		ev.Warnings = append(ev.Warnings, schema.TraceWarningV1{Code: "ZCL_W_ENRICHMENT_TRUNCATED", Message: "trace enrichment omitted to fit bounds"})
+		if ev.Integrity == nil {
+			ev.Integrity = &schema.TraceIntegrityV1{}
+		}
+		ev.Integrity.Truncated = true
 	}
 
 	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")

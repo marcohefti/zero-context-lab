@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +27,7 @@ func (r Runner) runRun(args []string) int {
 
 	capture := fs.Bool("capture", false, "capture full stdout/stderr to files under the attempt dir (in addition to bounded previews in tool.calls.jsonl)")
 	captureMaxBytes := fs.Int64("capture-max-bytes", schema.CaptureMaxBytesV1, "max bytes to capture per stream when using --capture")
+	captureRaw := fs.Bool("capture-raw", false, "capture raw stdout/stderr (unsafe; may contain secrets)")
 	envelope := fs.Bool("envelope", false, "print a JSON envelope instead of passthrough tool output (requires --json)")
 	jsonOut := fs.Bool("json", false, "print JSON output (required with --envelope)")
 	help := fs.Bool("help", false, "show help")
@@ -42,6 +45,10 @@ func (r Runner) runRun(args []string) int {
 	if !*envelope && *jsonOut {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: --json is only supported with --envelope")
+	}
+	if *captureRaw && !*capture {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: --capture-raw requires --capture")
 	}
 
 	env, err := trace.EnvFromProcess()
@@ -70,49 +77,18 @@ func (r Runner) runRun(args []string) int {
 		errFull io.Writer
 		outRel  string
 		errRel  string
-		outF    *os.File
-		errF    *os.File
-		outBW   *boundedHashWriter
-		errBW   *boundedHashWriter
+		outBuf  *boundedBuffer
+		errBuf  *boundedBuffer
 	)
 	if *capture {
 		if *captureMaxBytes <= 0 {
 			printRunHelp(r.Stderr)
 			return r.failUsage("run: --capture-max-bytes must be > 0")
 		}
-		dir := filepath.Join(env.OutDirAbs, "captures", "cli")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		id := fmt.Sprintf("%d", now.UTC().UnixNano())
-		outRel = filepath.Join("captures", "cli", id+".stdout.log")
-		errRel = filepath.Join("captures", "cli", id+".stderr.log")
-
-		outPath := filepath.Join(env.OutDirAbs, outRel)
-		errPath := filepath.Join(env.OutDirAbs, errRel)
-
-		outF, err = os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		errF, err = os.OpenFile(errPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			_ = outF.Close()
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
-			return 1
-		}
-		defer func() {
-			_ = outF.Sync()
-			_ = errF.Sync()
-			_ = outF.Close()
-			_ = errF.Close()
-		}()
-		outBW = newBoundedHashWriter(outF, *captureMaxBytes)
-		errBW = newBoundedHashWriter(errF, *captureMaxBytes)
-		outFull = outBW
-		errFull = errBW
+		outBuf = newBoundedBuffer(*captureMaxBytes)
+		errBuf = newBoundedBuffer(*captureMaxBytes)
+		outFull = outBuf
+		errFull = errBuf
 	}
 
 	var (
@@ -144,28 +120,74 @@ func (r Runner) runRun(args []string) int {
 		CapturedStderrPath: errRel,
 		CaptureMaxBytes:    *captureMaxBytes,
 	}
-	if outBW != nil {
-		traceRes.CapturedStdoutBytes = outBW.WrittenBytes()
-		traceRes.CapturedStdoutSHA256 = outBW.SumHex()
-		traceRes.CapturedStdoutTruncated = outBW.Truncated()
-	}
-	if errBW != nil {
-		traceRes.CapturedStderrBytes = errBW.WrittenBytes()
-		traceRes.CapturedStderrSHA256 = errBW.SumHex()
-		traceRes.CapturedStderrTruncated = errBW.Truncated()
+	if outBuf != nil || errBuf != nil {
+		dir := filepath.Join(env.OutDirAbs, "captures", "cli")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
+		id := fmt.Sprintf("%d", now.UTC().UnixNano())
+		outRel = filepath.Join("captures", "cli", id+".stdout.log")
+		errRel = filepath.Join("captures", "cli", id+".stderr.log")
+		traceRes.CapturedStdoutPath = outRel
+		traceRes.CapturedStderrPath = errRel
+
+		writeCap := func(rel string, buf *boundedBuffer) (written int64, shaHex string, truncated bool, ok bool) {
+			if buf == nil {
+				return 0, "", false, true
+			}
+			b := buf.Bytes()
+			trunc := buf.Truncated()
+
+			if !*captureRaw {
+				red, _ := redact.Text(string(b))
+				b = []byte(red)
+			}
+			if *captureMaxBytes > 0 && int64(len(b)) > *captureMaxBytes {
+				b = b[:*captureMaxBytes]
+				trunc = true
+			}
+			sum := sha256.Sum256(b)
+			sha := hex.EncodeToString(sum[:])
+
+			path := filepath.Join(env.OutDirAbs, rel)
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			if err != nil {
+				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				return 0, "", false, false
+			}
+			if _, err := f.Write(b); err != nil {
+				_ = f.Close()
+				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				return 0, "", false, false
+			}
+			_ = f.Sync()
+			_ = f.Close()
+			return int64(len(b)), sha, trunc, true
+		}
+
+		var ok bool
+		traceRes.CapturedStdoutBytes, traceRes.CapturedStdoutSHA256, traceRes.CapturedStdoutTruncated, ok = writeCap(outRel, outBuf)
+		if !ok {
+			return 1
+		}
+		traceRes.CapturedStderrBytes, traceRes.CapturedStderrSHA256, traceRes.CapturedStderrTruncated, ok = writeCap(errRel, errBuf)
+		if !ok {
+			return 1
+		}
 	}
 	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		traceRes.SpawnError = "ZCL_E_TIMEOUT"
 	} else if runErr != nil {
 		traceRes.SpawnError = "ZCL_E_SPAWN"
 	}
-	if err := trace.AppendCLIRunEvent(r.Now(), env, argv, traceRes); err != nil {
+	if err := trace.AppendCLIRunEvent(now, env, argv, traceRes); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
 		return 1
 	}
 
 	// Secondary evidence index for capture mode.
-	if *capture {
+	if *capture && outRel != "" && errRel != "" {
 		redArgv := make([]string, 0, len(argv))
 		for _, s := range argv {
 			red, _ := redact.Text(s)
@@ -296,7 +318,7 @@ func attemptCtxForDeadline(now time.Time, attemptDir string) (context.Context, c
 
 func printRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl run [--capture --capture-max-bytes N] -- <cmd> [args...]
-  zcl run --envelope --json [--capture --capture-max-bytes N] -- <cmd> [args...]
+  zcl run [--capture [--capture-raw] --capture-max-bytes N] -- <cmd> [args...]
+  zcl run --envelope --json [--capture [--capture-raw] --capture-max-bytes N] -- <cmd> [args...]
 `)
 }

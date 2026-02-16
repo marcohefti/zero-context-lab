@@ -71,6 +71,9 @@ func Run(opts Opts) (Result, error) {
 		if err := json.Unmarshal(raw, &meta); err != nil {
 			continue
 		}
+		if meta.SchemaVersion != schema.RunSchemaV1 || meta.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
+			continue
+		}
 		createdAt, err := time.Parse(time.RFC3339Nano, meta.CreatedAt)
 		if err != nil {
 			createdAt, _ = time.Parse(time.RFC3339, meta.CreatedAt)

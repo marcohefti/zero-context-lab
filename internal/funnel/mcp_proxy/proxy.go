@@ -269,7 +269,15 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 		}
 		if enrichment != nil {
 			if b, err := store.CanonicalJSON(enrichment); err == nil {
-				ev.Enrichment = b
+				if len(b) <= schema.EnrichmentMaxBytesV1 {
+					ev.Enrichment = b
+				} else {
+					ev.Warnings = append(ev.Warnings, schema.TraceWarningV1{Code: "ZCL_W_ENRICHMENT_TRUNCATED", Message: "trace enrichment omitted to fit bounds"})
+					if ev.Integrity == nil {
+						ev.Integrity = &schema.TraceIntegrityV1{}
+					}
+					ev.Integrity.Truncated = true
+				}
 			}
 		}
 		if err := store.AppendJSONL(tracePath, ev); err != nil {

@@ -32,5 +32,5 @@ func WriteFileAtomic(path string, b []byte) error {
 		return err
 	}
 
-	return os.Rename(tmp, path)
+	return replaceFile(tmp, path)
 }

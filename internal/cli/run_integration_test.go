@@ -140,6 +140,71 @@ func TestRun_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
 	}
 }
 
+func TestRun_CaptureRedactsByDefault(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+
+	openAIKey := "sk-1234567890ABCDEF"
+	payloadOut := "token=" + openAIKey + "\n"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{"run", "--capture", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=" + payloadOut, "exit=0"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	capEv := readSingleCaptureEvent(t, filepath.Join(outDir, "captures.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(outDir, capEv.StdoutPath))
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	if strings.Contains(string(raw), openAIKey) {
+		t.Fatalf("expected captured stdout to be redacted, got: %q", string(raw))
+	}
+	if !strings.Contains(string(raw), "[REDACTED:OPENAI_KEY]") {
+		t.Fatalf("expected captured stdout to include redaction marker, got: %q", string(raw))
+	}
+}
+
+func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+
+	openAIKey := "sk-1234567890ABCDEF"
+	payloadOut := "token=" + openAIKey + "\n"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=" + payloadOut, "exit=0"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	capEv := readSingleCaptureEvent(t, filepath.Join(outDir, "captures.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(outDir, capEv.StdoutPath))
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	if !strings.Contains(string(raw), openAIKey) {
+		t.Fatalf("expected captured stdout to be raw, got: %q", string(raw))
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -204,6 +269,33 @@ func readSingleTraceEvent(t *testing.T, path string) schema.TraceEventV1 {
 	var ev schema.TraceEventV1
 	if err := json.Unmarshal(line, &ev); err != nil {
 		t.Fatalf("unmarshal trace: %v", err)
+	}
+	return ev
+}
+
+func readSingleCaptureEvent(t *testing.T, path string) schema.CaptureEventV1 {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open captures: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() {
+		t.Fatalf("expected one captures line")
+	}
+	line := sc.Bytes()
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	var ev schema.CaptureEventV1
+	if err := json.Unmarshal(line, &ev); err != nil {
+		t.Fatalf("unmarshal capture: %v", err)
+	}
+	if ev.StdoutPath == "" {
+		t.Fatalf("expected stdoutPath")
 	}
 	return ev
 }
