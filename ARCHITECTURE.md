@@ -47,6 +47,7 @@ ZCL should stay small: a few composable commands with deterministic JSON output 
 Core commands:
 - `zcl init`: writes a minimal project config and creates `.zcl/` output root.
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--agent-id <runnerAgentId>] [--mode discovery|ci] [--json]`: allocates an attempt dir + canonical IDs and prints env/pointers for the spawned agent.
+- `zcl suite plan --file <suite.(yaml|yml|json)> --json`: allocates attempt dirs for every mission in a suite file and prints env/pointers per mission (for orchestrators).
 - `zcl run -- <cmd> [args...]`: CLI funnel wrapper; appends one trace event per invocation.
 - `zcl feedback --ok|--fail --result <string|json>`: writes `feedback.json` (authoritative outcome).
 - `zcl report [--strict] <attemptDir|runDir>`: computes `attempt.report.json` from `tool.calls.jsonl` + `feedback.json`.
@@ -54,12 +55,12 @@ Core commands:
 - `zcl contract --json`: prints the supported artifact layout version(s) + trace schema version(s) and required fields (the "surface contract").
 - `zcl doctor`: environment checks (write access, config parse, optional runner availability).
 - `zcl gc`: retention (age/size cleanup, pinning support).
+- `zcl replay <attemptDir> --json`: best-effort replay of a trace to reproduce failures (partial support by tool/op).
 
 Optional (later) commands:
 - `zcl enrich --runner codex`: emits `runner.ref.json` + `runner.metrics.json` without affecting scoring.
 - `zcl note ...`: records bounded/redacted notes or agent self-reports alongside an attempt (secondary evidence; never required for scoring).
 - `zcl mcp proxy ...`: MCP funnel at JSON-RPC boundary (stdio first).
-- `zcl replay <attemptDir>`: best-effort replay of a trace to reproduce failures.
 
 Output rules:
 - Any command intended for automation/agents must support a stable `--json` output mode.

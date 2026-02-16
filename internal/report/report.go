@@ -6,10 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
+	"github.com/marcohefti/zero-context-lab/internal/suite"
 )
 
 type CliError struct {
@@ -37,8 +40,10 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	}
 
 	var okPtr *bool
+	var fb schema.FeedbackJSONV1
+	feedbackPresent := false
 	if fbBytes, err := os.ReadFile(feedbackPath); err == nil {
-		var fb schema.FeedbackJSONV1
+		feedbackPresent = true
 		if err := json.Unmarshal(fbBytes, &fb); err != nil {
 			return schema.AttemptReportJSONV1{}, err
 		}
@@ -55,6 +60,45 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		return schema.AttemptReportJSONV1{}, err
 	}
 
+	tracePresent, traceNonEmpty := false, false
+	if _, err := os.Stat(tracePath); err == nil {
+		tracePresent = true
+		nonEmpty, err := jsonlHasNonEmptyLine(tracePath)
+		if err != nil {
+			if strict {
+				return schema.AttemptReportJSONV1{}, err
+			}
+		} else {
+			traceNonEmpty = nonEmpty
+		}
+	}
+
+	integrity := &schema.AttemptIntegrityV1{
+		TracePresent:          tracePresent,
+		TraceNonEmpty:         traceNonEmpty,
+		FeedbackPresent:       feedbackPresent,
+		FunnelBypassSuspected: feedbackPresent && !traceNonEmpty,
+	}
+
+	var expects *schema.ExpectationResultV1
+	if sf, ok, err := loadSuiteForAttempt(attemptDir); err != nil {
+		if strict {
+			return schema.AttemptReportJSONV1{}, err
+		}
+	} else if ok && feedbackPresent {
+		er := suite.Evaluate(sf, attempt.MissionID, fb)
+		expects = &schema.ExpectationResultV1{
+			Evaluated: er.Evaluated,
+			OK:        er.OK,
+		}
+		if len(er.Failures) > 0 {
+			expects.Failures = make([]schema.ExpectationFailureV1, 0, len(er.Failures))
+			for _, f := range er.Failures {
+				expects.Failures = append(expects.Failures, schema.ExpectationFailureV1{Code: f.Code, Message: f.Message})
+			}
+		}
+	}
+
 	return schema.AttemptReportJSONV1{
 		SchemaVersion: schema.ArtifactSchemaV1,
 		RunID:         attempt.RunID,
@@ -64,6 +108,8 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		ComputedAt:    now.UTC().Format(time.RFC3339Nano),
 		OK:            okPtr,
 		Metrics:       metrics,
+		Integrity:     integrity,
+		Expectations:  expects,
 	}, nil
 }
 
@@ -86,12 +132,19 @@ func computeMetrics(tracePath string, strict bool) (schema.AttemptMetricsV1, err
 	defer func() { _ = f.Close() }()
 
 	var (
-		sc      = bufio.NewScanner(f)
-		metrics schema.AttemptMetricsV1
-		minTS   time.Time
-		maxTS   time.Time
+		sc            = bufio.NewScanner(f)
+		metrics       schema.AttemptMetricsV1
+		minTS         time.Time
+		maxTS         time.Time
+		durs          []int64
+		retryKeyStats = map[string]struct {
+			count    int64
+			failures int64
+		}{}
 	)
 	metrics.FailuresByCode = map[string]int64{}
+	metrics.ToolCallsByTool = map[string]int64{}
+	metrics.ToolCallsByOp = map[string]int64{}
 
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -103,6 +156,17 @@ func computeMetrics(tracePath string, strict bool) (schema.AttemptMetricsV1, err
 			return schema.AttemptMetricsV1{}, err
 		}
 		metrics.ToolCallsTotal++
+		metrics.ToolCallsByTool[ev.Tool]++
+		metrics.ToolCallsByOp[ev.Op]++
+		durs = append(durs, ev.Result.DurationMs)
+
+		key := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
+		st := retryKeyStats[key]
+		st.count++
+		if !ev.Result.OK {
+			st.failures++
+		}
+		retryKeyStats[key] = st
 
 		if !ev.Result.OK {
 			metrics.FailuresTotal++
@@ -149,14 +213,33 @@ func computeMetrics(tracePath string, strict bool) (schema.AttemptMetricsV1, err
 		if strict {
 			return schema.AttemptMetricsV1{}, &CliError{Code: "ZCL_E_MISSING_EVIDENCE", Message: "tool.calls.jsonl is empty"}
 		}
+		metrics.FailuresByCode = nil
+		metrics.ToolCallsByTool = nil
+		metrics.ToolCallsByOp = nil
 		return metrics, nil
 	}
 
 	if !minTS.IsZero() && !maxTS.IsZero() {
 		metrics.WallTimeMs = maxTS.Sub(minTS).Milliseconds()
 	}
+	metrics.DurationMsTotal, metrics.DurationMsMin, metrics.DurationMsMax, metrics.DurationMsAvg, metrics.DurationMsP50, metrics.DurationMsP95 = summarizeDurations(durs)
+
+	var retries int64
+	for _, st := range retryKeyStats {
+		if st.count > 1 && st.failures > 0 {
+			retries += st.count - 1
+		}
+	}
+	metrics.RetriesTotal = retries
+
 	if len(metrics.FailuresByCode) == 0 {
 		metrics.FailuresByCode = nil
+	}
+	if len(metrics.ToolCallsByTool) == 0 {
+		metrics.ToolCallsByTool = nil
+	}
+	if len(metrics.ToolCallsByOp) == 0 {
+		metrics.ToolCallsByOp = nil
 	}
 	return metrics, nil
 }
@@ -167,4 +250,95 @@ func IsCliError(err error, code string) bool {
 		return e.Code == code
 	}
 	return false
+}
+
+func jsonlHasNonEmptyLine(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		if strings.TrimSpace(string(sc.Bytes())) != "" {
+			return true, nil
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func summarizeDurations(durs []int64) (total, min, max, avg, p50, p95 int64) {
+	if len(durs) == 0 {
+		return 0, 0, 0, 0, 0, 0
+	}
+	total = 0
+	min, max = durs[0], durs[0]
+	for _, d := range durs {
+		total += d
+		if d < min {
+			min = d
+		}
+		if d > max {
+			max = d
+		}
+	}
+	avg = total / int64(len(durs))
+
+	sorted := append([]int64(nil), durs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	p50 = quantileMillis(sorted, 0.50)
+	p95 = quantileMillis(sorted, 0.95)
+	return total, min, max, avg, p50, p95
+}
+
+func quantileMillis(sorted []int64, q float64) int64 {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	if n == 1 {
+		return sorted[0]
+	}
+	if q < 0 {
+		q = 0
+	}
+	if q > 1 {
+		q = 1
+	}
+
+	// Linear interpolation between closest ranks.
+	pos := q * float64(n-1)
+	lo := int(pos)
+	hi := lo + 1
+	if hi >= n {
+		return sorted[n-1]
+	}
+	frac := pos - float64(lo)
+	v := float64(sorted[lo]) + (float64(sorted[hi])-float64(sorted[lo]))*frac
+	if v < 0 {
+		return 0
+	}
+	return int64(v + 0.5)
+}
+
+func loadSuiteForAttempt(attemptDir string) (suite.SuiteFileV1, bool, error) {
+	runDir := filepath.Dir(filepath.Dir(attemptDir))
+	suitePath := filepath.Join(runDir, "suite.json")
+	raw, err := os.ReadFile(suitePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return suite.SuiteFileV1{}, false, nil
+		}
+		return suite.SuiteFileV1{}, false, err
+	}
+	var sf suite.SuiteFileV1
+	if err := json.Unmarshal(raw, &sf); err != nil {
+		return suite.SuiteFileV1{}, false, &CliError{Code: "ZCL_E_INVALID_JSON", Message: "suite.json is not valid suite json"}
+	}
+	return sf, true, nil
 }

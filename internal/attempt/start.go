@@ -12,6 +12,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
+	"github.com/marcohefti/zero-context-lab/internal/suite"
 )
 
 type StartOpts struct {
@@ -97,13 +98,12 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 
 	// Optional: snapshot a suite input file into the run directory.
 	if strings.TrimSpace(opts.SuiteFile) != "" {
-		raw, err := os.ReadFile(opts.SuiteFile)
+		parsed, err := suite.ParseFile(opts.SuiteFile)
 		if err != nil {
 			return nil, err
 		}
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, fmt.Errorf("invalid --suite-file json: %w", err)
+		if parsed.Suite.SuiteID != "" && parsed.Suite.SuiteID != opts.SuiteID {
+			return nil, fmt.Errorf("suiteId mismatch: --suite=%s suite-file=%s", opts.SuiteID, parsed.Suite.SuiteID)
 		}
 
 		suiteJSONPath := filepath.Join(runDir, "suite.json")
@@ -112,16 +112,16 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			var existingAny any
-			if err := json.Unmarshal(existing, &existingAny); err != nil {
+			var existingSuite suite.SuiteFileV1
+			if err := json.Unmarshal(existing, &existingSuite); err != nil {
 				return nil, err
 			}
 			// Compare semantic JSON, not bytes (snapshot is canonicalized by WriteJSONAtomic).
-			if !reflect.DeepEqual(existingAny, v) {
+			if !reflect.DeepEqual(existingSuite, parsed.Suite) {
 				return nil, fmt.Errorf("suite.json mismatch for runId=%s", runID)
 			}
 		} else if os.IsNotExist(err) {
-			if err := store.WriteJSONAtomic(suiteJSONPath, v); err != nil {
+			if err := store.WriteJSONAtomic(suiteJSONPath, parsed.CanonicalJSON); err != nil {
 				return nil, err
 			}
 		} else if err != nil {

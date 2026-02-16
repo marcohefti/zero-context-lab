@@ -50,7 +50,37 @@ Required fields:
 
 Path: `.zcl/runs/<runId>/suite.json`
 
-If `zcl attempt start --suite-file <path>` is used, ZCL snapshots the suite JSON here (canonicalized JSON for diffability).
+If `zcl attempt start --suite-file <path>` or `zcl suite plan --file <path>` is used, ZCL snapshots the parsed suite file here as **canonical JSON** for diffability.
+
+Accepted input formats:
+- JSON (`.json`)
+- YAML (`.yaml`, `.yml`)
+
+Minimal v1 suite shape (example):
+```json
+{
+  "version": 1,
+  "suiteId": "heftiweb-smoke",
+  "defaults": {
+    "timeoutMs": 120000,
+    "mode": "discovery"
+  },
+  "missions": [
+    {
+      "missionId": "latest-blog-title",
+      "prompt": "Navigate to https://heftiweb.ch -> Blog -> latest article. Record ARTICLE_TITLE=<title> using zcl feedback.",
+      "tags": ["browser", "navigation", "smoke"],
+      "expects": {
+        "ok": true,
+        "result": {
+          "type": "string",
+          "pattern": "^ARTICLE_TITLE=.*"
+        }
+      }
+    }
+  ]
+}
+```
 
 ## `attempt.json` (v1)
 
@@ -171,6 +201,11 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   "attemptId": "001-latest-blog-title-r1",
   "computedAt": "2026-02-15T18:00:55.123456789Z",
   "ok": true,
+  "integrity": {
+    "tracePresent": true,
+    "traceNonEmpty": true,
+    "feedbackPresent": true
+  },
   "metrics": {
     "toolCallsTotal": 3,
     "failuresTotal": 0,
@@ -180,13 +215,29 @@ Required fields (metrics fields may be zero when computed from partial evidence 
     "retriesTotal": 0,
     "timeoutsTotal": 0,
     "wallTimeMs": 42000,
+    "durationMsTotal": 123,
+    "durationMsMin": 1,
+    "durationMsMax": 80,
+    "durationMsAvg": 41,
+    "durationMsP50": 40,
+    "durationMsP95": 79,
     "outBytesTotal": 12345,
     "errBytesTotal": 12,
     "outPreviewTruncations": 0,
-    "errPreviewTruncations": 0
+    "errPreviewTruncations": 0,
+    "toolCallsByTool": {
+      "cli": 3
+    },
+    "toolCallsByOp": {
+      "exec": 3
+    }
   }
 }
 ```
+
+Optional fields:
+- `integrity`: cheap funnel integrity signals (`tracePresent`, `traceNonEmpty`, `feedbackPresent`, `funnelBypassSuspected`).
+- `expectations`: when `suite.json` exists and contains `expects` for the mission, `zcl report` evaluates them against `feedback.json`.
 
 ## `runner.ref.json` (optional; v1)
 

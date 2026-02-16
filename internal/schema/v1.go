@@ -58,6 +58,27 @@ type AttemptReportJSONV1 struct {
 	OK *bool `json:"ok,omitempty"` // copied from feedback when present
 
 	Metrics AttemptMetricsV1 `json:"metrics"`
+
+	Integrity    *AttemptIntegrityV1  `json:"integrity,omitempty"`
+	Expectations *ExpectationResultV1 `json:"expectations,omitempty"`
+}
+
+type AttemptIntegrityV1 struct {
+	TracePresent          bool `json:"tracePresent"`
+	TraceNonEmpty         bool `json:"traceNonEmpty"`
+	FeedbackPresent       bool `json:"feedbackPresent"`
+	FunnelBypassSuspected bool `json:"funnelBypassSuspected,omitempty"`
+}
+
+type ExpectationResultV1 struct {
+	Evaluated bool                   `json:"evaluated"`
+	OK        bool                   `json:"ok"`
+	Failures  []ExpectationFailureV1 `json:"failures,omitempty"`
+}
+
+type ExpectationFailureV1 struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type AttemptMetricsV1 struct {
@@ -68,11 +89,21 @@ type AttemptMetricsV1 struct {
 	TimeoutsTotal  int64            `json:"timeoutsTotal"`
 	WallTimeMs     int64            `json:"wallTimeMs"`
 
+	DurationMsTotal int64 `json:"durationMsTotal"`
+	DurationMsMin   int64 `json:"durationMsMin"`
+	DurationMsMax   int64 `json:"durationMsMax"`
+	DurationMsAvg   int64 `json:"durationMsAvg"`
+	DurationMsP50   int64 `json:"durationMsP50"`
+	DurationMsP95   int64 `json:"durationMsP95"`
+
 	OutBytesTotal int64 `json:"outBytesTotal"`
 	ErrBytesTotal int64 `json:"errBytesTotal"`
 
 	OutPreviewTruncations int64 `json:"outPreviewTruncations"`
 	ErrPreviewTruncations int64 `json:"errPreviewTruncations"`
+
+	ToolCallsByTool map[string]int64 `json:"toolCallsByTool,omitempty"`
+	ToolCallsByOp   map[string]int64 `json:"toolCallsByOp,omitempty"`
 }
 
 // TraceEventV1 is one line in: tool.calls.jsonl

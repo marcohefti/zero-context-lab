@@ -6,6 +6,11 @@
   "attemptId": "001-latest-blog-title-r1",
   "computedAt": "2026-02-15T18:00:10Z",
   "ok": false,
+  "integrity": {
+    "tracePresent": true,
+    "traceNonEmpty": true,
+    "feedbackPresent": true
+  },
   "metrics": {
     "toolCallsTotal": 2,
     "failuresTotal": 1,
@@ -15,10 +20,22 @@
     "retriesTotal": 0,
     "timeoutsTotal": 0,
     "wallTimeMs": 1000,
+    "durationMsTotal": 15,
+    "durationMsMin": 5,
+    "durationMsMax": 10,
+    "durationMsAvg": 7,
+    "durationMsP50": 8,
+    "durationMsP95": 10,
     "outBytesTotal": 6,
     "errBytesTotal": 0,
     "outPreviewTruncations": 0,
-    "errPreviewTruncations": 0
+    "errPreviewTruncations": 0,
+    "toolCallsByTool": {
+      "echo": 1,
+      "false": 1
+    },
+    "toolCallsByOp": {
+      "exec": 2
+    }
   }
 }
-

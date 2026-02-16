@@ -22,8 +22,10 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/funnel/mcp_proxy"
 	"github.com/marcohefti/zero-context-lab/internal/gc"
 	"github.com/marcohefti/zero-context-lab/internal/note"
+	"github.com/marcohefti/zero-context-lab/internal/replay"
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
+	"github.com/marcohefti/zero-context-lab/internal/suite"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
@@ -83,6 +85,10 @@ func (r Runner) Run(args []string) int {
 		return r.runRun(args[1:])
 	case "attempt":
 		return r.runAttempt(args[1:])
+	case "suite":
+		return r.runSuite(args[1:])
+	case "replay":
+		return r.runReplay(args[1:])
 	case "version":
 		fmt.Fprintf(r.Stdout, "%s\n", r.Version)
 		return 0
@@ -164,6 +170,150 @@ func (r Runner) runAttempt(args []string) int {
 		printAttemptHelp(r.Stderr)
 		return 2
 	}
+}
+
+func (r Runner) runSuite(args []string) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		printSuiteHelp(r.Stdout)
+		return 0
+	}
+	switch args[0] {
+	case "plan":
+		return r.runSuitePlan(args[1:])
+	default:
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown suite subcommand %q\n", args[0])
+		printSuiteHelp(r.Stderr)
+		return 2
+	}
+}
+
+func (r Runner) runSuitePlan(args []string) int {
+	fs := flag.NewFlagSet("suite plan", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	file := fs.String("file", "", "suite file path (.json|.yaml|.yml) (required)")
+	runID := fs.String("run-id", "", "existing run id (optional)")
+	mode := fs.String("mode", "", "optional mode override: discovery|ci (default from suite file)")
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("suite plan: invalid flags")
+	}
+	if *help {
+		printSuitePlanHelp(r.Stdout)
+		return 0
+	}
+	if !*jsonOut {
+		printSuitePlanHelp(r.Stderr)
+		return r.failUsage("suite plan: require --json for stable output")
+	}
+
+	m, err := config.LoadMerged(*outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+
+	parsed, err := suite.ParseFile(strings.TrimSpace(*file))
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		return 2
+	}
+
+	modeStr := strings.TrimSpace(*mode)
+	if modeStr == "" {
+		modeStr = parsed.Suite.Defaults.Mode
+	}
+
+	type plannedMission struct {
+		MissionID string            `json:"missionId"`
+		Prompt    string            `json:"prompt,omitempty"`
+		AttemptID string            `json:"attemptId"`
+		OutDir    string            `json:"outDir"`
+		OutDirAbs string            `json:"outDirAbs"`
+		Env       map[string]string `json:"env"`
+	}
+	type planResult struct {
+		OK        bool             `json:"ok"`
+		RunID     string           `json:"runId"`
+		SuiteID   string           `json:"suiteId"`
+		Mode      string           `json:"mode"`
+		OutRoot   string           `json:"outRoot"`
+		Missions  []plannedMission `json:"missions"`
+		CreatedAt string           `json:"createdAt"`
+	}
+
+	now := r.Now()
+	rid := strings.TrimSpace(*runID)
+	var missions []plannedMission
+	for _, sm := range parsed.Suite.Missions {
+		ar, err := attempt.Start(now, attempt.StartOpts{
+			OutRoot:   m.OutRoot,
+			RunID:     rid,
+			SuiteID:   parsed.Suite.SuiteID,
+			MissionID: sm.MissionID,
+			Mode:      modeStr,
+			Retry:     1,
+			Prompt:    sm.Prompt,
+			SuiteFile: strings.TrimSpace(*file),
+		})
+		if err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+			return 2
+		}
+		rid = ar.RunID
+		missions = append(missions, plannedMission{
+			MissionID: sm.MissionID,
+			Prompt:    sm.Prompt,
+			AttemptID: ar.AttemptID,
+			OutDir:    ar.OutDir,
+			OutDirAbs: ar.OutDirAbs,
+			Env:       ar.Env,
+		})
+	}
+
+	return r.writeJSON(planResult{
+		OK:        true,
+		RunID:     rid,
+		SuiteID:   parsed.Suite.SuiteID,
+		Mode:      modeStr,
+		OutRoot:   m.OutRoot,
+		Missions:  missions,
+		CreatedAt: now.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (r Runner) runReplay(args []string) int {
+	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("replay: invalid flags")
+	}
+	if *help {
+		printReplayHelp(r.Stdout)
+		return 0
+	}
+	if !*jsonOut {
+		printReplayHelp(r.Stderr)
+		return r.failUsage("replay: require --json for stable output")
+	}
+
+	rest := fs.Args()
+	if len(rest) != 1 {
+		printReplayHelp(r.Stderr)
+		return r.failUsage("replay: require exactly one <attemptDir>")
+	}
+	res, err := replay.ReplayAttempt(context.Background(), rest[0])
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	return r.writeJSON(res)
 }
 
 func (r Runner) runFeedback(args []string) int {
@@ -722,10 +872,12 @@ Usage:
   zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl suite plan --file <suite.(yaml|yml|json)> --json
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
   zcl validate [--strict] [--json] <attemptDir|runDir>
+  zcl replay --json <attemptDir>
   zcl doctor [--json]
   zcl gc [--dry-run] [--json]
   zcl enrich --runner codex --rollout <path> [<attemptDir>]
@@ -736,10 +888,12 @@ Commands:
   init            Initialize the project (.zcl output root + zcl.config.json).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
+  suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
   validate         Validate artifact integrity with typed error codes.
+  replay           Best-effort replay of tool.calls.jsonl (use --json).
   doctor           Check environment/config sanity for running ZCL.
   gc               Retention cleanup under .zcl/runs (supports pinning).
   enrich           Optional runner enrichment (does not affect scoring).
@@ -769,13 +923,31 @@ func printAttemptHelp(w io.Writer) {
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
+	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--out-root .zcl] [--retry 1] --json
+`)
+}
+
+func printSuiteHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl suite plan --file <suite.(yaml|yml|json)> --json
+`)
+}
+
+func printSuitePlanHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--out-root .zcl] --json
+`)
+}
+
+func printReplayHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl replay --json <attemptDir>
 `)
 }
 
 func printRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl run -- <cmd> [args...]
+	  zcl run -- <cmd> [args...]
 `)
 }
 

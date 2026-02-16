@@ -32,6 +32,7 @@ Repo validation (must be green after meaningful changes):
 1. Initialize: `zcl init`
 2. Start attempt (JSON output is required for automation):
    - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --json`
+   - Or batch-plan a full suite: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
 3. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
@@ -43,6 +44,7 @@ Repo validation (must be green after meaningful changes):
 6. Compute and validate:
    - `zcl report --strict <attemptDir|runDir>`
    - `zcl validate --strict <attemptDir|runDir>`
+   - Optional: reproduce from trace: `zcl replay --json <attemptDir>`
 
 ## Artifact Layout (Default)
 
@@ -110,4 +112,3 @@ What it runs:
 - gofmt check
 - `go test ./...`, `go vet ./...`
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
-

@@ -14,7 +14,7 @@ func TestStart_WritesPromptAndSuiteSnapshotWhenProvided(t *testing.T) {
 	outRoot := filepath.Join(dir, ".zcl")
 
 	suiteFile := filepath.Join(dir, "suite.input.json")
-	if err := os.WriteFile(suiteFile, []byte("{\"b\":2,\"a\":1}\n"), 0o644); err != nil {
+	if err := os.WriteFile(suiteFile, []byte("{\"version\":1,\"suiteId\":\"heftiweb-smoke\",\"missions\":[{\"missionId\":\"latest-blog-title\"}]}\n"), 0o644); err != nil {
 		t.Fatalf("write suite input: %v", err)
 	}
 

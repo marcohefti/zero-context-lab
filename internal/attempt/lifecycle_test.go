@@ -15,7 +15,7 @@ func TestStart_LifecycleTwoAttemptsStableAndNoTmpFilesLeft(t *testing.T) {
 	outRoot := filepath.Join(dir, ".zcl")
 
 	suiteFile := filepath.Join(dir, "suite.input.json")
-	if err := os.WriteFile(suiteFile, []byte("{\"version\":1,\"suiteId\":\"heftiweb-smoke\"}\n"), 0o644); err != nil {
+	if err := os.WriteFile(suiteFile, []byte("{\"version\":1,\"suiteId\":\"heftiweb-smoke\",\"missions\":[{\"missionId\":\"latest-blog-title\"}]}\n"), 0o644); err != nil {
 		t.Fatalf("write suite input: %v", err)
 	}
 

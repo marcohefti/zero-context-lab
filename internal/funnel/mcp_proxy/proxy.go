@@ -129,23 +129,42 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 		}
 
 		op := normalizeMCPMethod(info.method)
+		unknownMethod := false
 		if op == "" {
-			continue
+			op = "unknown"
+			unknownMethod = true
 		}
 
 		okRes := msg["error"] == nil
 		code := ""
+		var enrichment any
 		if !okRes {
 			code = "MCP_ERROR"
+			if em, ok := msg["error"].(map[string]any); ok {
+				if c, ok := em["code"].(float64); ok {
+					code = fmt.Sprintf("MCP_%d", int64(c))
+				}
+				enrichment = map[string]any{
+					"mcpError": map[string]any{
+						"code":    em["code"],
+						"message": em["message"],
+					},
+				}
+			}
+		}
+		if unknownMethod {
+			if enrichment == nil {
+				enrichment = map[string]any{}
+			}
+			if m, ok := enrichment.(map[string]any); ok {
+				m["mcpMethod"] = info.method
+			}
 		}
 
 		input := info.input
 		inputTruncated := false
-		// Keep input bounded and validate-friendly even if caller passes a smaller preview cap.
-		inputMax := maxPreviewBytes
-		if inputMax > schema.ToolInputMaxBytesV1 {
-			inputMax = schema.ToolInputMaxBytesV1
-		}
+		// Tool input is bounded by ToolInputMaxBytesV1 (independent of preview caps).
+		inputMax := schema.ToolInputMaxBytesV1
 		if len(input) > inputMax {
 			input = input[:inputMax]
 			inputTruncated = true
@@ -187,9 +206,20 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 				OutPreview: outStr,
 			},
 			RedactionsApplied: unionStrings(inApplied.Names, a.Names),
+			Warnings: func() []schema.TraceWarningV1 {
+				if !unknownMethod {
+					return nil
+				}
+				return []schema.TraceWarningV1{{Code: "ZCL_W_MCP_UNKNOWN_METHOD", Message: "unrecognized MCP method; recorded as op=unknown"}}
+			}(),
 			Integrity: &schema.TraceIntegrityV1{
 				Truncated: inputTruncated || inCapped || outTruncated || outCapped,
 			},
+		}
+		if enrichment != nil {
+			if b, err := store.CanonicalJSON(enrichment); err == nil {
+				ev.Enrichment = b
+			}
 		}
 		if err := store.AppendJSONL(tracePath, ev); err != nil {
 			return err
