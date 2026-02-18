@@ -19,6 +19,7 @@ type WriteOpts struct {
 	Result         string
 	ResultJSON     string
 	Classification string
+	DecisionTags   []string
 }
 
 func Write(now time.Time, env trace.Env, opts WriteOpts) error {
@@ -32,6 +33,12 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 	classification := strings.TrimSpace(opts.Classification)
 	if classification != "" && !schema.IsValidClassificationV1(classification) {
 		return fmt.Errorf("invalid --classification (expected missing_primitive|naming_ux|output_shape|already_possible_better_way)")
+	}
+	decisionTags := schema.NormalizeDecisionTagsV1(opts.DecisionTags)
+	for _, tag := range decisionTags {
+		if !schema.IsValidDecisionTagV1(tag) {
+			return fmt.Errorf("invalid --decision-tag %q", tag)
+		}
 	}
 
 	if err := requireEvidenceForMode(env); err != nil {
@@ -76,6 +83,7 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		Result:            resultText,
 		ResultJSON:        resultRaw,
 		Classification:    classification,
+		DecisionTags:      decisionTags,
 		CreatedAt:         now.UTC().Format(time.RFC3339Nano),
 		RedactionsApplied: applied,
 	}

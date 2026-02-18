@@ -205,6 +205,62 @@ func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
 	}
 }
 
+func TestRun_TimeoutStartFirstToolCall_DoesNotExpireBeforeFirstAction(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+
+	// Simulate long queue delay before first action; first_tool_call should anchor timeout at first funnel call.
+	meta := schema.AttemptJSONV1{
+		SchemaVersion: schema.AttemptSchemaV1,
+		RunID:         os.Getenv("ZCL_RUN_ID"),
+		SuiteID:       os.Getenv("ZCL_SUITE_ID"),
+		MissionID:     os.Getenv("ZCL_MISSION_ID"),
+		AttemptID:     os.Getenv("ZCL_ATTEMPT_ID"),
+		Mode:          "discovery",
+		StartedAt:     "2026-01-01T00:00:00Z",
+		TimeoutMs:     2000,
+		TimeoutStart:  schema.TimeoutStartFirstToolCallV1,
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal attempt.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "attempt.json"), b, 0o644); err != nil {
+		t.Fatalf("write attempt.json: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 18, 8, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	// First call should execute (not pre-expire).
+	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=ok\n", "exit=0"})
+	if code != 0 {
+		t.Fatalf("expected first call to succeed, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	ev := readSingleTraceEvent(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	if ev.Result.Code != "" {
+		t.Fatalf("expected first call without timeout code, got=%q", ev.Result.Code)
+	}
+	raw, err := os.ReadFile(filepath.Join(outDir, "attempt.json"))
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var updated schema.AttemptJSONV1
+	if err := json.Unmarshal(raw, &updated); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	if updated.TimeoutStartedAt == "" {
+		t.Fatalf("expected timeoutStartedAt to be anchored on first call")
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return

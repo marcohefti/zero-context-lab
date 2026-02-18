@@ -13,7 +13,8 @@ We also need guardrails so runs produce valid primary evidence (trace + feedback
   - Stable per-attempt summary including runner exit + finish/validate/expect results.
 - Strong guardrails:
   - Refuse to run if `attempt.json` IDs don't match the planned `ZCL_*` env.
-  - Enforce attempt deadlines (`attempt.json.timeoutMs`) via context deadline; classify as `ZCL_E_TIMEOUT`.
+  - Enforce attempt deadlines (`attempt.json.timeoutMs`) with configurable anchors (`attempt_start` or `first_tool_call`).
+  - Optional blind mode rejects contaminated prompts with typed evidence (`ZCL_E_CONTAMINATED_PROMPT`).
 
 ## Non-goals
 - ZCL does not interpret runner logs/transcripts for scoring.
@@ -23,30 +24,34 @@ We also need guardrails so runs produce valid primary evidence (trace + feedback
 ## Where The Logic Lives
 - CLI entry point: `internal/cli/cli.go`
 - Implementation: `internal/cli/cmd_suite_run.go`
-- Planning: `internal/planner/suite_plan.go` (calls `attempt.Start` per mission)
+- Suite parsing: `internal/suite/parse.go`
 - Attempt allocation + artifacts: `internal/attempt/start.go`
 - Finish pipeline: `internal/report/report.go`, `internal/validate/validate.go`, `internal/expect/expect.go`
 - Tests: `internal/cli/suite_run_integration_test.go`
 
 ## Runtime Flow
-Per `zcl suite run --file ... --json -- <runner-cmd> ...`:
+Per `zcl suite run --file ... --parallel N --total M --json -- <runner-cmd> ...`:
 
-1. Plan the suite:
-   - Parse suite file and allocate attempt dirs via `planner.PlanSuite(...)`.
-   - Each mission gets an `attempt.json`, optional `prompt.txt`, and a `ZCL_*` env map (including `ZCL_TMP_DIR`).
-2. For each planned mission attempt:
+1. Parse suite:
+   - Read suite file once and resolve defaults/overrides (`mode`, `timeoutMs`, `timeoutStart`, `blind`).
+2. Execute in waves:
+   - Build mission queue (`--total`, cycling missions when `total > mission count`).
+   - Allocate attempts just-in-time before each runner spawn (`attempt.Start(...)`) to avoid pre-expiry.
+   - Run up to `--parallel` attempts concurrently per wave.
+3. For each allocated attempt:
    - Build runner env:
      - start from current process env
-     - overlay planned `ZCL_*` env
+     - overlay attempt `ZCL_*` env
      - optionally set `ZCL_PROMPT_PATH=<attemptDir>/prompt.txt` if present
    - Guardrail: read `attempt.json` and verify IDs match env (refuse to spawn on mismatch).
+   - Blind mode (when enabled): reject prompt contamination and write typed evidence (`tool.calls.jsonl` + `feedback.json`) without spawning the runner.
    - Spawn runner:
      - stream runner stdout/stderr to ZCL stderr
-     - apply attempt deadline (context derived from `attempt.json.startedAt + timeoutMs`)
-3. Finish attempt:
+     - apply attempt deadline semantics from attempt timeout config
+4. Finish attempt:
    - Build and write `attempt.report.json`
    - Run `validate` and `expect`
-4. Emit one JSON summary on stdout and exit:
+5. Emit one JSON summary on stdout and exit:
    - `0` if all attempts OK
    - `2` if suite completed but some attempts failed finish/expect/validate/outcome
    - `1` for harness errors (spawn/I/O/timeouts/runner non-zero exit)
@@ -63,7 +68,7 @@ Per `zcl suite run --file ... --json -- <runner-cmd> ...`:
 - Human-readable progress (per mission) is emitted to stderr:
   - mission id, attempt id, runner basename
 - Machine-readable summary is emitted once to stdout:
-  - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, etc), and finish results.
+  - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, `ZCL_E_CONTAMINATED_PROMPT`), and finish results.
 
 ## Testing Expectations
 - Happy path:
@@ -72,4 +77,3 @@ Per `zcl suite run --file ... --json -- <runner-cmd> ...`:
 - Missing evidence:
   - runner does not write `feedback.json`
   - suite run returns exit `2` and summary indicates report/validate failures.
-

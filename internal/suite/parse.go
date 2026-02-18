@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcohefti/zero-context-lab/internal/blind"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
+	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,6 +53,12 @@ func ParseFile(path string) (ParsedSuite, error) {
 
 	if s.Defaults.Mode != "" && s.Defaults.Mode != "discovery" && s.Defaults.Mode != "ci" {
 		return ParsedSuite{}, fmt.Errorf("invalid defaults.mode (expected discovery|ci)")
+	}
+	if !schema.IsValidTimeoutStartV1(s.Defaults.TimeoutStart) {
+		return ParsedSuite{}, fmt.Errorf("invalid defaults.timeoutStart (expected attempt_start|first_tool_call)")
+	}
+	if len(s.Defaults.BlindTerms) > 0 {
+		s.Defaults.BlindTerms = blind.NormalizeTerms(s.Defaults.BlindTerms)
 	}
 
 	if len(s.Missions) == 0 {

@@ -24,6 +24,9 @@ type StartOpts struct {
 	Retry         int
 	Prompt        string
 	TimeoutMs     int64
+	TimeoutStart  string
+	Blind         bool
+	BlindTerms    []string
 	SuiteSnapshot any
 }
 
@@ -194,9 +197,24 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		AgentID:       opts.AgentID,
 		Mode:          mode,
 		StartedAt:     now.UTC().Format(time.RFC3339Nano),
+		Blind:         opts.Blind,
+		BlindTerms:    append([]string(nil), opts.BlindTerms...),
 	}
 	if opts.TimeoutMs > 0 {
+		timeoutStart := strings.TrimSpace(opts.TimeoutStart)
+		if timeoutStart == "" {
+			// Discovery mode should not burn budget before first mission action.
+			if mode == "ci" {
+				timeoutStart = schema.TimeoutStartAttemptStartV1
+			} else {
+				timeoutStart = schema.TimeoutStartFirstToolCallV1
+			}
+		}
+		if !schema.IsValidTimeoutStartV1(timeoutStart) {
+			return nil, fmt.Errorf("invalid --timeout-start (expected attempt_start|first_tool_call)")
+		}
 		attemptMeta.TimeoutMs = opts.TimeoutMs
+		attemptMeta.TimeoutStart = timeoutStart
 	}
 
 	// Scratch dir under outRoot/tmp (project-local).

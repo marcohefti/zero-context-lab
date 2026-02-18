@@ -195,6 +195,27 @@ func validateAttempt(attemptDir string, strict bool) Result {
 			addWarn(&res, "ZCL_W_CONTRACT", "attempt startedAt is not RFC3339", attemptJSONPath)
 		}
 	}
+	if !schema.IsValidTimeoutStartV1(attempt.TimeoutStart) {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt timeoutStart is invalid", attemptJSONPath)
+		return finalize(res)
+	}
+	if strings.TrimSpace(attempt.TimeoutStartedAt) != "" {
+		if _, err := time.Parse(time.RFC3339Nano, attempt.TimeoutStartedAt); err != nil {
+			if _, err2 := time.Parse(time.RFC3339, attempt.TimeoutStartedAt); err2 != nil {
+				if strict {
+					addErr(&res, "ZCL_E_CONTRACT", "attempt timeoutStartedAt is not RFC3339", attemptJSONPath)
+					return finalize(res)
+				}
+				addWarn(&res, "ZCL_W_CONTRACT", "attempt timeoutStartedAt is not RFC3339", attemptJSONPath)
+			}
+		}
+	}
+	for _, t := range attempt.BlindTerms {
+		if strings.TrimSpace(t) == "" {
+			addErr(&res, "ZCL_E_CONTRACT", "attempt blindTerms contains empty entry", attemptJSONPath)
+			return finalize(res)
+		}
+	}
 	if strict {
 		if ids.SanitizeComponent(attempt.SuiteID) != attempt.SuiteID {
 			addErr(&res, "ZCL_E_CONTRACT", "attempt suiteId is not canonicalized", attemptJSONPath)
@@ -315,6 +336,12 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		if strings.TrimSpace(rep.Classification) != "" && !schema.IsValidClassificationV1(rep.Classification) {
 			addErr(&res, "ZCL_E_CONTRACT", "attempt.report.json classification is invalid", reportPath)
 			return finalize(res)
+		}
+		for _, tag := range rep.DecisionTags {
+			if !schema.IsValidDecisionTagV1(tag) {
+				addErr(&res, "ZCL_E_CONTRACT", "attempt.report.json decisionTags contains invalid tag", reportPath)
+				return finalize(res)
+			}
 		}
 		if strings.TrimSpace(rep.Artifacts.AttemptJSON) == "" || strings.TrimSpace(rep.Artifacts.TraceJSONL) == "" || strings.TrimSpace(rep.Artifacts.FeedbackJSON) == "" {
 			if enforce {
@@ -568,6 +595,12 @@ func validateFeedback(path string, attempt schema.AttemptJSONV1, strict bool, re
 	if strings.TrimSpace(fb.Classification) != "" && !schema.IsValidClassificationV1(fb.Classification) {
 		addErr(res, "ZCL_E_CONTRACT", "feedback classification is invalid", path)
 		return
+	}
+	for _, tag := range fb.DecisionTags {
+		if !schema.IsValidDecisionTagV1(tag) {
+			addErr(res, "ZCL_E_CONTRACT", "feedback decisionTags contains invalid tag", path)
+			return
+		}
 	}
 }
 

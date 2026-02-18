@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
+	"github.com/marcohefti/zero-context-lab/internal/blind"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/contract"
 	"github.com/marcohefti/zero-context-lab/internal/doctor"
@@ -208,6 +209,9 @@ func (r Runner) runSuitePlan(args []string) int {
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	mode := fs.String("mode", "", "optional mode override: discovery|ci (default from suite file)")
 	timeoutMs := fs.Int64("timeout-ms", 0, "optional attempt timeout override in ms (default from suite defaults.timeoutMs)")
+	timeoutStart := fs.String("timeout-start", "", "optional timeout anchor override: attempt_start|first_tool_call")
+	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
+	blindTerms := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
@@ -230,12 +234,30 @@ func (r Runner) runSuitePlan(args []string) int {
 		return 1
 	}
 
+	var blindPtr *bool
+	if strings.TrimSpace(*blindOverride) != "" {
+		switch strings.ToLower(strings.TrimSpace(*blindOverride)) {
+		case "on", "true", "1", "yes":
+			v := true
+			blindPtr = &v
+		case "off", "false", "0", "no":
+			v := false
+			blindPtr = &v
+		default:
+			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite plan: invalid --blind (expected on|off)\n")
+			return 2
+		}
+	}
+
 	res, err := planner.PlanSuite(r.Now(), planner.SuitePlanOpts{
-		OutRoot:   m.OutRoot,
-		RunID:     strings.TrimSpace(*runID),
-		SuiteFile: strings.TrimSpace(*file),
-		Mode:      strings.TrimSpace(*mode),
-		TimeoutMs: *timeoutMs,
+		OutRoot:      m.OutRoot,
+		RunID:        strings.TrimSpace(*runID),
+		SuiteFile:    strings.TrimSpace(*file),
+		Mode:         strings.TrimSpace(*mode),
+		TimeoutMs:    *timeoutMs,
+		TimeoutStart: strings.TrimSpace(*timeoutStart),
+		Blind:        blindPtr,
+		BlindTerms:   blind.ParseTermsCSV(*blindTerms),
 	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
@@ -345,6 +367,9 @@ func (r Runner) runFeedback(args []string) int {
 	result := fs.String("result", "", "result string (bounded/redacted)")
 	resultJSON := fs.String("result-json", "", "result json (bounded/canonicalized)")
 	classification := fs.String("classification", "", "optional friction classification: missing_primitive|naming_ux|output_shape|already_possible_better_way")
+	decisionTagsCSV := fs.String("decision-tags", "", "comma-separated decision tags")
+	var decisionTags stringListFlag
+	fs.Var(&decisionTags, "decision-tag", "decision tag (repeatable)")
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
@@ -365,11 +390,22 @@ func (r Runner) runFeedback(args []string) int {
 		return r.failUsage("feedback: missing ZCL attempt context (need ZCL_* env)")
 	}
 
+	if strings.TrimSpace(*decisionTagsCSV) != "" {
+		for _, s := range strings.Split(*decisionTagsCSV, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			decisionTags = append(decisionTags, s)
+		}
+	}
+
 	if err := feedback.Write(r.Now(), env, feedback.WriteOpts{
 		OK:             *ok,
 		Result:         *result,
 		ResultJSON:     *resultJSON,
 		Classification: *classification,
+		DecisionTags:   []string(decisionTags),
 	}); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
 		return 2
@@ -438,6 +474,9 @@ func (r Runner) runAttemptStart(args []string) int {
 	agentID := fs.String("agent-id", "", "runner agent id (optional)")
 	mode := fs.String("mode", "discovery", "run mode: discovery|ci")
 	timeoutMs := fs.Int64("timeout-ms", 0, "attempt timeout in ms (optional; also used by funnels as a mission deadline)")
+	timeoutStart := fs.String("timeout-start", "", "timeout anchor: attempt_start|first_tool_call (default: first_tool_call in discovery, attempt_start in ci)")
+	blindMode := fs.Bool("blind", false, "enable zero-context prompt contamination checks")
+	blindTerms := fs.String("blind-terms", "", "comma-separated contamination terms (default harness terms)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	retry := fs.Int("retry", 1, "attempt retry number (default 1)")
 	envFile := fs.String("env-file", "", "optional path to write attempt env in sh/dotenv format (does not affect JSON output)")
@@ -483,6 +522,9 @@ func (r Runner) runAttemptStart(args []string) int {
 		Retry:         *retry,
 		Prompt:        *prompt,
 		TimeoutMs:     *timeoutMs,
+		TimeoutStart:  strings.TrimSpace(*timeoutStart),
+		Blind:         *blindMode,
+		BlindTerms:    blind.ParseTermsCSV(*blindTerms),
 		SuiteSnapshot: suiteSnap,
 	})
 	if err != nil {
@@ -573,6 +615,7 @@ func (r Runner) runReport(args []string) int {
 			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 			return 1
 		}
+		var reports []schema.AttemptReportJSONV1
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
@@ -586,12 +629,11 @@ func (r Runner) runReport(args []string) int {
 				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 				return 1
 			}
-			if *jsonOut {
-				if err := json.NewEncoder(r.Stdout).Encode(rep); err != nil {
-					fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to encode json\n")
-					return 1
-				}
-			}
+			reports = append(reports, rep)
+		}
+		if *jsonOut {
+			out := buildRunReportJSON(target, reports)
+			return r.writeJSON(out)
 		}
 		return 0
 	}
@@ -869,6 +911,10 @@ func (r Runner) runMCPProxy(args []string) int {
 	}
 
 	now := r.Now()
+	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
 	if cancel != nil {
 		defer cancel()
@@ -897,6 +943,130 @@ func (r Runner) printReportErr(err error) int {
 	}
 	fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 	return 1
+}
+
+type runReportAggregateJSON struct {
+	AttemptsTotal int `json:"attemptsTotal"`
+	Passed        int `json:"passed"`
+	Failed        int `json:"failed"`
+
+	FailureCodeHistogram             map[string]int64 `json:"failureCodeHistogram,omitempty"`
+	TimedOutBeforeFirstToolCallTotal int64            `json:"timedOutBeforeFirstToolCallTotal,omitempty"`
+
+	TokenEstimates *schema.TokenEstimatesV1 `json:"tokenEstimates,omitempty"`
+}
+
+type runReportJSON struct {
+	OK      bool   `json:"ok"`
+	Target  string `json:"target"`
+	RunID   string `json:"runId,omitempty"`
+	SuiteID string `json:"suiteId,omitempty"`
+	Path    string `json:"path"`
+
+	Attempts  []schema.AttemptReportJSONV1 `json:"attempts"`
+	Aggregate runReportAggregateJSON       `json:"aggregate"`
+}
+
+func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) runReportJSON {
+	out := runReportJSON{
+		OK:       true,
+		Target:   "run",
+		Path:     runDir,
+		Attempts: reports,
+		Aggregate: runReportAggregateJSON{
+			AttemptsTotal:        len(reports),
+			FailureCodeHistogram: map[string]int64{},
+			TokenEstimates:       &schema.TokenEstimatesV1{Source: "attempt.report"},
+		},
+	}
+	if len(reports) > 0 {
+		out.RunID = reports[0].RunID
+		out.SuiteID = reports[0].SuiteID
+	}
+
+	var (
+		inputTotal           int64
+		outputTotal          int64
+		totalTotal           int64
+		cachedInputTotal     int64
+		reasoningOutputTotal int64
+		hasInput             bool
+		hasOutput            bool
+		hasTotal             bool
+		hasCached            bool
+		hasReasoning         bool
+	)
+
+	for _, rep := range reports {
+		if rep.OK != nil && *rep.OK {
+			out.Aggregate.Passed++
+		} else {
+			out.Aggregate.Failed++
+			out.OK = false
+		}
+		if rep.TimedOutBeforeFirstToolCall {
+			out.Aggregate.TimedOutBeforeFirstToolCallTotal++
+		}
+		for code, n := range rep.FailureCodeHistogram {
+			out.Aggregate.FailureCodeHistogram[code] += n
+		}
+		if rep.TokenEstimates != nil {
+			if rep.TokenEstimates.InputTokens != nil {
+				inputTotal += *rep.TokenEstimates.InputTokens
+				hasInput = true
+			}
+			if rep.TokenEstimates.OutputTokens != nil {
+				outputTotal += *rep.TokenEstimates.OutputTokens
+				hasOutput = true
+			}
+			if rep.TokenEstimates.TotalTokens != nil {
+				totalTotal += *rep.TokenEstimates.TotalTokens
+				hasTotal = true
+			}
+			if rep.TokenEstimates.CachedInputTokens != nil {
+				cachedInputTotal += *rep.TokenEstimates.CachedInputTokens
+				hasCached = true
+			}
+			if rep.TokenEstimates.ReasoningOutputTokens != nil {
+				reasoningOutputTotal += *rep.TokenEstimates.ReasoningOutputTokens
+				hasReasoning = true
+			}
+		}
+	}
+
+	if len(out.Aggregate.FailureCodeHistogram) == 0 {
+		out.Aggregate.FailureCodeHistogram = nil
+	}
+	if hasInput {
+		out.Aggregate.TokenEstimates.InputTokens = i64ptr(inputTotal)
+	}
+	if hasOutput {
+		out.Aggregate.TokenEstimates.OutputTokens = i64ptr(outputTotal)
+	}
+	if hasTotal {
+		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(totalTotal)
+	} else if hasInput || hasOutput {
+		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(inputTotal + outputTotal)
+	}
+	if hasCached {
+		out.Aggregate.TokenEstimates.CachedInputTokens = i64ptr(cachedInputTotal)
+	}
+	if hasReasoning {
+		out.Aggregate.TokenEstimates.ReasoningOutputTokens = i64ptr(reasoningOutputTotal)
+	}
+	if out.Aggregate.TokenEstimates.TotalTokens == nil &&
+		out.Aggregate.TokenEstimates.InputTokens == nil &&
+		out.Aggregate.TokenEstimates.OutputTokens == nil &&
+		out.Aggregate.TokenEstimates.CachedInputTokens == nil &&
+		out.Aggregate.TokenEstimates.ReasoningOutputTokens == nil {
+		out.Aggregate.TokenEstimates = nil
+	}
+	return out
+}
+
+func i64ptr(v int64) *int64 {
+	x := v
+	return &x
 }
 
 func (r Runner) writeJSON(v any) int {
@@ -947,7 +1117,7 @@ Commands:
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
-  suite run       Run a suite end-to-end (plan -> spawn runner per mission -> finish/validate/expect).
+  suite run       Run a suite end-to-end with wave parallelism + JIT attempt allocation.
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
@@ -987,8 +1157,8 @@ func printAttemptHelp(w io.Writer) {
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-		  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
-	`)
+	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms a,b,c] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
+		`)
 }
 
 func printSuiteHelp(w io.Writer) {
@@ -1000,7 +1170,7 @@ func printSuiteHelp(w io.Writer) {
 
 func printSuitePlanHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-	  zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json
+	  zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--out-root .zcl] --json
 `)
 }
 
@@ -1025,6 +1195,8 @@ func printFeedbackHelp(w io.Writer) {
   zcl feedback --ok|--fail --result <string>
   zcl feedback --ok|--fail --result-json <json>
   zcl feedback --ok|--fail --result <string> --classification <missing_primitive|naming_ux|output_shape|already_possible_better_way>
+  zcl feedback --ok|--fail --result <string> --decision-tag blocked --decision-tag timeout
+  zcl feedback --ok|--fail --result <string> --decision-tags blocked,timeout
 `)
 }
 

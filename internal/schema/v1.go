@@ -31,6 +31,15 @@ type AttemptJSONV1 struct {
 	Mode          string `json:"mode"`      // discovery|ci
 	StartedAt     string `json:"startedAt"` // RFC3339 UTC (use consistent precision)
 	TimeoutMs     int64  `json:"timeoutMs,omitempty"`
+	// TimeoutStart controls when timeoutMs starts counting.
+	// Allowed values: attempt_start|first_tool_call.
+	TimeoutStart string `json:"timeoutStart,omitempty"`
+	// TimeoutStartedAt is set when timeoutStart=first_tool_call and the first funnel action begins.
+	TimeoutStartedAt string `json:"timeoutStartedAt,omitempty"`
+	// Blind enables zero-context prompt contamination checks for this attempt.
+	Blind bool `json:"blind,omitempty"`
+	// BlindTerms is the normalized list of harness terms used for contamination checks.
+	BlindTerms []string `json:"blindTerms,omitempty"`
 	// ScratchDir is a per-attempt scratch directory under <outRoot>/tmp.
 	// It is optional but recommended for tools that need temporary files.
 	ScratchDir string `json:"scratchDir,omitempty"`
@@ -51,7 +60,9 @@ type FeedbackJSONV1 struct {
 	// Classification is optional friction triage that must never override trace evidence.
 	// Allowed values: missing_primitive|naming_ux|output_shape|already_possible_better_way
 	Classification string `json:"classification,omitempty"`
-	CreatedAt      string `json:"createdAt"` // RFC3339 UTC (use consistent precision)
+	// DecisionTags are normalized outcome tags for cross-run comparability.
+	DecisionTags []string `json:"decisionTags,omitempty"`
+	CreatedAt    string   `json:"createdAt"` // RFC3339 UTC (use consistent precision)
 	// RedactionsApplied is informational only; scoring must not depend on it.
 	RedactionsApplied []string `json:"redactionsApplied,omitempty"`
 }
@@ -74,9 +85,17 @@ type AttemptReportJSONV1 struct {
 	Result     string          `json:"result,omitempty"`
 	ResultJSON json.RawMessage `json:"resultJson,omitempty"`
 
-	Classification string `json:"classification,omitempty"`
+	Classification string   `json:"classification,omitempty"`
+	DecisionTags   []string `json:"decisionTags,omitempty"`
 
 	Metrics AttemptMetricsV1 `json:"metrics"`
+	// FailureCodeHistogram mirrors metrics.failuresByCode at the top-level
+	// for easier scoring/aggregation pipelines.
+	FailureCodeHistogram map[string]int64 `json:"failureCodeHistogram,omitempty"`
+	// TimedOutBeforeFirstToolCall indicates timeout expired before first traced action could execute.
+	TimedOutBeforeFirstToolCall bool `json:"timedOutBeforeFirstToolCall,omitempty"`
+	// TokenEstimates are lightweight per-attempt token usage estimates.
+	TokenEstimates *TokenEstimatesV1 `json:"tokenEstimates,omitempty"`
 
 	Artifacts AttemptArtifactsV1 `json:"artifacts"`
 
@@ -98,10 +117,12 @@ type AttemptArtifactsV1 struct {
 }
 
 type AttemptIntegrityV1 struct {
-	TracePresent          bool `json:"tracePresent"`
-	TraceNonEmpty         bool `json:"traceNonEmpty"`
-	FeedbackPresent       bool `json:"feedbackPresent"`
-	FunnelBypassSuspected bool `json:"funnelBypassSuspected,omitempty"`
+	TracePresent             bool     `json:"tracePresent"`
+	TraceNonEmpty            bool     `json:"traceNonEmpty"`
+	FeedbackPresent          bool     `json:"feedbackPresent"`
+	FunnelBypassSuspected    bool     `json:"funnelBypassSuspected,omitempty"`
+	PromptContaminated       bool     `json:"promptContaminated,omitempty"`
+	PromptContaminationTerms []string `json:"promptContaminationTerms,omitempty"`
 }
 
 // AttemptSignalsV1 are lightweight, trace-derived “stuck/thrash” signals intended for quick triage.
@@ -153,6 +174,16 @@ type AttemptMetricsV1 struct {
 
 	ToolCallsByTool map[string]int64 `json:"toolCallsByTool,omitempty"`
 	ToolCallsByOp   map[string]int64 `json:"toolCallsByOp,omitempty"`
+}
+
+type TokenEstimatesV1 struct {
+	Source string `json:"source"` // runner.metrics|trace-heuristic
+
+	TotalTokens           *int64 `json:"totalTokens,omitempty"`
+	InputTokens           *int64 `json:"inputTokens,omitempty"`
+	OutputTokens          *int64 `json:"outputTokens,omitempty"`
+	CachedInputTokens     *int64 `json:"cachedInputTokens,omitempty"`
+	ReasoningOutputTokens *int64 `json:"reasoningOutputTokens,omitempty"`
 }
 
 // TraceEventV1 is one line in: tool.calls.jsonl

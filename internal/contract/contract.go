@@ -162,7 +162,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "feedback",
-				Usage:   "zcl feedback --ok|--fail --result <string>|--result-json <json>",
+				Usage:   "zcl feedback --ok|--fail --result <string>|--result-json <json> [--classification <...>] [--decision-tag <tag>] [--decision-tags <csv>]",
 				Summary: "Write the canonical attempt outcome to feedback.json (primary evidence).",
 			},
 			{
@@ -222,7 +222,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "attempt start",
-				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
+				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms <csv>] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
 				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
 			},
 			{
@@ -237,13 +237,13 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "suite plan",
-				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json",
+				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--out-root .zcl] --json",
 				Summary: "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators).",
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
-				Summary: "Run a suite end-to-end: plan attempts, spawn a runner per mission with ZCL_* env, then finish/validate/expect each attempt.",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+				Summary: "Run a suite end-to-end with wave parallelism and just-in-time attempt allocation, then finish/validate/expect each attempt.",
 			},
 			{
 				ID:      "replay",
@@ -270,6 +270,7 @@ func Build(version string) Contract {
 			{Code: "ZCL_E_CONTAINMENT", Summary: "Artifact path escapes attempt/run directory (symlink traversal).", Retryable: false},
 			{Code: "ZCL_E_SPAWN", Summary: "Failed to spawn or execute a wrapped command in the funnel.", Retryable: true},
 			{Code: "ZCL_E_TIMEOUT", Summary: "Timed out waiting for a tool operation.", Retryable: true},
+			{Code: "ZCL_E_CONTAMINATED_PROMPT", Summary: "Blind mode rejected a prompt containing harness terms.", Retryable: false},
 			{Code: "ZCL_E_FUNNEL_BYPASS", Summary: "Primary evidence missing/empty despite a final outcome being recorded (funnel bypass suspected).", Retryable: false},
 			{Code: "ZCL_E_EXPECTATION_FAILED", Summary: "Suite expectations did not match feedback.json.", Retryable: false},
 		},

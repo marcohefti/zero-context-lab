@@ -30,7 +30,7 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
 
 ## Runtime Flow
 1. Allocate attempt:
-   - `zcl attempt start --json` or `zcl suite plan --json` (or `zcl suite run ...` which plans internally).
+   - `zcl attempt start --json` or `zcl suite plan --json` (or `zcl suite run ...` which allocates attempts just-in-time internally).
    - Output includes `ZCL_*` env, including `ZCL_OUT_DIR` and `ZCL_TMP_DIR`.
 2. Execute actions through funnels:
    - `zcl run -- <cmd> ...` appends a trace event to `tool.calls.jsonl`.
@@ -63,4 +63,3 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
 - Validate failures are stable and typed on common corruption/missing-artifact cases.
 - Funnel commands refuse to run if `attempt.json` doesn't match `ZCL_*` env (id mismatch guardrail).
 - `attempt finish` returns `2` when validate/expect/outcome is not OK, not `1`.
-

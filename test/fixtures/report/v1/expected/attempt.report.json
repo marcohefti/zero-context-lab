@@ -9,6 +9,18 @@
   "endedAt": "2026-02-15T18:00:03Z",
   "ok": false,
   "result": "ARTICLE_TITLE=Example",
+  "decisionTags": [
+    "blocked"
+  ],
+  "failureCodeHistogram": {
+    "ZCL_E_SPAWN": 1
+  },
+  "tokenEstimates": {
+    "source": "trace-heuristic",
+    "totalTokens": 13,
+    "inputTokens": 11,
+    "outputTokens": 2
+  },
   "artifacts": {
     "attemptJson": "attempt.json",
     "toolCallsJsonl": "tool.calls.jsonl",

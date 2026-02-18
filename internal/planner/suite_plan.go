@@ -8,11 +8,14 @@ import (
 )
 
 type SuitePlanOpts struct {
-	OutRoot   string
-	RunID     string
-	SuiteFile string
-	Mode      string
-	TimeoutMs int64
+	OutRoot      string
+	RunID        string
+	SuiteFile    string
+	Mode         string
+	TimeoutMs    int64
+	TimeoutStart string
+	Blind        *bool
+	BlindTerms   []string
 }
 
 type PlannedMission struct {
@@ -49,6 +52,18 @@ func PlanSuite(now time.Time, opts SuitePlanOpts) (SuitePlanResult, error) {
 	if timeoutMs == 0 {
 		timeoutMs = parsed.Suite.Defaults.TimeoutMs
 	}
+	timeoutStart := opts.TimeoutStart
+	if timeoutStart == "" {
+		timeoutStart = parsed.Suite.Defaults.TimeoutStart
+	}
+	blind := parsed.Suite.Defaults.Blind
+	if opts.Blind != nil {
+		blind = *opts.Blind
+	}
+	blindTerms := append([]string(nil), parsed.Suite.Defaults.BlindTerms...)
+	if len(opts.BlindTerms) > 0 {
+		blindTerms = append([]string(nil), opts.BlindTerms...)
+	}
 
 	rid := opts.RunID
 	var missions []PlannedMission
@@ -62,6 +77,9 @@ func PlanSuite(now time.Time, opts SuitePlanOpts) (SuitePlanResult, error) {
 			Retry:         1,
 			Prompt:        sm.Prompt,
 			TimeoutMs:     timeoutMs,
+			TimeoutStart:  timeoutStart,
+			Blind:         blind,
+			BlindTerms:    blindTerms,
 			SuiteSnapshot: parsed.CanonicalJSON,
 		})
 		if err != nil {

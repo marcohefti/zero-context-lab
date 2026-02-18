@@ -221,7 +221,7 @@
     },
     {
       "id": "feedback",
-      "usage": "zcl feedback --ok|--fail --result <string>|--result-json <json>",
+      "usage": "zcl feedback --ok|--fail --result <string>|--result-json <json> [--classification <...>] [--decision-tag <tag>] [--decision-tags <csv>]",
       "summary": "Write the canonical attempt outcome to feedback.json (primary evidence)."
     },
     {
@@ -281,7 +281,7 @@
     },
     {
       "id": "attempt start",
-      "usage": "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
+      "usage": "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms <csv>] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
       "summary": "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent."
     },
     {
@@ -296,13 +296,13 @@
     },
     {
       "id": "suite plan",
-      "usage": "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] --json",
+      "usage": "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--out-root .zcl] --json",
       "summary": "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators)."
     },
     {
       "id": "suite run",
-      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
-      "summary": "Run a suite end-to-end: plan attempts, spawn a runner per mission with ZCL_* env, then finish/validate/expect each attempt."
+      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+      "summary": "Run a suite end-to-end with wave parallelism and just-in-time attempt allocation, then finish/validate/expect each attempt."
     },
     {
       "id": "replay",
@@ -380,6 +380,11 @@
       "code": "ZCL_E_TIMEOUT",
       "summary": "Timed out waiting for a tool operation.",
       "retryable": true
+    },
+    {
+      "code": "ZCL_E_CONTAMINATED_PROMPT",
+      "summary": "Blind mode rejected a prompt containing harness terms.",
+      "retryable": false
     },
     {
       "code": "ZCL_E_FUNNEL_BYPASS",

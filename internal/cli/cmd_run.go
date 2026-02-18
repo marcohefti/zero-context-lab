@@ -75,6 +75,10 @@ func (r Runner) runRun(args []string) int {
 	}
 
 	now := r.Now()
+	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
 	if cancel != nil {
 		defer cancel()
@@ -335,7 +339,18 @@ func attemptCtxForDeadline(now time.Time, attemptDir string) (context.Context, c
 	if a.TimeoutMs <= 0 || strings.TrimSpace(a.StartedAt) == "" {
 		return context.Background(), nil, false
 	}
-	start, err := time.Parse(time.RFC3339Nano, a.StartedAt)
+	startAt := strings.TrimSpace(a.StartedAt)
+	timeoutStart := strings.TrimSpace(a.TimeoutStart)
+	if timeoutStart == "" {
+		timeoutStart = schema.TimeoutStartAttemptStartV1
+	}
+	if timeoutStart == schema.TimeoutStartFirstToolCallV1 {
+		if strings.TrimSpace(a.TimeoutStartedAt) == "" {
+			return context.Background(), nil, false
+		}
+		startAt = strings.TrimSpace(a.TimeoutStartedAt)
+	}
+	start, err := time.Parse(time.RFC3339Nano, startAt)
 	if err != nil {
 		return context.Background(), nil, false
 	}

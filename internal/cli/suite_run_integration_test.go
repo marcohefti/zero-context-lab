@@ -175,6 +175,131 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_BlindRejectsContaminatedPrompt(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-blind",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "Use zcl feedback to report result" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--blind", "on",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			RunnerErrorCode string `json:"runnerErrorCode"`
+			AttemptDir      string `json:"attemptDir"`
+			Finish          struct {
+				OK     bool `json:"ok"`
+				Report struct {
+					Integrity struct {
+						PromptContaminated bool `json:"promptContaminated"`
+					} `json:"integrity"`
+				} `json:"report"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if sum.OK || len(sum.Attempts) != 1 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	if sum.Attempts[0].RunnerErrorCode != "ZCL_E_CONTAMINATED_PROMPT" {
+		t.Fatalf("expected contamination code, got: %s", sum.Attempts[0].RunnerErrorCode)
+	}
+	if !sum.Attempts[0].Finish.Report.Integrity.PromptContaminated {
+		t.Fatalf("expected report integrity.promptContaminated=true")
+	}
+}
+
+func TestSuiteRun_ParallelTotal_JITAllocation(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-parallel-total",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } },
+    { "missionId": "m2", "prompt": "p2", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--parallel", "2",
+		"--total", "5",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool   `json:"ok"`
+		RunID    string `json:"runId"`
+		Passed   int    `json:"passed"`
+		Failed   int    `json:"failed"`
+		Attempts []struct {
+			AttemptID string `json:"attemptId"`
+			MissionID string `json:"missionId"`
+			OK        bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || sum.Passed != 5 || sum.Failed != 0 || len(sum.Attempts) != 5 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	if sum.RunID == "" {
+		t.Fatalf("expected runId in summary")
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return

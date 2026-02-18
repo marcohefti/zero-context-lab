@@ -40,6 +40,7 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]`
 - `zcl attempt start --suite <suiteId> --mission <missionId> --json`
 - `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`
+- `zcl attempt explain [--strict] [--json] [--tail N] [<attemptDir>]`
 - `zcl run -- <cmd> [args...]`
 - `zcl mcp proxy -- <server-cmd> [args...]`
 - `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]`
@@ -87,4 +88,3 @@ See `docs/architecture.md`, starting with:
 - `docs/architecture/suite-run.md`
 - `docs/architecture/evidence-pipeline.md`
 - `docs/architecture/write-safety.md`
-

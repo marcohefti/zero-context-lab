@@ -61,6 +61,10 @@ func (r Runner) runHTTPProxy(args []string) int {
 	}
 
 	now := r.Now()
+	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
 	if cancel != nil {
 		defer cancel()

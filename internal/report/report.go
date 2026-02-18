@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/marcohefti/zero-context-lab/internal/blind"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 	"github.com/marcohefti/zero-context-lab/internal/suite"
@@ -66,6 +68,12 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
 	}
+	traceSummary, err := scanTraceSummary(tracePath)
+	if err != nil {
+		if enforce {
+			return schema.AttemptReportJSONV1{}, err
+		}
+	}
 
 	tracePresent, traceNonEmpty := false, false
 	if _, err := os.Stat(tracePath); err == nil {
@@ -80,11 +88,16 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		}
 	}
 
+	promptContaminationTerms := promptContaminationTerms(attemptDir, attempt.BlindTerms)
+	timedOutBeforeFirstToolCall := classifyTimedOutBeforeFirstToolCall(attempt, traceSummary)
+
 	integrity := &schema.AttemptIntegrityV1{
-		TracePresent:          tracePresent,
-		TraceNonEmpty:         traceNonEmpty,
-		FeedbackPresent:       feedbackPresent,
-		FunnelBypassSuspected: feedbackPresent && !traceNonEmpty,
+		TracePresent:             tracePresent,
+		TraceNonEmpty:            traceNonEmpty,
+		FeedbackPresent:          feedbackPresent,
+		FunnelBypassSuspected:    feedbackPresent && !traceNonEmpty,
+		PromptContaminated:       len(promptContaminationTerms) > 0,
+		PromptContaminationTerms: promptContaminationTerms,
 	}
 
 	artifacts := schema.AttemptArtifactsV1{
@@ -119,6 +132,9 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 			endedAt = ts
 		}
 	}
+	failureCodeHistogram := cloneCountMap(metrics.FailuresByCode)
+	tokenEstimates := tokenEstimatesForAttempt(attemptDir, tracePath, metrics)
+	decisionTags := deriveDecisionTags(fb.DecisionTags, okPtr, metrics, integrity, timedOutBeforeFirstToolCall)
 
 	var expects *schema.ExpectationResultV1
 	if sf, ok, err := loadSuiteForAttempt(attemptDir); err != nil {
@@ -153,24 +169,196 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	}
 
 	return schema.AttemptReportJSONV1{
-		SchemaVersion:  schema.AttemptReportSchemaV1,
-		RunID:          attempt.RunID,
-		SuiteID:        attempt.SuiteID,
-		MissionID:      attempt.MissionID,
-		AttemptID:      attempt.AttemptID,
-		ComputedAt:     now.UTC().Format(time.RFC3339Nano),
-		StartedAt:      startedAt,
-		EndedAt:        endedAt,
-		OK:             okPtr,
-		Result:         fb.Result,
-		ResultJSON:     fb.ResultJSON,
-		Classification: fb.Classification,
-		Metrics:        metrics,
-		Artifacts:      artifacts,
-		Integrity:      integrity,
-		Signals:        signals,
-		Expectations:   expects,
+		SchemaVersion:               schema.AttemptReportSchemaV1,
+		RunID:                       attempt.RunID,
+		SuiteID:                     attempt.SuiteID,
+		MissionID:                   attempt.MissionID,
+		AttemptID:                   attempt.AttemptID,
+		ComputedAt:                  now.UTC().Format(time.RFC3339Nano),
+		StartedAt:                   startedAt,
+		EndedAt:                     endedAt,
+		OK:                          okPtr,
+		Result:                      fb.Result,
+		ResultJSON:                  fb.ResultJSON,
+		Classification:              fb.Classification,
+		DecisionTags:                decisionTags,
+		Metrics:                     metrics,
+		FailureCodeHistogram:        failureCodeHistogram,
+		TimedOutBeforeFirstToolCall: timedOutBeforeFirstToolCall,
+		TokenEstimates:              tokenEstimates,
+		Artifacts:                   artifacts,
+		Integrity:                   integrity,
+		Signals:                     signals,
+		Expectations:                expects,
 	}, nil
+}
+
+type traceSummary struct {
+	HasEvent   bool
+	FirstTS    time.Time
+	FirstTSRaw string
+	FirstCode  string
+	InputBytes int64
+}
+
+func scanTraceSummary(tracePath string) (traceSummary, error) {
+	f, err := os.Open(tracePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return traceSummary{}, nil
+		}
+		return traceSummary{}, err
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	out := traceSummary{}
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev schema.TraceEventV1
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return traceSummary{}, err
+		}
+		out.HasEvent = true
+		out.InputBytes += int64(len(ev.Input))
+		ts, err := time.Parse(time.RFC3339Nano, ev.TS)
+		if err != nil {
+			continue
+		}
+		if out.FirstTS.IsZero() || ts.Before(out.FirstTS) {
+			out.FirstTS = ts
+			out.FirstTSRaw = ev.TS
+			out.FirstCode = strings.TrimSpace(ev.Result.Code)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return traceSummary{}, err
+	}
+	return out, nil
+}
+
+func promptContaminationTerms(attemptDir string, configured []string) []string {
+	promptPath := filepath.Join(attemptDir, "prompt.txt")
+	b, err := os.ReadFile(promptPath)
+	if err != nil {
+		return nil
+	}
+	terms := configured
+	if len(terms) == 0 {
+		terms = blind.DefaultHarnessTermsV1()
+	}
+	return blind.FindContaminationTerms(string(b), terms)
+}
+
+func classifyTimedOutBeforeFirstToolCall(a schema.AttemptJSONV1, s traceSummary) bool {
+	if a.TimeoutMs <= 0 || !s.HasEvent || s.FirstTS.IsZero() {
+		return false
+	}
+	timeoutStart := strings.TrimSpace(a.TimeoutStart)
+	if timeoutStart == "" {
+		timeoutStart = schema.TimeoutStartAttemptStartV1
+	}
+	if timeoutStart != schema.TimeoutStartAttemptStartV1 {
+		return false
+	}
+	start, err := time.Parse(time.RFC3339Nano, a.StartedAt)
+	if err != nil {
+		return false
+	}
+	deadline := start.Add(time.Duration(a.TimeoutMs) * time.Millisecond)
+	return (s.FirstTS.Equal(deadline) || s.FirstTS.After(deadline)) && s.FirstCode == "ZCL_E_TIMEOUT"
+}
+
+func tokenEstimatesForAttempt(attemptDir string, tracePath string, metrics schema.AttemptMetricsV1) *schema.TokenEstimatesV1 {
+	if m, ok := loadRunnerTokenEstimates(filepath.Join(attemptDir, "runner.metrics.json")); ok {
+		return m
+	}
+	s, err := scanTraceSummary(tracePath)
+	if err != nil || !s.HasEvent {
+		return nil
+	}
+	in := approxTokens(s.InputBytes)
+	out := approxTokens(metrics.OutBytesTotal + metrics.ErrBytesTotal)
+	total := in + out
+	return &schema.TokenEstimatesV1{
+		Source:       "trace-heuristic",
+		TotalTokens:  i64Ptr(total),
+		InputTokens:  i64Ptr(in),
+		OutputTokens: i64Ptr(out),
+	}
+}
+
+func loadRunnerTokenEstimates(path string) (*schema.TokenEstimatesV1, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var m schema.RunnerMetricsJSONV1
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, false
+	}
+	if m.TotalTokens == nil && m.InputTokens == nil && m.OutputTokens == nil && m.CachedInputTokens == nil && m.ReasoningOutputTokens == nil {
+		return nil, false
+	}
+	return &schema.TokenEstimatesV1{
+		Source:                "runner.metrics",
+		TotalTokens:           m.TotalTokens,
+		InputTokens:           m.InputTokens,
+		OutputTokens:          m.OutputTokens,
+		CachedInputTokens:     m.CachedInputTokens,
+		ReasoningOutputTokens: m.ReasoningOutputTokens,
+	}, true
+}
+
+func approxTokens(bytes int64) int64 {
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + 3) / 4
+}
+
+func i64Ptr(v int64) *int64 {
+	x := v
+	return &x
+}
+
+func cloneCountMap(in map[string]int64) map[string]int64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func deriveDecisionTags(fromFeedback []string, okPtr *bool, metrics schema.AttemptMetricsV1, integrity *schema.AttemptIntegrityV1, timedOutBeforeFirst bool) []string {
+	out := append([]string(nil), fromFeedback...)
+	if okPtr != nil {
+		if *okPtr {
+			out = append(out, schema.DecisionTagSuccess)
+		} else {
+			out = append(out, schema.DecisionTagBlocked)
+		}
+	}
+	if timedOutBeforeFirst || metrics.TimeoutsTotal > 0 {
+		out = append(out, schema.DecisionTagTimeout)
+	}
+	if integrity != nil && integrity.FunnelBypassSuspected {
+		out = append(out, schema.DecisionTagFunnelBypass)
+	}
+	if integrity != nil && integrity.PromptContaminated {
+		out = append(out, schema.DecisionTagContaminatedPrompt)
+	}
+	if integrity != nil && !integrity.FeedbackPresent {
+		out = append(out, schema.DecisionTagMissingEvidence)
+	}
+	return schema.NormalizeDecisionTagsV1(out)
 }
 
 func WriteAttemptReportAtomic(path string, report schema.AttemptReportJSONV1) error {

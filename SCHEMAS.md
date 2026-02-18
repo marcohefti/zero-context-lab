@@ -64,7 +64,10 @@ Minimal v1 suite shape (example):
   "suiteId": "heftiweb-smoke",
   "defaults": {
     "timeoutMs": 120000,
-    "mode": "discovery"
+    "timeoutStart": "first_tool_call",
+    "mode": "discovery",
+    "blind": true,
+    "blindTerms": ["zcl", "feedback.json"]
   },
   "missions": [
     {
@@ -109,6 +112,10 @@ Required fields:
 Optional fields:
 - `agentId` (runner-provided correlation id)
 - `timeoutMs` (attempt deadline in ms from `startedAt`; funnels should enforce this as a mission-level deadline)
+- `timeoutStart` (`attempt_start` or `first_tool_call`; if omitted, discovery defaults to `first_tool_call`)
+- `timeoutStartedAt` (set when `timeoutStart=first_tool_call` and first funnel action starts)
+- `blind` (enable zero-context prompt contamination checks)
+- `blindTerms` (normalized harness terms used by contamination checks)
 - `scratchDir` (path relative to `<outRoot>/` for per-attempt scratch space under `<outRoot>/tmp/<runId>/<attemptId>`)
 
 ## `prompt.txt` (snapshot; optional)
@@ -168,6 +175,7 @@ Exactly one of `result` or `resultJson` must be present:
   "ok": true,
   "result": "ARTICLE_TITLE=Example",
   "classification": "output_shape",
+  "decisionTags": ["success"],
   "createdAt": "2026-02-15T18:00:40.123456789Z",
   "redactionsApplied": []
 }
@@ -248,6 +256,7 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   "ok": true,
   "result": "ARTICLE_TITLE=Example",
   "classification": "output_shape",
+  "decisionTags": ["success"],
   "artifacts": {
     "attemptJson": "attempt.json",
     "toolCallsJsonl": "tool.calls.jsonl",
@@ -261,7 +270,18 @@ Required fields (metrics fields may be zero when computed from partial evidence 
   "integrity": {
     "tracePresent": true,
     "traceNonEmpty": true,
-    "feedbackPresent": true
+    "feedbackPresent": true,
+    "promptContaminated": false
+  },
+  "failureCodeHistogram": {
+    "ZCL_E_SPAWN": 1
+  },
+  "timedOutBeforeFirstToolCall": false,
+  "tokenEstimates": {
+    "source": "runner.metrics",
+    "inputTokens": 111,
+    "outputTokens": 222,
+    "totalTokens": 333
   },
   "signals": {
     "repeatMaxStreak": 12,
@@ -301,6 +321,9 @@ Required fields (metrics fields may be zero when computed from partial evidence 
 
 Optional fields:
 - `integrity`: cheap funnel integrity signals (`tracePresent`, `traceNonEmpty`, `feedbackPresent`, `funnelBypassSuspected`).
+- `failureCodeHistogram`: top-level alias of `metrics.failuresByCode` for easier aggregation.
+- `timedOutBeforeFirstToolCall`: timeout expired before first traced action could run.
+- `tokenEstimates`: lightweight token estimates from `runner.metrics.json` (fallback: trace byte heuristic).
 - `expectations`: when `suite.json` exists and contains `expects` for the mission, `zcl report` evaluates them against `feedback.json`.
 
 ## `runner.ref.json` (optional; v1)
