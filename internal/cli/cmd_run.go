@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +81,32 @@ func (r Runner) runRun(args []string) int {
 	if *captureRaw && (attemptMeta.Mode == "ci" || envBoolish("CI")) && !envBoolish("ZCL_ALLOW_UNSAFE_CAPTURE") {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: --capture-raw is disabled in ci/strict environments unless ZCL_ALLOW_UNSAFE_CAPTURE=1")
+	}
+
+	if threshold := repeatGuardMaxStreak(); threshold > 0 {
+		tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+		streak, err := trailingFailedRepeatStreak(tracePath, argv)
+		if err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to inspect repeat guard state: %s\n", err.Error())
+			return 1
+		}
+		if streak >= threshold {
+			now := r.Now()
+			msg := fmt.Sprintf("no-progress guard: refusing repeated failed command after streak=%d (max=%d)", streak, threshold)
+			traceRes := trace.ResultForTrace{
+				SpawnError: "ZCL_E_TOOL_FAILED",
+				DurationMs: 0,
+				OutBytes:   0,
+				ErrBytes:   int64(len(msg)),
+				ErrPreview: msg,
+			}
+			if err := trace.AppendCLIRunEvent(now, env, argv, traceRes); err != nil {
+				fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
+				return 1
+			}
+			fmt.Fprintf(r.Stderr, "ZCL_E_TOOL_FAILED: %s\n", msg)
+			return 1
+		}
 	}
 
 	now := r.Now()
@@ -339,6 +368,77 @@ func (r Runner) runRun(args []string) int {
 		return res.ExitCode
 	}
 	return 0
+}
+
+const defaultRepeatGuardMaxStreak = int64(50)
+
+func repeatGuardMaxStreak() int64 {
+	raw := strings.TrimSpace(os.Getenv("ZCL_REPEAT_GUARD_MAX_STREAK"))
+	if raw == "" {
+		return defaultRepeatGuardMaxStreak
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return defaultRepeatGuardMaxStreak
+	}
+	if n <= 0 {
+		return 0
+	}
+	return n
+}
+
+type traceGuardEvent struct {
+	Tool  string `json:"tool"`
+	Op    string `json:"op"`
+	Input struct {
+		Argv []string `json:"argv"`
+	} `json:"input"`
+	Result struct {
+		OK bool `json:"ok"`
+	} `json:"result"`
+}
+
+func trailingFailedRepeatStreak(tracePath string, argv []string) (int64, error) {
+	f, err := os.Open(tracePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+
+	events := make([]traceGuardEvent, 0, 64)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev traceGuardEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Tool != "cli" || ev.Op != "exec" {
+			continue
+		}
+		events = append(events, ev)
+	}
+	if err := sc.Err(); err != nil {
+		return 0, err
+	}
+
+	target := strings.Join(argv, "\x00")
+	var streak int64
+	for i := len(events) - 1; i >= 0; i-- {
+		ev := events[i]
+		if strings.Join(ev.Input.Argv, "\x00") != target || ev.Result.OK {
+			break
+		}
+		streak++
+	}
+	return streak, nil
 }
 
 func attemptCtxForDeadline(now time.Time, attemptDir string) (context.Context, context.CancelFunc, bool) {

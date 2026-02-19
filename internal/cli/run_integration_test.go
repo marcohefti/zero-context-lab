@@ -313,6 +313,61 @@ func TestRun_TimeoutStartFirstToolCall_DoesNotExpireBeforeFirstAction(t *testing
 	}
 }
 
+func TestRun_RepeatGuardBlocksNoProgressLoops(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+	t.Setenv("ZCL_REPEAT_GUARD_MAX_STREAK", "2")
+
+	runCmd := []string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=ran\n", "exit=7"}
+	for i := 0; i < 2; i++ {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		r := Runner{
+			Version: "0.0.0-dev",
+			Now: func() time.Time {
+				return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second)
+			},
+			Stdout: &stdout,
+			Stderr: &stderr,
+		}
+		code := r.Run(runCmd)
+		if code != 7 {
+			t.Fatalf("expected failed wrapped command before guard, got %d (stderr=%q)", code, stderr.String())
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 3, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run(runCmd)
+	if code != 1 {
+		t.Fatalf("expected guard to return 1, got %d (stderr=%q)", code, stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Fatalf("expected blocked run to avoid tool stdout passthrough, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no-progress guard") {
+		t.Fatalf("expected no-progress guard message, got stderr=%q", stderr.String())
+	}
+
+	evs := readTraceEvents(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	if len(evs) != 3 {
+		t.Fatalf("expected three trace events, got %d", len(evs))
+	}
+	last := evs[len(evs)-1]
+	if last.Result.Code != "ZCL_E_TOOL_FAILED" {
+		t.Fatalf("expected guarded event code ZCL_E_TOOL_FAILED, got %+v", last.Result)
+	}
+	if !strings.Contains(last.IO.ErrPreview, "no-progress guard") {
+		t.Fatalf("expected guard reason in errPreview, got %q", last.IO.ErrPreview)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -420,6 +475,33 @@ func readSingleTraceEvent(t *testing.T, path string) schema.TraceEventV1 {
 		t.Fatalf("unmarshal trace: %v", err)
 	}
 	return ev
+}
+
+func readTraceEvents(t *testing.T, path string) []schema.TraceEventV1 {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open trace: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var out []schema.TraceEventV1
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var ev schema.TraceEventV1
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("unmarshal trace: %v", err)
+		}
+		out = append(out, ev)
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	return out
 }
 
 func readSingleCaptureEvent(t *testing.T, path string) schema.CaptureEventV1 {

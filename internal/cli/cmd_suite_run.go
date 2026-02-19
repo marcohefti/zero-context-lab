@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -59,6 +61,8 @@ type suiteRunAttemptResult struct {
 	RunnerErrorCode  string `json:"runnerErrorCode,omitempty"` // ZCL_E_TIMEOUT|ZCL_E_SPAWN|ZCL_E_CONTAMINATED_PROMPT
 	AutoFeedback     bool   `json:"autoFeedback,omitempty"`
 	AutoFeedbackCode string `json:"autoFeedbackCode,omitempty"`
+	Skipped          bool   `json:"skipped,omitempty"`
+	SkipReason       string `json:"skipReason,omitempty"`
 
 	Finish suiteRunFinishResult `json:"finish"`
 
@@ -78,6 +82,10 @@ type suiteRunSummary struct {
 	SessionIsolation string `json:"sessionIsolation"`
 	// HostNativeSpawnCapable reflects ZCL_HOST_NATIVE_SPAWN parsing (informational).
 	HostNativeSpawnCapable bool `json:"hostNativeSpawnCapable"`
+	// CampaignProfile captures key run-shape controls for comparability across campaigns.
+	CampaignProfile suiteRunCampaignProfile `json:"campaignProfile"`
+	// ComparabilityKey is a stable hash of CampaignProfile.
+	ComparabilityKey string `json:"comparabilityKey"`
 
 	Attempts []suiteRunAttemptResult `json:"attempts"`
 
@@ -85,6 +93,15 @@ type suiteRunSummary struct {
 	Failed int `json:"failed"`
 
 	CreatedAt string `json:"createdAt"`
+}
+
+type suiteRunCampaignProfile struct {
+	Mode           string   `json:"mode"`
+	TimeoutMs      int64    `json:"timeoutMs"`
+	TimeoutStart   string   `json:"timeoutStart"`
+	IsolationModel string   `json:"isolationModel"`
+	Blind          bool     `json:"blind"`
+	Shims          []string `json:"shims,omitempty"`
 }
 
 type stringListFlag []string
@@ -114,6 +131,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
+	failFast := fs.Bool("fail-fast", true, "stop scheduling new missions after the first failed attempt and mark the remainder as skipped")
 	strict := fs.Bool("strict", true, "run finish in strict mode (enforces evidence + contract)")
 	strictExpect := fs.Bool("strict-expect", true, "strict mode for expect (missing suite.json/feedback.json fails)")
 	captureRunnerIO := fs.Bool("capture-runner-io", true, "capture runner stdout/stderr to runner.* logs under the attempt dir")
@@ -256,6 +274,15 @@ func (r Runner) runSuiteRun(args []string) int {
 		HostNativeSpawnCapable:    hostNativeCapable,
 		CreatedAt:                 r.Now().UTC().Format(time.RFC3339Nano),
 	}
+	summary.CampaignProfile = suiteRunCampaignProfile{
+		Mode:           resolvedMode,
+		TimeoutMs:      resolvedTimeoutMs,
+		TimeoutStart:   resolvedTimeoutStart,
+		IsolationModel: effectiveIsolation,
+		Blind:          resolvedBlind,
+		Shims:          dedupeSortedStrings([]string(shims)),
+	}
+	summary.ComparabilityKey = suiteRunComparabilityKey(summary.CampaignProfile)
 
 	// Keep stdout reserved for JSON; runner output is streamed to stderr.
 	runnerCmd := argv[0]
@@ -270,6 +297,18 @@ func (r Runner) runSuiteRun(args []string) int {
 	}
 
 	results := make([]suiteRunAttemptResult, len(missions))
+	for i, mission := range missions {
+		results[i] = suiteRunAttemptResult{
+			MissionID:      mission.MissionID,
+			IsolationModel: effectiveIsolation,
+			Finish: suiteRunFinishResult{
+				OK:           false,
+				Strict:       *strict,
+				StrictExpect: *strictExpect,
+			},
+			OK: false,
+		}
+	}
 	var (
 		startMu      sync.Mutex
 		harnessErr   atomic.Bool
@@ -295,6 +334,10 @@ func (r Runner) runSuiteRun(args []string) int {
 		wave = len(missions)
 	}
 	for start := 0; start < len(missions); start += wave {
+		if *failFast && hasFailedAttempt(results) {
+			markSkippedAttempts(results, start, "fail_fast_prior_failure")
+			break
+		}
 		end := start + wave
 		if end > len(missions) {
 			end = len(missions)
@@ -331,17 +374,8 @@ func (r Runner) runSuiteRun(args []string) int {
 				if err != nil {
 					harnessErr.Store(true)
 					fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: %s\n", err.Error())
-					results[idx] = suiteRunAttemptResult{
-						MissionID:      mission.MissionID,
-						IsolationModel: effectiveIsolation,
-						Finish: suiteRunFinishResult{
-							OK:           false,
-							Strict:       *strict,
-							StrictExpect: *strictExpect,
-						},
-						RunnerErrorCode: "ZCL_E_USAGE",
-						OK:              false,
-					}
+					results[idx].RunnerErrorCode = "ZCL_E_USAGE"
+					results[idx].OK = false
 					return
 				}
 
@@ -362,6 +396,10 @@ func (r Runner) runSuiteRun(args []string) int {
 			}()
 		}
 		wg.Wait()
+		if *failFast && hasFailedAttempt(results[start:end]) {
+			markSkippedAttempts(results, end, "fail_fast_prior_failure")
+			break
+		}
 	}
 
 	summary.RunID = currentRunID
@@ -645,7 +683,7 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
@@ -668,9 +706,6 @@ func envBoolish(name string) bool {
 }
 
 func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult) error {
-	if !shouldAutoFailureFeedback(*ar) {
-		return nil
-	}
 	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
 	if outDir == "" {
 		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
@@ -690,7 +725,7 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 		TmpDirAbs: env["ZCL_TMP_DIR"],
 	}
 	code := autoFailureCode(*ar)
-	msg := "suite runner failed before canonical feedback was written"
+	msg := "canonical feedback missing after suite runner completion"
 	if ar.RunnerErrorCode != "" {
 		msg += " runnerErrorCode=" + ar.RunnerErrorCode
 	}
@@ -747,21 +782,70 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 	return nil
 }
 
-func shouldAutoFailureFeedback(ar suiteRunAttemptResult) bool {
-	if ar.RunnerErrorCode == "ZCL_E_TIMEOUT" || ar.RunnerErrorCode == "ZCL_E_SPAWN" || ar.RunnerErrorCode == "ZCL_E_IO" {
-		return true
-	}
-	return ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0
-}
-
 func autoFailureCode(ar suiteRunAttemptResult) string {
 	if ar.RunnerErrorCode != "" {
 		return ar.RunnerErrorCode
 	}
+	if ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0 {
+		return "ZCL_E_MISSING_ARTIFACT"
+	}
 	if ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0 {
 		return "ZCL_E_TOOL_FAILED"
 	}
-	return "ZCL_E_TOOL_FAILED"
+	return "ZCL_E_MISSING_ARTIFACT"
+}
+
+func suiteRunComparabilityKey(p suiteRunCampaignProfile) string {
+	b, err := store.CanonicalJSON(p)
+	if err != nil {
+		// Deterministic fallback shape for error paths.
+		b = []byte(fmt.Sprintf("%s|%d|%s|%s|%t", p.Mode, p.TimeoutMs, p.TimeoutStart, p.IsolationModel, p.Blind))
+	}
+	sum := sha256.Sum256(b)
+	return "cp-" + hex.EncodeToString(sum[:8])
+}
+
+func dedupeSortedStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func hasFailedAttempt(items []suiteRunAttemptResult) bool {
+	for _, it := range items {
+		if it.AttemptID == "" && it.RunnerErrorCode == "" && !it.Skipped {
+			continue
+		}
+		if !it.OK && !it.Skipped {
+			return true
+		}
+	}
+	return false
+}
+
+func markSkippedAttempts(results []suiteRunAttemptResult, start int, reason string) {
+	for i := start; i < len(results); i++ {
+		if results[i].AttemptID != "" || results[i].Skipped {
+			continue
+		}
+		results[i].Skipped = true
+		results[i].SkipReason = reason
+	}
 }
 
 func fileExists(path string) bool {

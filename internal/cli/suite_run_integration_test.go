@@ -137,7 +137,9 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 		OK       bool `json:"ok"`
 		Failed   int  `json:"failed"`
 		Attempts []struct {
-			Finish struct {
+			AutoFeedback     bool   `json:"autoFeedback"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			Finish           struct {
 				OK          bool `json:"ok"`
 				ReportError *struct {
 					Code string `json:"code"`
@@ -160,18 +162,76 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 	if sum.Attempts[0].Finish.OK {
 		t.Fatalf("expected finish ok=false")
 	}
-	if sum.Attempts[0].Finish.ReportError == nil || sum.Attempts[0].Finish.ReportError.Code != "ZCL_E_MISSING_ARTIFACT" {
-		t.Fatalf("expected reportError ZCL_E_MISSING_ARTIFACT, got: %+v", sum.Attempts[0].Finish.ReportError)
+	if !sum.Attempts[0].AutoFeedback || sum.Attempts[0].AutoFeedbackCode != "ZCL_E_MISSING_ARTIFACT" {
+		t.Fatalf("expected synthetic missing-artifact feedback, got: %+v", sum.Attempts[0])
 	}
-	foundMissingFeedback := false
-	for _, e := range sum.Attempts[0].Finish.Validate.Errors {
-		if e.Code == "ZCL_E_MISSING_ARTIFACT" {
-			foundMissingFeedback = true
-			break
-		}
+	if sum.Attempts[0].Finish.ReportError != nil {
+		t.Fatalf("expected report to be computable after synthetic feedback, got reportError=%+v", sum.Attempts[0].Finish.ReportError)
 	}
-	if !foundMissingFeedback {
-		t.Fatalf("expected validate to include ZCL_E_MISSING_ARTIFACT, got: %+v", sum.Attempts[0].Finish.Validate.Errors)
+	if !sum.Attempts[0].Finish.Validate.OK {
+		t.Fatalf("expected validate.ok=true after synthetic feedback, got: %+v", sum.Attempts[0].Finish.Validate)
+	}
+}
+
+func TestSuiteRun_FailFastSkipsRemainingMissions(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-fail-fast",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" },
+    { "missionId": "m2", "prompt": "p2" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=no-feedback",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		Failed   int `json:"failed"`
+		Attempts []struct {
+			MissionID  string `json:"missionId"`
+			AttemptID  string `json:"attemptId"`
+			Skipped    bool   `json:"skipped"`
+			SkipReason string `json:"skipReason"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 2 {
+		t.Fatalf("expected two attempts in summary, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].MissionID != "m1" || sum.Attempts[0].AttemptID == "" || sum.Attempts[0].Skipped {
+		t.Fatalf("unexpected first attempt: %+v", sum.Attempts[0])
+	}
+	if sum.Attempts[1].MissionID != "m2" || !sum.Attempts[1].Skipped || sum.Attempts[1].SkipReason == "" || sum.Attempts[1].AttemptID != "" {
+		t.Fatalf("expected second attempt skipped by fail-fast, got: %+v", sum.Attempts[1])
+	}
+	if sum.Failed != 2 {
+		t.Fatalf("expected failed=2 (failed + skipped), got: %+v", sum)
 	}
 }
 
