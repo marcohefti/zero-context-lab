@@ -472,6 +472,7 @@ func (r Runner) runAttemptStart(args []string) int {
 	suiteFile := fs.String("suite-file", "", "optional suite file (.json|.yaml|.yml) to snapshot into suite.json")
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	agentID := fs.String("agent-id", "", "runner agent id (optional)")
+	isolationModel := fs.String("isolation-model", "", "attempt isolation model: process_runner|native_spawn (optional)")
 	mode := fs.String("mode", "discovery", "run mode: discovery|ci")
 	timeoutMs := fs.Int64("timeout-ms", 0, "attempt timeout in ms (optional; also used by funnels as a mission deadline)")
 	timeoutStart := fs.String("timeout-start", "", "timeout anchor: attempt_start|first_tool_call (default: first_tool_call in discovery, attempt_start in ci)")
@@ -513,19 +514,20 @@ func (r Runner) runAttemptStart(args []string) int {
 	}
 
 	res, err := attempt.Start(r.Now(), attempt.StartOpts{
-		OutRoot:       m.OutRoot,
-		RunID:         *runID,
-		SuiteID:       *suite,
-		MissionID:     *mission,
-		AgentID:       *agentID,
-		Mode:          *mode,
-		Retry:         *retry,
-		Prompt:        *prompt,
-		TimeoutMs:     *timeoutMs,
-		TimeoutStart:  strings.TrimSpace(*timeoutStart),
-		Blind:         *blindMode,
-		BlindTerms:    blind.ParseTermsCSV(*blindTerms),
-		SuiteSnapshot: suiteSnap,
+		OutRoot:        m.OutRoot,
+		RunID:          *runID,
+		SuiteID:        *suite,
+		MissionID:      *mission,
+		AgentID:        *agentID,
+		IsolationModel: strings.TrimSpace(*isolationModel),
+		Mode:           *mode,
+		Retry:          *retry,
+		Prompt:         *prompt,
+		TimeoutMs:      *timeoutMs,
+		TimeoutStart:   strings.TrimSpace(*timeoutStart),
+		Blind:          *blindMode,
+		BlindTerms:     blind.ParseTermsCSV(*blindTerms),
+		SuiteSnapshot:  suiteSnap,
 	})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
@@ -1095,7 +1097,7 @@ Usage:
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
-  zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
@@ -1117,7 +1119,7 @@ Commands:
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
-  suite run       Run a suite end-to-end with wave parallelism + JIT attempt allocation.
+  suite run       Run a suite end-to-end with capability-aware isolation selection.
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
@@ -1157,14 +1159,14 @@ func printAttemptHelp(w io.Writer) {
 
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms a,b,c] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
+	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--isolation-model process_runner|native_spawn] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms a,b,c] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
 		`)
 }
 
 func printSuiteHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl suite plan --file <suite.(yaml|yml|json)> --json
-  zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
 `)
 }
 

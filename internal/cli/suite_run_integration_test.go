@@ -300,6 +300,103 @@ func TestSuiteRun_ParallelTotal_JITAllocation(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_RefusesImplicitProcessFallbackWhenHostIsNativeCapable(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-capability-guard",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	t.Setenv("ZCL_HOST_NATIVE_SPAWN", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "host advertises native spawning") {
+		t.Fatalf("expected native-capability guard error, got stderr=%q", stderr.String())
+	}
+}
+
+func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-capability-explicit-process",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	t.Setenv("ZCL_HOST_NATIVE_SPAWN", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "process",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK                        bool   `json:"ok"`
+		SessionIsolation          string `json:"sessionIsolation"`
+		SessionIsolationRequested string `json:"sessionIsolationRequested"`
+		HostNativeSpawnCapable    bool   `json:"hostNativeSpawnCapable"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK {
+		t.Fatalf("expected ok=true summary, got %+v", sum)
+	}
+	if sum.SessionIsolationRequested != "process" || sum.SessionIsolation != "process_runner" {
+		t.Fatalf("unexpected isolation fields: %+v", sum)
+	}
+	if !sum.HostNativeSpawnCapable {
+		t.Fatalf("expected hostNativeSpawnCapable=true")
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return

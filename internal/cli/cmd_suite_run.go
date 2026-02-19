@@ -52,6 +52,8 @@ type suiteRunAttemptResult struct {
 	MissionID  string `json:"missionId"`
 	AttemptID  string `json:"attemptId"`
 	AttemptDir string `json:"attemptDir"`
+	// IsolationModel records how the fresh session boundary was orchestrated.
+	IsolationModel string `json:"isolationModel,omitempty"`
 
 	RunnerExitCode  *int   `json:"runnerExitCode,omitempty"`
 	RunnerErrorCode string `json:"runnerErrorCode,omitempty"` // ZCL_E_TIMEOUT|ZCL_E_SPAWN|ZCL_E_CONTAMINATED_PROMPT
@@ -67,6 +69,12 @@ type suiteRunSummary struct {
 	SuiteID string `json:"suiteId"`
 	Mode    string `json:"mode"`
 	OutRoot string `json:"outRoot"`
+	// SessionIsolationRequested is the CLI selection (auto|process|native).
+	SessionIsolationRequested string `json:"sessionIsolationRequested"`
+	// SessionIsolation is the effective attempt isolation model.
+	SessionIsolation string `json:"sessionIsolation"`
+	// HostNativeSpawnCapable reflects ZCL_HOST_NATIVE_SPAWN parsing (informational).
+	HostNativeSpawnCapable bool `json:"hostNativeSpawnCapable"`
 
 	Attempts []suiteRunAttemptResult `json:"attempts"`
 
@@ -99,6 +107,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	timeoutStart := fs.String("timeout-start", "", "optional timeout anchor override: attempt_start|first_tool_call")
 	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
+	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
@@ -133,6 +142,27 @@ func (r Runner) runSuiteRun(args []string) int {
 	}
 	if !schema.IsValidTimeoutStartV1(strings.TrimSpace(*timeoutStart)) {
 		return r.failUsage("suite run: invalid --timeout-start (expected attempt_start|first_tool_call)")
+	}
+
+	hostNativeCapable := envBoolish("ZCL_HOST_NATIVE_SPAWN")
+	requestedIsolation := strings.ToLower(strings.TrimSpace(*sessionIsolation))
+	if requestedIsolation == "" {
+		requestedIsolation = "auto"
+	}
+	effectiveIsolation := schema.IsolationModelProcessRunnerV1
+	switch requestedIsolation {
+	case "auto":
+		if hostNativeCapable {
+			printSuiteRunHelp(r.Stderr)
+			return r.failUsage("suite run: host advertises native spawning (ZCL_HOST_NATIVE_SPAWN=1); refusing implicit process fallback. Use `zcl suite plan --json`/`zcl attempt start --json` with native spawn, or pass --session-isolation process to force process orchestration")
+		}
+	case "process":
+		effectiveIsolation = schema.IsolationModelProcessRunnerV1
+	case "native":
+		printSuiteRunHelp(r.Stderr)
+		return r.failUsage("suite run: native isolation is host-orchestrated (not process-spawned by suite run). Use `zcl suite plan --json` and spawn one fresh native session per attempt")
+	default:
+		return r.failUsage("suite run: invalid --session-isolation (expected auto|process|native)")
 	}
 
 	argv := fs.Args()
@@ -212,12 +242,15 @@ func (r Runner) runSuiteRun(args []string) int {
 	}
 
 	summary := suiteRunSummary{
-		OK:        true,
-		RunID:     strings.TrimSpace(*runID),
-		SuiteID:   parsed.Suite.SuiteID,
-		Mode:      resolvedMode,
-		OutRoot:   m.OutRoot,
-		CreatedAt: r.Now().UTC().Format(time.RFC3339Nano),
+		OK:                        true,
+		RunID:                     strings.TrimSpace(*runID),
+		SuiteID:                   parsed.Suite.SuiteID,
+		Mode:                      resolvedMode,
+		OutRoot:                   m.OutRoot,
+		SessionIsolationRequested: requestedIsolation,
+		SessionIsolation:          effectiveIsolation,
+		HostNativeSpawnCapable:    hostNativeCapable,
+		CreatedAt:                 r.Now().UTC().Format(time.RFC3339Nano),
 	}
 
 	// Keep stdout reserved for JSON; runner output is streamed to stderr.
@@ -250,6 +283,7 @@ func (r Runner) runSuiteRun(args []string) int {
 		ZCLExe:           zclExe,
 		Blind:            resolvedBlind,
 		BlindTerms:       resolvedBlindTerms,
+		IsolationModel:   effectiveIsolation,
 	}
 
 	wave := *parallel
@@ -271,18 +305,19 @@ func (r Runner) runSuiteRun(args []string) int {
 
 				startMu.Lock()
 				started, err := attempt.Start(r.Now(), attempt.StartOpts{
-					OutRoot:       m.OutRoot,
-					RunID:         currentRunID,
-					SuiteID:       parsed.Suite.SuiteID,
-					MissionID:     mission.MissionID,
-					Mode:          resolvedMode,
-					Retry:         1,
-					Prompt:        mission.Prompt,
-					TimeoutMs:     resolvedTimeoutMs,
-					TimeoutStart:  resolvedTimeoutStart,
-					Blind:         resolvedBlind,
-					BlindTerms:    resolvedBlindTerms,
-					SuiteSnapshot: parsed.CanonicalJSON,
+					OutRoot:        m.OutRoot,
+					RunID:          currentRunID,
+					SuiteID:        parsed.Suite.SuiteID,
+					MissionID:      mission.MissionID,
+					IsolationModel: effectiveIsolation,
+					Mode:           resolvedMode,
+					Retry:          1,
+					Prompt:         mission.Prompt,
+					TimeoutMs:      resolvedTimeoutMs,
+					TimeoutStart:   resolvedTimeoutStart,
+					Blind:          resolvedBlind,
+					BlindTerms:     resolvedBlindTerms,
+					SuiteSnapshot:  parsed.CanonicalJSON,
 				})
 				if err == nil {
 					currentRunID = started.RunID
@@ -293,7 +328,8 @@ func (r Runner) runSuiteRun(args []string) int {
 					harnessErr.Store(true)
 					fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: %s\n", err.Error())
 					results[idx] = suiteRunAttemptResult{
-						MissionID: mission.MissionID,
+						MissionID:      mission.MissionID,
+						IsolationModel: effectiveIsolation,
 						Finish: suiteRunFinishResult{
 							OK:           false,
 							Strict:       *strict,
@@ -314,6 +350,7 @@ func (r Runner) runSuiteRun(args []string) int {
 					Env:       started.Env,
 				}
 				ar, hard := r.executeSuiteRunMission(pm, execOpts)
+				ar.IsolationModel = effectiveIsolation
 				if hard {
 					harnessErr.Store(true)
 				}
@@ -366,13 +403,15 @@ type suiteRunExecOpts struct {
 	ZCLExe           string
 	Blind            bool
 	BlindTerms       []string
+	IsolationModel   string
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
 	ar := suiteRunAttemptResult{
-		MissionID:  pm.MissionID,
-		AttemptID:  pm.AttemptID,
-		AttemptDir: pm.OutDirAbs,
+		MissionID:      pm.MissionID,
+		AttemptID:      pm.AttemptID,
+		AttemptDir:     pm.OutDirAbs,
+		IsolationModel: opts.IsolationModel,
 		Finish: suiteRunFinishResult{
 			OK:           false,
 			Strict:       opts.Strict,
@@ -598,15 +637,26 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
+  - --session-isolation=auto refuses process fallback when host advertises native spawn via ZCL_HOST_NATIVE_SPAWN=1.
   - Attempts are allocated just-in-time, in waves (--parallel), to avoid pre-expiry before execution.
   - When --shim is used, ZCL prepends an attempt-local bin dir to PATH so the agent can type the tool name (e.g. surfwright) and still have invocations traced via zcl run.
   - In blind mode, contaminated prompts are rejected and recorded with typed evidence.
   - After the runner exits, ZCL finishes each attempt (report + validate + expect).
 `)
+}
+
+func envBoolish(name string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func fileExists(path string) bool {

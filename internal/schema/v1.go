@@ -28,9 +28,12 @@ type AttemptJSONV1 struct {
 	MissionID     string `json:"missionId"`
 	AttemptID     string `json:"attemptId"`
 	AgentID       string `json:"agentId,omitempty"`
-	Mode          string `json:"mode"`      // discovery|ci
-	StartedAt     string `json:"startedAt"` // RFC3339 UTC (use consistent precision)
-	TimeoutMs     int64  `json:"timeoutMs,omitempty"`
+	// IsolationModel records how this attempt's fresh session boundary was orchestrated.
+	// Allowed values: process_runner|native_spawn.
+	IsolationModel string `json:"isolationModel,omitempty"`
+	Mode           string `json:"mode"`      // discovery|ci
+	StartedAt      string `json:"startedAt"` // RFC3339 UTC (use consistent precision)
+	TimeoutMs      int64  `json:"timeoutMs,omitempty"`
 	// TimeoutStart controls when timeoutMs starts counting.
 	// Allowed values: attempt_start|first_tool_call.
 	TimeoutStart string `json:"timeoutStart,omitempty"`

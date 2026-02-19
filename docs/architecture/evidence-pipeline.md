@@ -8,7 +8,7 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
 - Primary evidence is artifacts, not transcripts:
   - `tool.calls.jsonl` is the action trace.
   - `feedback.json` is the authoritative outcome.
-- Runners remain external and swappable; ZCL owns evidence shape and guardrails.
+- Runners remain swappable across native spawn and process modes; ZCL owns evidence shape and guardrails.
 - Strict mode is enforceable and consistent:
   - CI attempts should be strict by default.
   - Strict implies missing required artifacts is a failing condition.

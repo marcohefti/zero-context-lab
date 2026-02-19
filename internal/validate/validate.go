@@ -182,6 +182,10 @@ func validateAttempt(attemptDir string, strict bool) Result {
 		addErr(&res, "ZCL_E_CONTRACT", "attempt mode is invalid (expected discovery|ci)", attemptJSONPath)
 		return finalize(res)
 	}
+	if !schema.IsValidIsolationModelV1(strings.TrimSpace(attempt.IsolationModel)) {
+		addErr(&res, "ZCL_E_CONTRACT", "attempt isolationModel is invalid (expected process_runner|native_spawn)", attemptJSONPath)
+		return finalize(res)
+	}
 	if strings.TrimSpace(attempt.StartedAt) == "" {
 		addErr(&res, "ZCL_E_CONTRACT", "attempt startedAt is missing", attemptJSONPath)
 		return finalize(res)

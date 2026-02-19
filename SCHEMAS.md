@@ -111,6 +111,7 @@ Required fields:
 
 Optional fields:
 - `agentId` (runner-provided correlation id)
+- `isolationModel` (`process_runner` or `native_spawn`; records how fresh session isolation was orchestrated)
 - `timeoutMs` (attempt deadline in ms from `startedAt`; funnels should enforce this as a mission-level deadline)
 - `timeoutStart` (`attempt_start` or `first_tool_call`; if omitted, discovery defaults to `first_tool_call`)
 - `timeoutStartedAt` (set when `timeoutStart=first_tool_call` and first funnel action starts)

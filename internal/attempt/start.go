@@ -15,39 +15,42 @@ import (
 )
 
 type StartOpts struct {
-	OutRoot       string
-	RunID         string
-	SuiteID       string
-	MissionID     string
-	AgentID       string
-	Mode          string
-	Retry         int
-	Prompt        string
-	TimeoutMs     int64
-	TimeoutStart  string
-	Blind         bool
-	BlindTerms    []string
-	SuiteSnapshot any
+	OutRoot        string
+	RunID          string
+	SuiteID        string
+	MissionID      string
+	AgentID        string
+	IsolationModel string
+	Mode           string
+	Retry          int
+	Prompt         string
+	TimeoutMs      int64
+	TimeoutStart   string
+	Blind          bool
+	BlindTerms     []string
+	SuiteSnapshot  any
 }
 
 type StartResult struct {
-	OK        bool              `json:"ok"`
-	RunID     string            `json:"runId"`
-	SuiteID   string            `json:"suiteId"`
-	MissionID string            `json:"missionId"`
-	AttemptID string            `json:"attemptId"`
-	AgentID   string            `json:"agentId,omitempty"`
-	Mode      string            `json:"mode"`
-	OutDir    string            `json:"outDir"`
-	OutDirAbs string            `json:"outDirAbs"`
-	Env       map[string]string `json:"env"`
-	CreatedAt string            `json:"createdAt"`
+	OK             bool              `json:"ok"`
+	RunID          string            `json:"runId"`
+	SuiteID        string            `json:"suiteId"`
+	MissionID      string            `json:"missionId"`
+	AttemptID      string            `json:"attemptId"`
+	AgentID        string            `json:"agentId,omitempty"`
+	IsolationModel string            `json:"isolationModel,omitempty"`
+	Mode           string            `json:"mode"`
+	OutDir         string            `json:"outDir"`
+	OutDirAbs      string            `json:"outDirAbs"`
+	Env            map[string]string `json:"env"`
+	CreatedAt      string            `json:"createdAt"`
 }
 
 func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	opts.SuiteID = strings.TrimSpace(opts.SuiteID)
 	opts.MissionID = strings.TrimSpace(opts.MissionID)
 	opts.AgentID = strings.TrimSpace(opts.AgentID)
+	opts.IsolationModel = strings.TrimSpace(opts.IsolationModel)
 	opts.Mode = strings.TrimSpace(opts.Mode)
 	opts.RunID = strings.TrimSpace(opts.RunID)
 	opts.OutRoot = strings.TrimSpace(opts.OutRoot)
@@ -75,6 +78,9 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	}
 	if mode != "discovery" && mode != "ci" {
 		return nil, fmt.Errorf("invalid --mode (expected discovery|ci)")
+	}
+	if !schema.IsValidIsolationModelV1(opts.IsolationModel) {
+		return nil, fmt.Errorf("invalid --isolation-model (expected %s|%s)", schema.IsolationModelProcessRunnerV1, schema.IsolationModelNativeSpawnV1)
 	}
 
 	outRoot := opts.OutRoot
@@ -189,16 +195,17 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	}
 
 	attemptMeta := schema.AttemptJSONV1{
-		SchemaVersion: schema.AttemptSchemaV1,
-		RunID:         runID,
-		SuiteID:       opts.SuiteID,
-		MissionID:     opts.MissionID,
-		AttemptID:     attemptID,
-		AgentID:       opts.AgentID,
-		Mode:          mode,
-		StartedAt:     now.UTC().Format(time.RFC3339Nano),
-		Blind:         opts.Blind,
-		BlindTerms:    append([]string(nil), opts.BlindTerms...),
+		SchemaVersion:  schema.AttemptSchemaV1,
+		RunID:          runID,
+		SuiteID:        opts.SuiteID,
+		MissionID:      opts.MissionID,
+		AttemptID:      attemptID,
+		AgentID:        opts.AgentID,
+		IsolationModel: opts.IsolationModel,
+		Mode:           mode,
+		StartedAt:      now.UTC().Format(time.RFC3339Nano),
+		Blind:          opts.Blind,
+		BlindTerms:     append([]string(nil), opts.BlindTerms...),
 	}
 	if opts.TimeoutMs > 0 {
 		timeoutStart := strings.TrimSpace(opts.TimeoutStart)
@@ -242,18 +249,22 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	if opts.AgentID != "" {
 		env["ZCL_AGENT_ID"] = opts.AgentID
 	}
+	if opts.IsolationModel != "" {
+		env["ZCL_ISOLATION_MODEL"] = opts.IsolationModel
+	}
 
 	return &StartResult{
-		OK:        true,
-		RunID:     runID,
-		SuiteID:   opts.SuiteID,
-		MissionID: opts.MissionID,
-		AttemptID: attemptID,
-		AgentID:   opts.AgentID,
-		Mode:      mode,
-		OutDir:    outDir,
-		OutDirAbs: outDirAbs,
-		Env:       env,
-		CreatedAt: now.UTC().Format(time.RFC3339Nano),
+		OK:             true,
+		RunID:          runID,
+		SuiteID:        opts.SuiteID,
+		MissionID:      opts.MissionID,
+		AttemptID:      attemptID,
+		AgentID:        opts.AgentID,
+		IsolationModel: opts.IsolationModel,
+		Mode:           mode,
+		OutDir:         outDir,
+		OutDirAbs:      outDirAbs,
+		Env:            env,
+		CreatedAt:      now.UTC().Format(time.RFC3339Nano),
 	}, nil
 }

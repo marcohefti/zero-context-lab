@@ -26,14 +26,14 @@ When an operator says "run this through ZCL: <mission>", do this:
 
 1. Resolve entrypoint: prefer `zcl` on `PATH`.
 2. Initialize project if needed: `zcl init` (idempotent).
-3. Prefer suite-driven runs for repeatability (Mode A):
-   - `zcl suite run --file <suite.(yaml|yml|json)> --shim surfwright --json -- <runner-cmd> [args...]`
-   - `--shim surfwright` lets the agent *visibly* type `surfwright ...` while ZCL still records every invocation to `tool.calls.jsonl`.
+3. Prefer native host spawning when available (Mode A):
+   - Single attempt: `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <promptText> --isolation-model native_spawn --json`
+   - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
+   - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
+4. Use process-runner orchestration only as an explicit fallback (Mode B):
+   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --shim surfwright --json -- <runner-cmd> [args...]`
+   - `--shim surfwright` lets the agent *visibly* type `surfwright ...` while ZCL still records invocations to `tool.calls.jsonl`.
    - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
-4. For ad-hoc single attempts (Mode B):
-   - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <promptText> --json`
-   - Capture the returned `env` map and pass it to the spawned agent process.
-   - If you need "agent only types surfwright", prefer `zcl suite run --shim surfwright` (attempt start does not install shims).
 5. Require the agent to finish by running:
    - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
 6. Optionally ask for self-report feedback and persist it as secondary evidence:
@@ -49,7 +49,7 @@ You must tell the spawned agent:
 - Finish rule: must end with `zcl feedback ...` (required for scoring).
 - Attempt context: ZCL attempt env vars are already provided (do not invent ids).
 - Tool execution rule depends on how you launched the attempt:
-  - If running under `zcl suite run --shim surfwright`: the agent should invoke `surfwright ...` normally (no `zcl run` ceremony).
+  - If running under `zcl suite run --session-isolation process --shim surfwright`: the agent should invoke `surfwright ...` normally (no `zcl run` ceremony).
   - If no shim is installed: all actions must go through ZCL funnels (e.g. `zcl run -- ...`) so evidence exists.
 
 ## Turn 2 (Default)

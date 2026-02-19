@@ -16,9 +16,8 @@ Each deep dive should follow a consistent structure:
 ## Deep Dives
 
 - `docs/architecture/suite-run.md`
-  - End-to-end suite orchestration (`zcl suite run`): plan -> spawn runner per mission -> finish/validate/expect.
+  - End-to-end suite orchestration (`zcl suite run`): capability guard -> process runner per mission -> finish/validate/expect.
 - `docs/architecture/evidence-pipeline.md`
   - Attempt lifecycle and the evidence-first contract (trace + feedback), including strict vs discovery behavior.
 - `docs/architecture/write-safety.md`
   - Atomic JSON writes, safe JSONL appends/locking, bounds, containment.
-

@@ -222,8 +222,8 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "attempt start",
-				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms <csv>] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
-				Summary: "Allocate a run/attempt directory and print canonical IDs + env for the spawned agent.",
+				Usage:   "zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--isolation-model process_runner|native_spawn] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms <csv>] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json",
+				Summary: "Allocate a run/attempt directory and print canonical IDs + env for a fresh session attempt.",
 			},
 			{
 				ID:      "attempt finish",
@@ -242,8 +242,8 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
-				Summary: "Run a suite end-to-end with wave parallelism and just-in-time attempt allocation, then finish/validate/expect each attempt.",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+				Summary: "Run a suite with capability-aware isolation selection, wave parallelism, and just-in-time attempt allocation, then finish/validate/expect each attempt.",
 			},
 			{
 				ID:      "replay",

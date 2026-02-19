@@ -31,9 +31,9 @@ Repo validation (must be green after meaningful changes):
 
 1. Initialize: `zcl init`
 2. Start attempt (JSON output is required for automation):
-   - `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --json`
-   - Or batch-plan a full suite: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-   - Or run a full suite end-to-end: `zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]`
+   - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
+   - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
+   - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --json -- <runner-cmd> [args...]`
 3. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)

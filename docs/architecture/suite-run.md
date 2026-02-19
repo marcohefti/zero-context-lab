@@ -3,9 +3,12 @@
 ## Problem
 Operators want to run an entire suite end-to-end with a single command, without baking in any runner-specific logic.
 We also need guardrails so runs produce valid primary evidence (trace + feedback) and failure modes are typed and automatable.
+We must also avoid silently preferring process orchestration when the host can natively spawn fresh agent sessions.
 
 ## Design Goals
-- Runner-agnostic: ZCL spawns an external runner per mission attempt and only provides env + artifacts.
+- Capability-first isolation:
+  - Prefer native host spawning when available.
+  - Make process runner usage explicit when native spawning is available.
 - Evidence-first: runner must use ZCL funnels (`zcl run`, `zcl mcp proxy`, `zcl http proxy`) and must finish with `zcl feedback`.
 - Deterministic automation:
   - Require `--json`.
@@ -18,7 +21,8 @@ We also need guardrails so runs produce valid primary evidence (trace + feedback
 
 ## Non-goals
 - ZCL does not interpret runner logs/transcripts for scoring.
-- ZCL does not provide a plugin runtime for runners; orchestration is process-level.
+- ZCL does not provide a plugin runtime for native spawning.
+- `zcl suite run` is not the native-spawn orchestrator; it is the process-runner executor with capability guards.
 - ZCL does not "auto-fix" missing evidence; it surfaces the failure (validate/report error).
 
 ## Where The Logic Lives
@@ -30,34 +34,43 @@ We also need guardrails so runs produce valid primary evidence (trace + feedback
 - Tests: `internal/cli/suite_run_integration_test.go`
 
 ## Runtime Flow
-Per `zcl suite run --file ... --parallel N --total M --json -- <runner-cmd> ...`:
+Per `zcl suite run --file ... --session-isolation auto|process|native --parallel N --total M --json -- <runner-cmd> ...`:
 
 1. Parse suite:
    - Read suite file once and resolve defaults/overrides (`mode`, `timeoutMs`, `timeoutStart`, `blind`).
-2. Execute in waves:
+2. Resolve session isolation:
+   - Parse `--session-isolation` (`auto|process|native`).
+   - Read host capability signal `ZCL_HOST_NATIVE_SPAWN`.
+   - `auto` + native-capable host => fail fast with `ZCL_E_USAGE` (refuse implicit process fallback).
+   - `native` => fail fast with `ZCL_E_USAGE` and direct operator to `zcl suite plan --json` + native host orchestration.
+   - `process` (or `auto` without native capability) => continue with process runner orchestration.
+3. Execute in waves:
    - Build mission queue (`--total`, cycling missions when `total > mission count`).
    - Allocate attempts just-in-time before each runner spawn (`attempt.Start(...)`) to avoid pre-expiry.
+   - Stamp each attempt with `attempt.json.isolationModel=process_runner`.
    - Run up to `--parallel` attempts concurrently per wave.
-3. For each allocated attempt:
+4. For each allocated attempt:
    - Build runner env:
      - start from current process env
      - overlay attempt `ZCL_*` env
+     - include `ZCL_ISOLATION_MODEL=process_runner`
      - optionally set `ZCL_PROMPT_PATH=<attemptDir>/prompt.txt` if present
    - Guardrail: read `attempt.json` and verify IDs match env (refuse to spawn on mismatch).
    - Blind mode (when enabled): reject prompt contamination and write typed evidence (`tool.calls.jsonl` + `feedback.json`) without spawning the runner.
    - Spawn runner:
      - stream runner stdout/stderr to ZCL stderr
      - apply attempt deadline semantics from attempt timeout config
-4. Finish attempt:
+5. Finish attempt:
    - Build and write `attempt.report.json`
    - Run `validate` and `expect`
-5. Emit one JSON summary on stdout and exit:
+6. Emit one JSON summary on stdout and exit:
    - `0` if all attempts OK
    - `2` if suite completed but some attempts failed finish/expect/validate/outcome
    - `1` for harness errors (spawn/I/O/timeouts/runner non-zero exit)
 
 ## Invariants / Guardrails
 - `--json` is required.
+- `--session-isolation=auto` will not silently use process orchestration when `ZCL_HOST_NATIVE_SPAWN=1`.
 - Runner command must be provided after `--`.
 - Runner is spawned with a clean, explicit attempt env (no implicit globals required besides the runner binary).
 - ZCL does not consider the suite successful unless:
@@ -68,6 +81,7 @@ Per `zcl suite run --file ... --parallel N --total M --json -- <runner-cmd> ...`
 - Human-readable progress (per mission) is emitted to stderr:
   - mission id, attempt id, runner basename
 - Machine-readable summary is emitted once to stdout:
+  - includes `sessionIsolationRequested`, `sessionIsolation`, and `hostNativeSpawnCapable`
   - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, `ZCL_E_CONTAMINATED_PROMPT`), and finish results.
 
 ## Testing Expectations

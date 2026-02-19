@@ -13,7 +13,7 @@ Read order:
 - Funnel-first evidence: metrics/scoring derive from ZCL artifacts, not runner internals.
 - Deterministic artifact contract: stable shapes, bounded payloads, atomic writes.
 - Tool-agnostic funnels: CLI/MCP/HTTP boundaries emit a common trace schema.
-- Runner-agnostic orchestration: runners are external processes; ZCL provides env + guardrails.
+- Capability-first orchestration: prefer native host spawn isolation when available; use process runners as an explicit fallback.
 - Operator UX: obvious workflows, typed errors, stable `--json` outputs for automation.
 
 ## Non-goals (core)
@@ -37,8 +37,8 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl init`
 - `zcl contract --json`
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-- `zcl suite run --file <suite.(yaml|yml|json)> --json -- <runner-cmd> [args...]`
-- `zcl attempt start --suite <suiteId> --mission <missionId> --json`
+- `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]`
+- `zcl attempt start --suite <suiteId> --mission <missionId> [--isolation-model process_runner|native_spawn] --json`
 - `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`
 - `zcl attempt explain [--strict] [--json] [--tail N] [<attemptDir>]`
 - `zcl run -- <cmd> [args...]`
@@ -67,6 +67,7 @@ Attempt context is provided to runners as env vars:
 - `ZCL_OUT_DIR` (attempt directory; identity boundary)
 - `ZCL_TMP_DIR` (scratch directory under `<outRoot>/tmp/<runId>/<attemptId>/`)
 - `ZCL_AGENT_ID` (optional runner correlation)
+- `ZCL_ISOLATION_MODEL` (optional; `process_runner|native_spawn`)
 - `ZCL_PROMPT_PATH` (optional pointer to `prompt.txt`; set by orchestration when present)
 
 ## Code Map (Where Things Live)
