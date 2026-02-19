@@ -32,8 +32,10 @@ jobs:
           set -euo pipefail
           repo="https://github.com/${{ github.repository }}"
           out="$(mktemp)"
+          clean="$(mktemp)"
           npx -y skills@latest add "$repo" --list | tee "$out"
-          grep -qE '(^|[[:space:]])zcl([[:space:]]|$)' "$out"
+          perl -pe 's/\e\[[0-9;?]*[ -\/]*[@-~]//g' "$out" > "$clean"
+          grep -qE '(^|[[:space:]])zcl([[:space:]]|$)' "$clean"
 
   publish-update-signal:
     needs: verify-discoverability
