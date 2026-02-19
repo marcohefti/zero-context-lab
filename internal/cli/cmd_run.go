@@ -180,11 +180,14 @@ func (r Runner) runRun(args []string) int {
 		traceRes.CapturedStdoutPath = outRel
 		traceRes.CapturedStderrPath = errRel
 
-		writeCap := func(rel string, buf *boundedBuffer) (written int64, shaHex string, truncated bool, applied []string, ok bool) {
+		writeCap := func(rel string, buf *boundedBuffer, fallback []byte) (written int64, shaHex string, truncated bool, applied []string, ok bool) {
 			if buf == nil {
 				return 0, "", false, nil, true
 			}
 			b := buf.Bytes()
+			if len(b) == 0 && len(fallback) > 0 {
+				b = fallback
+			}
 			trunc := buf.Truncated()
 
 			if !*captureRaw {
@@ -221,11 +224,11 @@ func (r Runner) runRun(args []string) int {
 			errApplied []string
 			capApplied []string
 		)
-		traceRes.CapturedStdoutBytes, traceRes.CapturedStdoutSHA256, traceRes.CapturedStdoutTruncated, outApplied, ok = writeCap(outRel, outBuf)
+		traceRes.CapturedStdoutBytes, traceRes.CapturedStdoutSHA256, traceRes.CapturedStdoutTruncated, outApplied, ok = writeCap(outRel, outBuf, []byte(res.OutPreview))
 		if !ok {
 			return 1
 		}
-		traceRes.CapturedStderrBytes, traceRes.CapturedStderrSHA256, traceRes.CapturedStderrTruncated, errApplied, ok = writeCap(errRel, errBuf)
+		traceRes.CapturedStderrBytes, traceRes.CapturedStderrSHA256, traceRes.CapturedStderrTruncated, errApplied, ok = writeCap(errRel, errBuf, []byte(res.ErrPreview))
 		if !ok {
 			return 1
 		}
