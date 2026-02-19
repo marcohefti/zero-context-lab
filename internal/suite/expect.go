@@ -47,7 +47,7 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 	if m.Expects.Result != nil {
 		switch m.Expects.Result.Type {
 		case "string":
-			if fb.ResultJSON != nil && len(fb.ResultJSON) > 0 {
+			if len(fb.ResultJSON) > 0 {
 				failures = append(failures, ExpectationFailure{
 					Code:    "ZCL_E_EXPECT_RESULT_TYPE",
 					Message: "expected result type string, got resultJson",
@@ -75,7 +75,7 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 				}
 			}
 		case "json":
-			if fb.ResultJSON == nil || len(fb.ResultJSON) == 0 {
+			if len(fb.ResultJSON) == 0 {
 				failures = append(failures, ExpectationFailure{
 					Code:    "ZCL_E_EXPECT_RESULT_TYPE",
 					Message: "expected result type json, got result",

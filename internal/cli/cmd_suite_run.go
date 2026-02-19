@@ -33,6 +33,20 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
 
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	if lw == nil || lw.w == nil {
+		return len(p), nil
+	}
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
+}
+
 type suiteRunReportErr struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -314,6 +328,10 @@ func (r Runner) runSuiteRun(args []string) int {
 		harnessErr   atomic.Bool
 		currentRunID = strings.TrimSpace(*runID)
 	)
+	errWriter := &lockedWriter{
+		mu: &sync.Mutex{},
+		w:  r.Stderr,
+	}
 	execOpts := suiteRunExecOpts{
 		RunnerCmd:        runnerCmd,
 		RunnerArgs:       runnerArgs,
@@ -327,6 +345,7 @@ func (r Runner) runSuiteRun(args []string) int {
 		Blind:            resolvedBlind,
 		BlindTerms:       resolvedBlindTerms,
 		IsolationModel:   effectiveIsolation,
+		StderrWriter:     errWriter,
 	}
 
 	wave := *parallel
@@ -373,7 +392,7 @@ func (r Runner) runSuiteRun(args []string) int {
 
 				if err != nil {
 					harnessErr.Store(true)
-					fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: %s\n", err.Error())
+					fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
 					results[idx].RunnerErrorCode = "ZCL_E_USAGE"
 					results[idx].OK = false
 					return
@@ -446,9 +465,14 @@ type suiteRunExecOpts struct {
 	Blind            bool
 	BlindTerms       []string
 	IsolationModel   string
+	StderrWriter     io.Writer
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
+	errWriter := opts.StderrWriter
+	if errWriter == nil {
+		errWriter = r.Stderr
+	}
 	ar := suiteRunAttemptResult{
 		MissionID:      pm.MissionID,
 		AttemptID:      pm.AttemptID,
@@ -481,7 +505,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		if err != nil {
 			harnessErr = true
 			ar.RunnerErrorCode = "ZCL_E_USAGE"
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: %s\n", err.Error())
+			fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
 		} else {
 			shimBinDir = dir
 			env["ZCL_SHIM_BIN_DIR"] = shimBinDir
@@ -502,26 +526,27 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	var logW *runnerLogWriter
 	var stopLogs chan struct{}
 	var logErrCh chan error
+	var stopLogsOnce sync.Once
 	stopRunnerLogs := func() {
 		if stopLogs == nil {
 			return
 		}
-		close(stopLogs)
-		stopLogs = nil
-		if logErrCh != nil {
-			if lerr := <-logErrCh; lerr != nil {
-				harnessErr = true
-				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", lerr.Error())
+		stopLogsOnce.Do(func() {
+			close(stopLogs)
+			if logErrCh != nil {
+				if lerr := <-logErrCh; lerr != nil {
+					harnessErr = true
+					ar.RunnerErrorCode = "ZCL_E_IO"
+					fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", lerr.Error())
+				}
 			}
-			logErrCh = nil
-		}
+		})
 	}
 	if opts.CaptureRunnerIO {
 		if opts.RunnerIOMaxBytes <= 0 {
 			harnessErr = true
 			ar.RunnerErrorCode = "ZCL_E_USAGE"
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: --runner-io-max-bytes must be > 0\n")
+			fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: --runner-io-max-bytes must be > 0\n")
 		} else {
 			stdoutTB = newTailBuffer(opts.RunnerIOMaxBytes)
 			stderrTB = newTailBuffer(opts.RunnerIOMaxBytes)
@@ -536,7 +561,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			if err := logW.Flush(true); err != nil {
 				harnessErr = true
 				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", err.Error())
+				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 			} else {
 				stopLogs = make(chan struct{})
 				logErrCh = make(chan error, 1)
@@ -565,7 +590,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	if err := verifyAttemptMatchesEnv(pm.OutDirAbs, env); err != nil {
 		harnessErr = true
 		ar.RunnerErrorCode = "ZCL_E_USAGE"
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite run: %s\n", err.Error())
+		fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
 		stopRunnerLogs()
 	} else if opts.Blind {
 		found := promptContamination(pm.OutDirAbs, opts.BlindTerms)
@@ -590,7 +615,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			}); err != nil {
 				harnessErr = true
 				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", err.Error())
+				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 			} else if err := feedback.Write(r.Now(), envTrace, feedback.WriteOpts{
 				OK:           false,
 				Result:       "CONTAMINATED_PROMPT",
@@ -598,20 +623,20 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			}); err != nil {
 				harnessErr = true
 				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", err.Error())
+				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 			}
 			stopRunnerLogs()
 		} else {
-			harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar) || harnessErr
+			harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
 			stopRunnerLogs()
 		}
 	} else {
-		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar) || harnessErr
+		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
 		stopRunnerLogs()
 	}
 	if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar); err != nil {
 		harnessErr = true
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", err.Error())
+		fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 	}
 
 	ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
@@ -620,7 +645,10 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	return ar, harnessErr
 }
 
-func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult) bool {
+func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	if errWriter == nil {
+		errWriter = r.Stderr
+	}
 	now := r.Now()
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, pm.OutDirAbs)
 	if cancel != nil {
@@ -631,17 +659,17 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 		return false
 	}
 
-	fmt.Fprintf(r.Stderr, "suite run: mission=%s attempt=%s runner=%s\n", pm.MissionID, pm.AttemptID, filepath.Base(runnerCmd))
+	fmt.Fprintf(errWriter, "suite run: mission=%s attempt=%s runner=%s\n", pm.MissionID, pm.AttemptID, filepath.Base(runnerCmd))
 
 	cmd := exec.CommandContext(ctx, runnerCmd, runnerArgs...)
 	cmd.Env = mergeEnviron(os.Environ(), env)
 	cmd.Stdin = os.Stdin
 	if stdoutTB != nil && stderrTB != nil {
-		cmd.Stdout = io.MultiWriter(r.Stderr, stdoutTB)
-		cmd.Stderr = io.MultiWriter(r.Stderr, stderrTB)
+		cmd.Stdout = io.MultiWriter(errWriter, stdoutTB)
+		cmd.Stderr = io.MultiWriter(errWriter, stderrTB)
 	} else {
-		cmd.Stdout = r.Stderr
-		cmd.Stderr = r.Stderr
+		cmd.Stdout = errWriter
+		cmd.Stderr = errWriter
 	}
 
 	err := cmd.Run()
@@ -925,10 +953,7 @@ func isStartFailure(err error) bool {
 		return true
 	}
 	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return true
-	}
-	return false
+	return errors.As(err, &pe)
 }
 
 func mergeEnviron(base []string, overlay map[string]string) []string {
