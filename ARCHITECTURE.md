@@ -54,7 +54,9 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl doctor [--json]`
 - `zcl gc [--dry-run] [--json]`
 - `zcl pin --run-id <runId> --on|--off [--json]`
-- `zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]`
+- `zcl enrich --runner codex|claude --rollout <rollout.jsonl> [<attemptDir>]`
+- Real example command:
+- `zcl enrich --runner claude --rollout /Users/<you>/.claude/projects/<project>/<session>.jsonl .zcl/runs/<runId>/attempts/<attemptId>`
 
 Stdout/stderr contract (operator UX + automation):
 - When `--json` is present, stdout is JSON only.

@@ -300,7 +300,7 @@
     },
     {
       "id": "enrich",
-      "usage": "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
+      "usage": "zcl enrich --runner codex|claude --rollout <rollout.jsonl> [<attemptDir>]",
       "summary": "Optional runner enrichment (writes runner.ref.json + runner.metrics.json)."
     },
     {

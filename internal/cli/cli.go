@@ -26,6 +26,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/planner"
 	"github.com/marcohefti/zero-context-lab/internal/replay"
 	"github.com/marcohefti/zero-context-lab/internal/report"
+	"github.com/marcohefti/zero-context-lab/internal/runners"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
@@ -827,8 +828,8 @@ func (r Runner) runEnrich(args []string) int {
 	fs := flag.NewFlagSet("enrich", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	runner := fs.String("runner", "", "runner kind (required): codex")
-	rollout := fs.String("rollout", "", "path to runner rollout jsonl (required for codex)")
+	runner := fs.String("runner", "", "runner kind (required): "+runners.CLIUsageValues())
+	rollout := fs.String("rollout", "", "path to runner rollout/session jsonl (required)")
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
@@ -860,7 +861,7 @@ func (r Runner) runEnrich(args []string) int {
 	}
 
 	switch *runner {
-	case "codex":
+	case string(runners.CodexRunner):
 		if err := enrich.EnrichCodexAttempt(target, *rollout); err != nil {
 			var ce *enrich.CliError
 			if errors.As(err, &ce) {
@@ -870,8 +871,18 @@ func (r Runner) runEnrich(args []string) int {
 			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 			return 1
 		}
+	case string(runners.ClaudeRunner):
+		if err := enrich.EnrichClaudeAttempt(target, *rollout); err != nil {
+			var ce *enrich.CliError
+			if errors.As(err, &ce) {
+				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
+				return 2
+			}
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
 	default:
-		return r.failUsage("enrich: unsupported --runner (expected codex)")
+		return r.failUsage("enrich: unsupported --runner (expected " + runners.CLIUsageValues() + ")")
 	}
 
 	fmt.Fprintf(r.Stdout, "enrich: OK\n")
@@ -1196,8 +1207,9 @@ Usage:
   zcl doctor [--json]
   zcl gc [--dry-run] [--json]
   zcl pin --run-id <runId> --on|--off [--json]
-  zcl enrich --runner codex --rollout <path> [<attemptDir>]
-  zcl mcp proxy -- <server-cmd> [args...]
+`)
+	fmt.Fprintf(w, "  %s\n", enrichUsage())
+	fmt.Fprint(w, `  zcl mcp proxy -- <server-cmd> [args...]
   zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]
   zcl run -- <cmd> [args...]
 
@@ -1328,9 +1340,11 @@ func printGCHelp(w io.Writer) {
 }
 
 func printEnrichHelp(w io.Writer) {
-	fmt.Fprint(w, `Usage:
-  zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]
-`)
+	fmt.Fprintf(w, "Usage:\n  %s\n", enrichUsage())
+}
+
+func enrichUsage() string {
+	return fmt.Sprintf("zcl enrich --runner %s --rollout <rollout.jsonl> [<attemptDir>]", runners.CLIUsageValues())
 }
 
 func printMCPHelp(w io.Writer) {

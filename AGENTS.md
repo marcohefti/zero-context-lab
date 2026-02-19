@@ -45,7 +45,8 @@ Repo validation (must be green after meaningful changes):
    - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
 6. Optional secondary evidence:
    - `zcl note --kind agent|operator --message <text>`
-   - `zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]`
+   - `zcl enrich --runner codex|claude --rollout <rollout.jsonl> [<attemptDir>]`
+   - Example: `zcl enrich --runner claude --rollout /Users/<you>/.claude/projects/<project>/<session>.jsonl .zcl/runs/<runId>/attempts/<attemptId>`
 7. Compute and validate:
    - `zcl report --strict <attemptDir|runDir>`
    - `zcl validate --strict <attemptDir|runDir>`

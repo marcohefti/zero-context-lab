@@ -1,5 +1,7 @@
 package contract
 
+import "github.com/marcohefti/zero-context-lab/internal/runners"
+
 type Contract struct {
 	Name                  string     `json:"name"`
 	Version               string     `json:"version"`
@@ -218,7 +220,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "enrich",
-				Usage:   "zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]",
+				Usage:   "zcl enrich --runner " + runners.CLIUsageValues() + " --rollout <rollout.jsonl> [<attemptDir>]",
 				Summary: "Optional runner enrichment (writes runner.ref.json + runner.metrics.json).",
 			},
 			{

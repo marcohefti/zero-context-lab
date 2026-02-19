@@ -30,6 +30,9 @@ jobs:
       - name: Verify
         run: ./scripts/verify.sh
 
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
   store-cross-platform:
     strategy:
       fail-fast: false
@@ -49,3 +52,40 @@ jobs:
 
       - name: Store Tests
         run: go test ./internal/store
+
+  cli-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: CLI help & error-path smoke
+        run: |
+          go run ./cmd/zcl help | grep -q "zcl enrich --runner"
+          err_output="$(go run ./cmd/zcl enrich --runner invalid --rollout /tmp/missing 2>&1 || true)"
+          echo "$err_output"
+          echo "$err_output" | grep -q "ZCL_E_USAGE"
+          echo "$err_output" | grep -q "unsupported --runner"
+
+  verify-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go race
+        run: go test -race ./...
