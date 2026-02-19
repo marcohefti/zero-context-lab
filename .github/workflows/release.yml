@@ -99,4 +99,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/zcl.rb
           git commit -m "chore(brew): bump zcl formula to ${{ steps.ver.outputs.tag }}"
-          git push
+          # Tag workflows run on a detached HEAD; push explicitly to main.
+          git push origin HEAD:main
