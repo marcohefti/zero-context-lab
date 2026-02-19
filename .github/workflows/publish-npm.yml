@@ -37,5 +37,11 @@ jobs:
           fi
           version="${tag#v}"
 
+          pkg="@marcohefti/zcl"
+          if npm view "$pkg@$version" version >/dev/null 2>&1; then
+            echo "already published: $pkg@$version"
+            exit 0
+          fi
+
           npm pkg set version="$version" >/dev/null
-          npm publish --access public
+          npm publish --access public --provenance

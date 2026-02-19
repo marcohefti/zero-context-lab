@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build-release:
     runs-on: ubuntu-latest
@@ -27,6 +31,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Verify
+        run: ./scripts/verify.sh
 
       - name: Resolve Version
         id: ver
