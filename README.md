@@ -7,6 +7,10 @@
 [![Homebrew (planned)](https://img.shields.io/badge/homebrew-planned-lightgrey?style=flat-square&logo=homebrew)](#install)
 [![npm (planned)](https://img.shields.io/badge/npm-planned-lightgrey?style=flat-square&logo=npm)](#install)
 
+<p align="center">
+  <img src="assets/brand/zcl-banner.png" width="720" alt="Zero Context Lab">
+</p>
+
 ZCL helps you build better agentic tools by testing them with real agents and turning each run into structured evidence.
 
 You run a mission through ZCL, record the final result, and get a clear breakdown of what happened:
