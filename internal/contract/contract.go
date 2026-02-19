@@ -177,6 +177,11 @@ func Build(version string) Contract {
 				Summary: "Initialize the project output root and write the minimal project config.",
 			},
 			{
+				ID:      "update status",
+				Usage:   "zcl update status [--cached] [--json]",
+				Summary: "Check latest release status (manual update policy; no runtime auto-update).",
+			},
+			{
 				ID:      "feedback",
 				Usage:   "zcl feedback --ok|--fail --result <string>|--result-json <json> [--classification <...>] [--decision-tag <tag>] [--decision-tags <csv>]",
 				Summary: "Write the canonical attempt outcome to feedback.json (primary evidence).",
@@ -289,6 +294,7 @@ func Build(version string) Contract {
 			{Code: "ZCL_E_TOOL_FAILED", Summary: "Wrapped tool execution completed with a non-zero outcome.", Retryable: true},
 			{Code: "ZCL_E_TIMEOUT", Summary: "Timed out waiting for a tool operation.", Retryable: true},
 			{Code: "ZCL_E_CONTAMINATED_PROMPT", Summary: "Blind mode rejected a prompt containing harness terms.", Retryable: false},
+			{Code: "ZCL_E_VERSION_FLOOR", Summary: "Installed zcl version does not satisfy required minimum version.", Retryable: false},
 			{Code: "ZCL_E_FUNNEL_BYPASS", Summary: "Primary evidence missing/empty despite a final outcome being recorded (funnel bypass suspected).", Retryable: false},
 			{Code: "ZCL_E_EXPECTATION_FAILED", Summary: "Suite expectations did not match feedback.json.", Retryable: false},
 		},

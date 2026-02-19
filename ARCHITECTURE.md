@@ -35,6 +35,7 @@ Primary evidence:
 Orchestrator-facing commands should prefer stable `--json` output.
 
 - `zcl init`
+- `zcl update status [--cached] [--json]`
 - `zcl contract --json`
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`
 - `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]`
@@ -70,6 +71,7 @@ Attempt context is provided to runners as env vars:
 - `ZCL_AGENT_ID` (optional runner correlation)
 - `ZCL_ISOLATION_MODEL` (optional; `process_runner|native_spawn`)
 - `ZCL_PROMPT_PATH` (optional pointer to `prompt.txt`; set by orchestration when present)
+- `ZCL_MIN_VERSION` (optional semver floor; if set and current `zcl` is below floor, commands fail fast with `ZCL_E_VERSION_FLOOR`)
 
 Safety knobs:
 - `zcl run --capture --capture-raw` is blocked in CI/strict contexts unless `ZCL_ALLOW_UNSAFE_CAPTURE=1`.

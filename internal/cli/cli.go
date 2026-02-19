@@ -61,12 +61,18 @@ func (r Runner) Run(args []string) int {
 		printRootHelp(r.Stdout)
 		return 0
 	}
+	if exit, stop := r.enforceVersionFloor(args); stop {
+		return exit
+	}
+	r.maybePrintUpdateNotice(args)
 
 	switch args[0] {
 	case "contract":
 		return r.runContract(args[1:])
 	case "init":
 		return r.runInit(args[1:])
+	case "update":
+		return r.runUpdate(args[1:])
 	case "feedback":
 		return r.runFeedback(args[1:])
 	case "note":
@@ -1174,6 +1180,7 @@ func printRootHelp(w io.Writer) {
 
 Usage:
   zcl init [--out-root .zcl] [--config zcl.config.json] [--json]
+  zcl update status [--cached] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl attempt finish [--strict] [--json] [<attemptDir>]
@@ -1196,6 +1203,7 @@ Usage:
 
 Commands:
   init            Initialize the project (.zcl output root + zcl.config.json).
+  update status   Check latest release status (manual updates only; no auto-update).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).

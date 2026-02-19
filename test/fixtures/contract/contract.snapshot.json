@@ -259,6 +259,11 @@
       "summary": "Initialize the project output root and write the minimal project config."
     },
     {
+      "id": "update status",
+      "usage": "zcl update status [--cached] [--json]",
+      "summary": "Check latest release status (manual update policy; no runtime auto-update)."
+    },
+    {
       "id": "feedback",
       "usage": "zcl feedback --ok|--fail --result <string>|--result-json <json> [--classification <...>] [--decision-tag <tag>] [--decision-tags <csv>]",
       "summary": "Write the canonical attempt outcome to feedback.json (primary evidence)."
@@ -433,6 +438,11 @@
     {
       "code": "ZCL_E_CONTAMINATED_PROMPT",
       "summary": "Blind mode rejected a prompt containing harness terms.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_VERSION_FLOOR",
+      "summary": "Installed zcl version does not satisfy required minimum version.",
       "retryable": false
     },
     {

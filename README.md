@@ -31,6 +31,14 @@ This makes it easier to improve command design, naming, and defaults so agents c
 - Captures are bounded and redacted by default.
 - Operator workflows are JSON-first for automation.
 
+## Quick Install
+
+skills.sh (agent-first):
+
+```bash
+npx skills add marcohefti/zero-context-lab@zcl
+```
+
 ## Install
 
 Current install path (from source):
@@ -58,6 +66,42 @@ Alternative (Go toolchain install):
 ```bash
 go install github.com/marcohefti/zero-context-lab/cmd/zcl@latest
 ```
+
+skills.sh:
+
+```bash
+npx skills add marcohefti/zero-context-lab@zcl
+```
+
+## Updates
+
+ZCL does not auto-update at runtime.
+
+Check update status:
+
+```bash
+zcl update status --json
+zcl update status --cached --json
+```
+
+Update explicitly via your install path:
+
+```bash
+npm i -g @marcohefti/zcl@latest
+brew upgrade marcohefti/zero-context-lab/zcl
+go install github.com/marcohefti/zero-context-lab/cmd/zcl@latest
+```
+
+Agent harnesses can enforce a minimum installed version via:
+
+```bash
+export ZCL_MIN_VERSION=0.2.0
+```
+
+Interactive shells get at-most-once-per-day update notices by default.
+Set `ZCL_DISABLE_UPDATE_NOTIFY=1` to silence notices, or `ZCL_ENABLE_UPDATE_NOTIFY=1` to force-enable.
+
+`zcl` on skills.sh is synced via GitHub Actions: `.github/workflows/skills-sh.yml`.
 
 ## Quick Start (Single Attempt)
 
@@ -150,6 +194,7 @@ Root: `.zcl/`
 
 Core commands:
 - `zcl init`
+- `zcl update status [--cached] [--json]`
 - `zcl contract --json`
 - `zcl attempt start|finish|explain`
 - `zcl suite plan|run`

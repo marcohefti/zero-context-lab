@@ -30,20 +30,23 @@ Repo validation (must be green after meaningful changes):
 ## Operator Workflow (Golden Path)
 
 1. Initialize: `zcl init`
-2. Start attempt (JSON output is required for automation):
+2. Optional preflight (recommended for agent harnesses):
+   - `zcl update status --json` (manual update policy; no auto-update)
+   - Set `ZCL_MIN_VERSION=<semver>` in harness env to fail fast on old installs.
+3. Start attempt (JSON output is required for automation):
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --json -- <runner-cmd> [args...]`
-3. Run actions through the funnel:
+4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
    - HTTP: `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]` (writes `tool.calls.jsonl`)
-4. Finish with authoritative outcome:
+5. Finish with authoritative outcome:
    - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
-5. Optional secondary evidence:
+6. Optional secondary evidence:
    - `zcl note --kind agent|operator --message <text>`
    - `zcl enrich --runner codex --rollout <rollout.jsonl> [<attemptDir>]`
-6. Compute and validate:
+7. Compute and validate:
    - `zcl report --strict <attemptDir|runDir>`
    - `zcl validate --strict <attemptDir|runDir>`
    - If using suites with `expects`: `zcl expect --strict --json <attemptDir|runDir>`

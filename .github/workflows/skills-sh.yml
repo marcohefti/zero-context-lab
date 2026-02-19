@@ -1,0 +1,56 @@
+name: skills-sh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/zcl/**"
+      - ".github/workflows/skills-sh.yml"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: skills-sh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-discoverability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify zcl skill is discoverable from GitHub repo
+        env:
+          DISABLE_TELEMETRY: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="https://github.com/${{ github.repository }}"
+          out="$(mktemp)"
+          npx -y skills@latest add "$repo" --list | tee "$out"
+          grep -qE '(^|[[:space:]])zcl([[:space:]]|$)' "$out"
+
+  publish-update-signal:
+    needs: verify-discoverability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Publish/update skills.sh signal for zcl
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="${RUNNER_TEMP}/skills-home"
+          mkdir -p "$HOME"
+          repo="https://github.com/${{ github.repository }}"
+          npx -y skills@latest add "$repo" --skill zcl --agent '*' -g -y
+          echo "skills-sh: publish/update signal complete for ${repo}@zcl"

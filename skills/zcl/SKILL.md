@@ -25,20 +25,23 @@ Secondary evidence (optional):
 When an operator says "run this through ZCL: <mission>", do this:
 
 1. Resolve entrypoint: prefer `zcl` on `PATH`.
-2. Initialize project if needed: `zcl init` (idempotent).
-3. Prefer native host spawning when available (Mode A):
+2. Preflight version policy for agent reliability:
+   - Check latest metadata: `zcl update status --json`
+   - Prefer explicit harness floor: set `ZCL_MIN_VERSION=<semver>`; ZCL fails fast with `ZCL_E_VERSION_FLOOR` when below floor.
+3. Initialize project if needed: `zcl init` (idempotent).
+4. Prefer native host spawning when available (Mode A):
    - Single attempt: `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <promptText> --isolation-model native_spawn --json`
    - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
-4. Use process-runner orchestration only as an explicit fallback (Mode B):
+5. Use process-runner orchestration only as an explicit fallback (Mode B):
    - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --shim surfwright --json -- <runner-cmd> [args...]`
    - `--shim surfwright` lets the agent *visibly* type `surfwright ...` while ZCL still records invocations to `tool.calls.jsonl`.
    - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
-5. Require the agent to finish by running:
+6. Require the agent to finish by running:
    - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
-6. Optionally ask for self-report feedback and persist it as secondary evidence:
+7. Optionally ask for self-report feedback and persist it as secondary evidence:
    - `zcl note --kind agent --message "..."`
-7. Report back from artifacts (not from transcript):
+8. Report back from artifacts (not from transcript):
    - Primary: `tool.calls.jsonl`, `feedback.json`
    - Derived: `attempt.report.json`
    - Post-mortem: `zcl attempt explain [<attemptDir>]` (tail trace + pointers)
@@ -72,7 +75,7 @@ Suite `expects` can be grounded in:
 
 ## Local Install (CLI + Skill)
 
-If `zcl` is not on `PATH` (or you want it auto-updated from this checkout):
+If `zcl` is not on `PATH` (or you want it rebuilt from this checkout):
 1. Build + install the CLI and link the skill:
    - `scripts/dev-local-install.sh`
 2. Optional: auto-install on `git pull` / branch switch:

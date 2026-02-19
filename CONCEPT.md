@@ -633,10 +633,10 @@ Patterns worth copying into ZCL:
   - OpenClaw serves `install.sh`, `install-cli.sh` (local prefix, no root), and `install.ps1` from a website and documents their flow + flags.
   - Reference: `/Users/marcohefti/Sites/openclaw/docs/install/installer.md`.
   - Implication for ZCL: if we ever want one-liner installers, keep them as small scripts in-repo (or attached to GitHub Releases) and optionally run `zcl doctor` / `zcl init`. A dedicated domain is unnecessary for a benchmark tool.
-- **Update is a first-class UX surface (status + wizard + JSON).**
+- **Update status is a first-class UX surface (JSON), but runtime self-mutation is out-of-scope.**
   - OpenClaw provides `openclaw update`, `openclaw update status`, `openclaw update wizard`, `--channel stable|beta|dev`, and `--json`.
   - Reference: `/Users/marcohefti/Sites/openclaw/docs/cli/update.md`.
-  - Implication for ZCL (optional): if we implement self-update, provide `zcl update`, `zcl update status`, and `--json` output (and optionally a wizard), plus a post-update safety gate (`zcl doctor`).
+  - Implication for ZCL: ship `zcl update status --json` and keep updates explicit via package managers (no background auto-update in the CLI runtime).
 - **Channel semantics decoupled from version numbers.**
   - OpenClaw treats dist-tags/channels as the source of truth for npm installs (promotion between channels without changing the version number).
   - Reference: `/Users/marcohefti/Sites/openclaw/docs/install/development-channels.md`.
