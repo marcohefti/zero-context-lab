@@ -26,6 +26,7 @@ Evidence artifacts must be durable, parseable, and non-interleaved. Partial writ
   - rename into place (atomic on supported filesystems)
 - JSONL streams (`tool.calls.jsonl`, `notes.jsonl`, `captures.jsonl`):
   - acquire a cross-platform lock (mkdir-based lock directory adjacent to the stream)
+  - stale lock cleanup requires staleness **and** non-alive owner PID when owner metadata is available
   - append a single newline-delimited JSON object
   - fsync
   - release lock

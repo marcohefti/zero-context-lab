@@ -6,6 +6,7 @@ cd "$root"
 
 ./scripts/skills-check.sh
 ./scripts/mod-tidy-check.sh
+./scripts/docs-check.sh
 
 go_files="$(find . -type f -name '*.go' -not -path './vendor/*' || true)"
 if [[ -n "${go_files}" ]]; then
@@ -23,5 +24,6 @@ go test ./...
 go vet ./...
 
 ./scripts/contract-snapshot.sh --check
+./scripts/docs-contract-check.sh
 
 echo "verify: PASS"

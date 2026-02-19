@@ -23,7 +23,7 @@ We must also avoid silently preferring process orchestration when the host can n
 - ZCL does not interpret runner logs/transcripts for scoring.
 - ZCL does not provide a plugin runtime for native spawning.
 - `zcl suite run` is not the native-spawn orchestrator; it is the process-runner executor with capability guards.
-- ZCL does not "auto-fix" missing evidence; it surfaces the failure (validate/report error).
+- ZCL does not infer task success/failure from transcripts. It only auto-writes canonical **infra-failure** evidence when the runner exits before writing feedback.
 
 ## Where The Logic Lives
 - CLI entry point: `internal/cli/cli.go`
@@ -61,6 +61,7 @@ Per `zcl suite run --file ... --session-isolation auto|process|native --parallel
      - stream runner stdout/stderr to ZCL stderr
      - apply attempt deadline semantics from attempt timeout config
 5. Finish attempt:
+   - If runner exits early and `feedback.json` is missing, write canonical fail evidence (`tool.calls.jsonl` + `feedback.json`) with typed infra code.
    - Build and write `attempt.report.json`
    - Run `validate` and `expect`
 6. Emit one JSON summary on stdout and exit:
@@ -81,8 +82,9 @@ Per `zcl suite run --file ... --session-isolation auto|process|native --parallel
 - Human-readable progress (per mission) is emitted to stderr:
   - mission id, attempt id, runner basename
 - Machine-readable summary is emitted once to stdout:
-  - includes `sessionIsolationRequested`, `sessionIsolation`, and `hostNativeSpawnCapable`
-  - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, `ZCL_E_CONTAMINATED_PROMPT`), and finish results.
+   - includes `sessionIsolationRequested`, `sessionIsolation`, and `hostNativeSpawnCapable`
+   - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, `ZCL_E_CONTAMINATED_PROMPT`), and finish results.
+   - summary is also persisted as `suite.run.summary.json` in the run directory for post-mortems.
 
 ## Testing Expectations
 - Happy path:

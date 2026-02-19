@@ -108,6 +108,19 @@ func validateRun(runDir string, strict bool) Result {
 		addErr(&res, "ZCL_E_ID_MISMATCH", "runId does not match directory name", runJSONPath)
 	}
 
+	suiteRunSummaryPath := filepath.Join(runDir, "suite.run.summary.json")
+	if _, err := os.Stat(suiteRunSummaryPath); err == nil {
+		if requireContained(runDir, suiteRunSummaryPath, &res) {
+			validateSuiteRunSummary(suiteRunSummaryPath, run, strict, &res)
+		}
+	}
+	runReportPath := filepath.Join(runDir, "run.report.json")
+	if _, err := os.Stat(runReportPath); err == nil {
+		if requireContained(runDir, runReportPath, &res) {
+			validateRunReport(runReportPath, runDir, run, strict, &res)
+		}
+	}
+
 	attemptsDir := filepath.Join(runDir, "attempts")
 	entries, err := os.ReadDir(attemptsDir)
 	if err != nil {
@@ -744,6 +757,13 @@ func validateCaptures(path string, attemptDir string, attempt schema.AttemptJSON
 			addErr(res, "ZCL_E_BOUNDS", "capture redactionsApplied exceeds bounds", path)
 			return
 		}
+		if attempt.Mode == "ci" && !ev.Redacted {
+			if strict {
+				addErr(res, "ZCL_E_UNSAFE_EVIDENCE", "capture event is raw (redacted=false) in ci mode", path)
+				return
+			}
+			addWarn(res, "ZCL_W_UNSAFE_EVIDENCE", "capture event is raw (redacted=false) in ci mode", path)
+		}
 		for _, n := range ev.RedactionsApplied {
 			if len([]byte(n)) > schema.RedactionNameMaxBytesV1 {
 				addErr(res, "ZCL_E_BOUNDS", "capture redaction name exceeds bounds", path)
@@ -862,6 +882,146 @@ func bytesTrim(b []byte) []byte {
 		j--
 	}
 	return b[i:j]
+}
+
+type suiteRunSummaryV1 struct {
+	SchemaVersion             int               `json:"schemaVersion"`
+	RunID                     string            `json:"runId"`
+	SuiteID                   string            `json:"suiteId"`
+	Mode                      string            `json:"mode"`
+	SessionIsolationRequested string            `json:"sessionIsolationRequested"`
+	SessionIsolation          string            `json:"sessionIsolation"`
+	Attempts                  []json.RawMessage `json:"attempts"`
+	Passed                    int               `json:"passed"`
+	Failed                    int               `json:"failed"`
+	CreatedAt                 string            `json:"createdAt"`
+}
+
+func validateSuiteRunSummary(path string, run schema.RunJSONV1, strict bool, res *Result) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
+	}
+	var s suiteRunSummaryV1
+	if err := json.Unmarshal(raw, &s); err != nil {
+		addErr(res, "ZCL_E_INVALID_JSON", "suite.run.summary.json is not valid json", path)
+		return
+	}
+	if s.SchemaVersion != 1 {
+		addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported suite.run.summary.json schemaVersion", path)
+		return
+	}
+	if strings.TrimSpace(s.RunID) == "" || strings.TrimSpace(s.SuiteID) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json missing runId/suiteId", path)
+		return
+	}
+	if s.RunID != run.RunID || s.SuiteID != run.SuiteID {
+		addErr(res, "ZCL_E_ID_MISMATCH", "suite.run.summary.json ids do not match run.json", path)
+		return
+	}
+	if strings.TrimSpace(s.Mode) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json mode is missing", path)
+		return
+	}
+	if strings.TrimSpace(s.CreatedAt) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json createdAt is missing", path)
+		return
+	}
+	if _, err := time.Parse(time.RFC3339Nano, s.CreatedAt); err != nil {
+		if _, err2 := time.Parse(time.RFC3339, s.CreatedAt); err2 != nil {
+			if strict {
+				addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json createdAt is not RFC3339", path)
+				return
+			}
+			addWarn(res, "ZCL_W_CONTRACT", "suite.run.summary.json createdAt is not RFC3339", path)
+		}
+	}
+	if strings.TrimSpace(s.SessionIsolationRequested) == "" || strings.TrimSpace(s.SessionIsolation) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json session isolation fields are missing", path)
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(s.SessionIsolationRequested)) {
+	case "auto", "process", "native":
+	default:
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json sessionIsolationRequested is invalid", path)
+		return
+	}
+	if !schema.IsValidIsolationModelV1(strings.TrimSpace(s.SessionIsolation)) {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json sessionIsolation is invalid", path)
+		return
+	}
+	if s.Passed < 0 || s.Failed < 0 {
+		addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json passed/failed must be >= 0", path)
+		return
+	}
+	total := s.Passed + s.Failed
+	if total != len(s.Attempts) {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "suite.run.summary.json attempts count does not match passed+failed", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "suite.run.summary.json attempts count does not match passed+failed", path)
+	}
+}
+
+type runReportV1 struct {
+	SchemaVersion int                `json:"schemaVersion"`
+	Target        string             `json:"target"`
+	RunID         string             `json:"runId"`
+	SuiteID       string             `json:"suiteId"`
+	Path          string             `json:"path"`
+	Attempts      []json.RawMessage  `json:"attempts"`
+	Aggregate     runReportAggregate `json:"aggregate"`
+}
+
+type runReportAggregate struct {
+	AttemptsTotal int `json:"attemptsTotal"`
+}
+
+func validateRunReport(path string, runDir string, run schema.RunJSONV1, strict bool, res *Result) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		addErr(res, "ZCL_E_IO", err.Error(), path)
+		return
+	}
+	var rr runReportV1
+	if err := json.Unmarshal(raw, &rr); err != nil {
+		addErr(res, "ZCL_E_INVALID_JSON", "run.report.json is not valid json", path)
+		return
+	}
+	if rr.SchemaVersion != 1 {
+		addErr(res, "ZCL_E_SCHEMA_UNSUPPORTED", "unsupported run.report.json schemaVersion", path)
+		return
+	}
+	if strings.TrimSpace(rr.Target) != "run" {
+		addErr(res, "ZCL_E_CONTRACT", "run.report.json target must be run", path)
+		return
+	}
+	if rr.RunID != run.RunID || rr.SuiteID != run.SuiteID {
+		addErr(res, "ZCL_E_ID_MISMATCH", "run.report.json ids do not match run.json", path)
+		return
+	}
+	if strings.TrimSpace(rr.Path) == "" {
+		addErr(res, "ZCL_E_CONTRACT", "run.report.json path is missing", path)
+		return
+	}
+	runDirAbs, _ := filepath.Abs(runDir)
+	pathAbs, err := filepath.Abs(rr.Path)
+	if err == nil && runDirAbs != "" && pathAbs != runDirAbs {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "run.report.json path does not match run directory", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "run.report.json path does not match run directory", path)
+	}
+	if rr.Aggregate.AttemptsTotal != len(rr.Attempts) {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", "run.report.json aggregate.attemptsTotal does not match attempts length", path)
+			return
+		}
+		addWarn(res, "ZCL_W_CONTRACT", "run.report.json aggregate.attemptsTotal does not match attempts length", path)
+	}
 }
 
 func addErr(res *Result, code, msg, path string) {

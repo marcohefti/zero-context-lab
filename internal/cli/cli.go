@@ -598,6 +598,12 @@ func (r Runner) runReport(args []string) int {
 	}
 
 	target := paths[0]
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	target = targetAbs
 	info, err := os.Stat(target)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
@@ -633,8 +639,12 @@ func (r Runner) runReport(args []string) int {
 			}
 			reports = append(reports, rep)
 		}
+		out := buildRunReportJSON(target, reports)
+		if err := store.WriteJSONAtomic(filepath.Join(target, "run.report.json"), out); err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
 		if *jsonOut {
-			out := buildRunReportJSON(target, reports)
 			return r.writeJSON(out)
 		}
 		return 0
@@ -979,11 +989,12 @@ type runOrchestrationAxisJSON struct {
 }
 
 type runReportJSON struct {
-	OK      bool   `json:"ok"`
-	Target  string `json:"target"`
-	RunID   string `json:"runId,omitempty"`
-	SuiteID string `json:"suiteId,omitempty"`
-	Path    string `json:"path"`
+	SchemaVersion int    `json:"schemaVersion"`
+	OK            bool   `json:"ok"`
+	Target        string `json:"target"`
+	RunID         string `json:"runId,omitempty"`
+	SuiteID       string `json:"suiteId,omitempty"`
+	Path          string `json:"path"`
 
 	Attempts  []schema.AttemptReportJSONV1 `json:"attempts"`
 	Aggregate runReportAggregateJSON       `json:"aggregate"`
@@ -991,10 +1002,11 @@ type runReportJSON struct {
 
 func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) runReportJSON {
 	out := runReportJSON{
-		OK:       true,
-		Target:   "run",
-		Path:     runDir,
-		Attempts: reports,
+		SchemaVersion: 1,
+		OK:            true,
+		Target:        "run",
+		Path:          runDir,
+		Attempts:      reports,
 		Aggregate: runReportAggregateJSON{
 			AttemptsTotal:        len(reports),
 			FailureCodeHistogram: map[string]int64{},
@@ -1282,6 +1294,10 @@ func printNoteHelp(w io.Writer) {
 func printReportHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl report [--strict] [--json] <attemptDir|runDir>
+
+Notes:
+  - Always writes attempt.report.json for attempts under the target.
+  - When target is a runDir, also writes run.report.json (same shape as --json output).
 `)
 }
 

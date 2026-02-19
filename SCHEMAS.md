@@ -92,6 +92,31 @@ Minimal v1 suite shape (example):
 }
 ```
 
+## `suite.run.summary.json` (optional; v1)
+
+Path: `.zcl/runs/<runId>/suite.run.summary.json`
+
+Written by `zcl suite run --json` as a persisted run-level execution summary.
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "mode": "discovery",
+  "outRoot": ".zcl",
+  "sessionIsolationRequested": "process",
+  "sessionIsolation": "process_runner",
+  "hostNativeSpawnCapable": false,
+  "attempts": [],
+  "passed": 0,
+  "failed": 0,
+  "createdAt": "2026-02-15T18:00:12.123456789Z"
+}
+```
+
 ## `attempt.json` (v1)
 
 Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.json`
@@ -238,6 +263,8 @@ Each line is one v1 `CaptureEvent` (secondary evidence index for `zcl run --capt
 
 Notes:
 - Captured `captures/**` files are redacted by default. Use `zcl run --capture --capture-raw` to store raw output (unsafe).
+- In CI/strict contexts, raw capture is blocked unless `ZCL_ALLOW_UNSAFE_CAPTURE=1`.
+- Strict validation in `ci` mode rejects raw capture events (`redacted=false`) as `ZCL_E_UNSAFE_EVIDENCE`.
 
 ## `attempt.report.json` (v1)
 
@@ -326,6 +353,44 @@ Optional fields:
 - `timedOutBeforeFirstToolCall`: timeout expired before first traced action could run.
 - `tokenEstimates`: lightweight token estimates from `runner.metrics.json` (fallback: trace byte heuristic).
 - `expectations`: when `suite.json` exists and contains `expects` for the mission, `zcl report` evaluates them against `feedback.json`.
+
+## `run.report.json` (optional; v1)
+
+Path: `.zcl/runs/<runId>/run.report.json`
+
+Written by `zcl report [--strict] --json <runDir>`.
+The JSON emitted to stdout for run-level report is the same shape that is persisted here.
+
+Required fields:
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "target": "run",
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "path": "/abs/path/to/.zcl/runs/20260215-180012Z-09c5a6",
+  "attempts": [],
+  "aggregate": {
+    "attemptsTotal": 0,
+    "passed": 0,
+    "failed": 0,
+    "task": {
+      "passed": 0,
+      "failed": 0,
+      "unknown": 0
+    },
+    "evidence": {
+      "complete": 0,
+      "incomplete": 0
+    },
+    "orchestration": {
+      "healthy": 0,
+      "infraFailed": 0
+    }
+  }
+}
+```
 
 ## `runner.ref.json` (optional; v1)
 

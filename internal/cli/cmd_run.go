@@ -57,10 +57,12 @@ func (r Runner) runRun(args []string) int {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: missing ZCL attempt context (run `zcl attempt start --json` and pass the returned env)")
 	}
-	if a, err := attempt.ReadAttempt(env.OutDirAbs); err != nil {
+	attemptMeta, err := attempt.ReadAttempt(env.OutDirAbs)
+	if err != nil {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
-	} else if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
+	}
+	if attemptMeta.RunID != env.RunID || attemptMeta.SuiteID != env.SuiteID || attemptMeta.MissionID != env.MissionID || attemptMeta.AttemptID != env.AttemptID {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: attempt.json ids do not match ZCL_* env (refuse to run)")
 	}
@@ -72,6 +74,10 @@ func (r Runner) runRun(args []string) int {
 	if len(argv) == 0 {
 		printRunHelp(r.Stderr)
 		return r.failUsage("run: missing command (use: zcl run -- <cmd> ...)")
+	}
+	if *captureRaw && (attemptMeta.Mode == "ci" || envBoolish("CI")) && !envBoolish("ZCL_ALLOW_UNSAFE_CAPTURE") {
+		printRunHelp(r.Stderr)
+		return r.failUsage("run: --capture-raw is disabled in ci/strict environments unless ZCL_ALLOW_UNSAFE_CAPTURE=1")
 	}
 
 	now := r.Now()

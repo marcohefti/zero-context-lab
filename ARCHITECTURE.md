@@ -58,6 +58,7 @@ Orchestrator-facing commands should prefer stable `--json` output.
 Stdout/stderr contract (operator UX + automation):
 - When `--json` is present, stdout is JSON only.
 - Human progress logs and runner passthrough go to stderr.
+- `zcl report --json <runDir>` also persists `run.report.json` in the run directory.
 
 ## Contracts (v1)
 Exact shapes are in `SCHEMAS.md` and `zcl contract --json`.
@@ -69,6 +70,9 @@ Attempt context is provided to runners as env vars:
 - `ZCL_AGENT_ID` (optional runner correlation)
 - `ZCL_ISOLATION_MODEL` (optional; `process_runner|native_spawn`)
 - `ZCL_PROMPT_PATH` (optional pointer to `prompt.txt`; set by orchestration when present)
+
+Safety knobs:
+- `zcl run --capture --capture-raw` is blocked in CI/strict contexts unless `ZCL_ALLOW_UNSAFE_CAPTURE=1`.
 
 ## Code Map (Where Things Live)
 - `cmd/zcl`: CLI entrypoint.

@@ -1,0 +1,29 @@
+name: entropy-guard
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  entropy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Entropy Guard
+        env:
+          # Set to >0 to fail when too many would be GC'd in dry-run.
+          ZCL_ENTROPY_MAX_DELETED: "0"
+          # Guardrail for unexpected artifact bloat in the checked-out workspace.
+          ZCL_ENTROPY_MAX_TOTAL_BEFORE_BYTES: "104857600"
+          ZCL_ENTROPY_MAX_GC_ERRORS: "0"
+        run: ./scripts/entropy-check.sh

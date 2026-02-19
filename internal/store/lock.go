@@ -24,6 +24,37 @@ type lockOwnerV1 struct {
 	StartedAt string `json:"startedAt"`
 }
 
+func readLockOwner(lockDir string) (lockOwnerV1, bool) {
+	raw, err := os.ReadFile(filepath.Join(lockDir, "owner.json"))
+	if err != nil {
+		return lockOwnerV1{}, false
+	}
+	var owner lockOwnerV1
+	if err := json.Unmarshal(raw, &owner); err != nil {
+		return lockOwnerV1{}, false
+	}
+	if owner.PID <= 0 {
+		return lockOwnerV1{}, false
+	}
+	return owner, true
+}
+
+func shouldBreakStaleLock(lockDir string, staleAfter time.Duration, now time.Time) bool {
+	info, err := os.Stat(lockDir)
+	if err != nil {
+		return false
+	}
+	if now.Sub(info.ModTime()) <= staleAfter {
+		return false
+	}
+	if owner, ok := readLockOwner(lockDir); ok {
+		if processAlive(owner.PID) {
+			return false
+		}
+	}
+	return true
+}
+
 func acquireDirLock(lockDir string, wait time.Duration) (func() error, error) {
 	deadline := time.Now().Add(wait)
 	staleAfter := 2 * time.Minute
@@ -39,12 +70,10 @@ func acquireDirLock(lockDir string, wait time.Duration) (func() error, error) {
 			return nil, err
 		}
 
-		// Lock exists: if it looks stale, break it (crash resilience).
-		if info, err := os.Stat(lockDir); err == nil {
-			if time.Since(info.ModTime()) > staleAfter {
-				_ = os.RemoveAll(lockDir)
-				continue
-			}
+		// Lock exists: if it looks stale and owner is not alive, break it (crash resilience).
+		if shouldBreakStaleLock(lockDir, staleAfter, time.Now()) {
+			_ = os.RemoveAll(lockDir)
+			continue
 		}
 
 		if time.Now().After(deadline) {

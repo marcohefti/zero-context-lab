@@ -205,6 +205,58 @@ func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
 	}
 }
 
+func TestRun_CaptureRawBlockedInCIModeWithoutAllowFlag(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+	setAttemptMode(t, outDir, "ci")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=hello\n", "exit=0"})
+	if code != 2 {
+		t.Fatalf("expected usage exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ZCL_ALLOW_UNSAFE_CAPTURE=1") {
+		t.Fatalf("expected unsafe capture guard message, got: %q", stderr.String())
+	}
+}
+
+func TestRun_CaptureRawAllowedInCIModeWithExplicitGuard(t *testing.T) {
+	outDir := t.TempDir()
+	setAttemptEnv(t, outDir)
+	setAttemptMode(t, outDir, "ci")
+	t.Setenv("ZCL_ALLOW_UNSAFE_CAPTURE", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=raw\n", "exit=0"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	capEv := readSingleCaptureEvent(t, filepath.Join(outDir, "captures.jsonl"))
+	if capEv.Redacted {
+		t.Fatalf("expected raw capture event, got redacted=true")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, capEv.StdoutPath)); err != nil {
+		t.Fatalf("expected captured stdout file to exist: %v", err)
+	}
+}
+
 func TestRun_TimeoutStartFirstToolCall_DoesNotExpireBeforeFirstAction(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
@@ -295,6 +347,8 @@ func TestHelperProcess(t *testing.T) {
 func setAttemptEnv(t *testing.T, outDir string) {
 	t.Helper()
 	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv("CI", "")
+	t.Setenv("ZCL_ALLOW_UNSAFE_CAPTURE", "")
 	t.Setenv("ZCL_OUT_DIR", outDir)
 	t.Setenv("ZCL_RUN_ID", "20260215-180012Z-09c5a6")
 	t.Setenv("ZCL_SUITE_ID", "heftiweb-smoke")
@@ -316,6 +370,27 @@ func setAttemptEnv(t *testing.T, outDir string) {
 		t.Fatalf("marshal attempt.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(outDir, "attempt.json"), b, 0o644); err != nil {
+		t.Fatalf("write attempt.json: %v", err)
+	}
+}
+
+func setAttemptMode(t *testing.T, outDir string, mode string) {
+	t.Helper()
+	path := filepath.Join(outDir, "attempt.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var meta schema.AttemptJSONV1
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	meta.Mode = mode
+	b, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal attempt.json: %v", err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
 		t.Fatalf("write attempt.json: %v", err)
 	}
 }

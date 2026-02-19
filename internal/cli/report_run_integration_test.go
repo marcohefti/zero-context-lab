@@ -74,6 +74,9 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 	if code := r2.Run([]string{"report", "--json", runDir}); code != 0 {
 		t.Fatalf("report runDir: code=%d stderr=%q", code, stderr.String())
 	}
+	if _, err := os.Stat(filepath.Join(runDir, "run.report.json")); err != nil {
+		t.Fatalf("expected run.report.json to be written: %v", err)
+	}
 
 	var out struct {
 		OK        bool       `json:"ok"`

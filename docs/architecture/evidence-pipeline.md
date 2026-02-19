@@ -41,6 +41,7 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
 4. Finish:
    - `zcl attempt finish --json [--strict] [--strict-expect]`
    - writes `attempt.report.json` then runs validate + expect
+   - run-level reporting: `zcl report --json <runDir>` writes `run.report.json` and returns the same JSON.
 
 ## Invariants / Guardrails
 - Attempt identity boundary is the attempt directory (`ZCL_OUT_DIR`).

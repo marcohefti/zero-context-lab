@@ -31,6 +31,45 @@
       "requiredFields": []
     },
     {
+      "id": "suite.run.summary.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/suite.run.summary.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "mode",
+        "sessionIsolationRequested",
+        "sessionIsolation",
+        "attempts",
+        "passed",
+        "failed",
+        "createdAt"
+      ]
+    },
+    {
+      "id": "run.report.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/run.report.json",
+      "requiredFields": [
+        "schemaVersion",
+        "target",
+        "runId",
+        "suiteId",
+        "path",
+        "attempts",
+        "aggregate"
+      ]
+    },
+    {
       "id": "attempt.json",
       "kind": "json",
       "schemaVersions": [
@@ -359,6 +398,11 @@
     {
       "code": "ZCL_E_BOUNDS",
       "summary": "Captured payload exceeds size bounds.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_UNSAFE_EVIDENCE",
+      "summary": "Evidence violates safety policy (for example raw captures in strict CI mode).",
       "retryable": false
     },
     {

@@ -57,6 +57,8 @@ Root: `.zcl/`
   runs/<runId>/
     run.json
     suite.json                  (optional snapshot)
+    suite.run.summary.json      (optional; `zcl suite run --json` summary artifact)
+    run.report.json             (optional; `zcl report --json <runDir>` aggregate)
     attempts/<attemptId>/
       attempt.json
       prompt.txt                (optional snapshot)
@@ -111,10 +113,15 @@ Single entrypoint:
 
 What it runs:
 - `scripts/skills-check.sh` (skill pack sanity)
+- `scripts/docs-check.sh` (doc cross-links exist)
 - gofmt check
 - `go test ./...`, `go vet ./...`
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
-
-Optional (not part of `./scripts/verify.sh`):
-- `scripts/docs-check.sh` (doc cross-links exist)
 - `scripts/docs-contract-check.sh` (docs mention commands + SCHEMAS matches contract artifacts)
+
+Entropy guard (CI/scheduled):
+- `scripts/entropy-check.sh` (runs `zcl doctor --json` + `zcl gc --dry-run --json`)
+- Threshold knobs:
+  - `ZCL_ENTROPY_MAX_DELETED`
+  - `ZCL_ENTROPY_MAX_TOTAL_BEFORE_BYTES`
+  - `ZCL_ENTROPY_MAX_GC_ERRORS`

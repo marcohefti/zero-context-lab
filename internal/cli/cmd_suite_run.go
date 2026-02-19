@@ -66,11 +66,12 @@ type suiteRunAttemptResult struct {
 }
 
 type suiteRunSummary struct {
-	OK      bool   `json:"ok"`
-	RunID   string `json:"runId"`
-	SuiteID string `json:"suiteId"`
-	Mode    string `json:"mode"`
-	OutRoot string `json:"outRoot"`
+	SchemaVersion int    `json:"schemaVersion"`
+	OK            bool   `json:"ok"`
+	RunID         string `json:"runId"`
+	SuiteID       string `json:"suiteId"`
+	Mode          string `json:"mode"`
+	OutRoot       string `json:"outRoot"`
 	// SessionIsolationRequested is the CLI selection (auto|process|native).
 	SessionIsolationRequested string `json:"sessionIsolationRequested"`
 	// SessionIsolation is the effective attempt isolation model.
@@ -244,6 +245,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	}
 
 	summary := suiteRunSummary{
+		SchemaVersion:             1,
 		OK:                        true,
 		RunID:                     strings.TrimSpace(*runID),
 		SuiteID:                   parsed.Suite.SuiteID,
