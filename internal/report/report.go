@@ -461,8 +461,12 @@ func computeMetricsAndSignals(tracePath string, strict bool) (schema.AttemptMetr
 		if !ev.Result.OK {
 			metrics.FailuresTotal++
 			code := ev.Result.Code
-			if code == "" {
-				code = "UNKNOWN"
+			if strings.TrimSpace(code) == "" {
+				if ev.Result.ExitCode != nil && *ev.Result.ExitCode != 0 {
+					code = "ZCL_E_TOOL_FAILED"
+				} else {
+					code = "ZCL_E_TOOL_FAILED"
+				}
 			}
 			metrics.FailuresByCode[code]++
 			if code == "ZCL_E_TIMEOUT" {

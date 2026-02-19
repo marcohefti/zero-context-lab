@@ -214,6 +214,10 @@ func (r Runner) runRun(args []string) int {
 	} else if runErr != nil {
 		traceRes.SpawnError = "ZCL_E_SPAWN"
 	}
+	resultCode := traceRes.SpawnError
+	if resultCode == "" && res.ExitCode != 0 {
+		resultCode = "ZCL_E_TOOL_FAILED"
+	}
 	if err := trace.AppendCLIRunEvent(now, env, argv, traceRes); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
 		return 1
@@ -296,7 +300,7 @@ func (r Runner) runRun(args []string) int {
 		}
 		envOut := runEnvelopeJSON{
 			OK:                      traceRes.SpawnError == "" && res.ExitCode == 0,
-			Code:                    traceRes.SpawnError,
+			Code:                    resultCode,
 			ExitCode:                res.ExitCode,
 			DurationMs:              res.DurationMs,
 			OutBytes:                res.OutBytes,

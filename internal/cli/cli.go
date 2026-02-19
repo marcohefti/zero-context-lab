@@ -952,10 +952,30 @@ type runReportAggregateJSON struct {
 	Passed        int `json:"passed"`
 	Failed        int `json:"failed"`
 
-	FailureCodeHistogram             map[string]int64 `json:"failureCodeHistogram,omitempty"`
-	TimedOutBeforeFirstToolCallTotal int64            `json:"timedOutBeforeFirstToolCallTotal,omitempty"`
+	FailureCodeHistogram             map[string]int64         `json:"failureCodeHistogram,omitempty"`
+	TimedOutBeforeFirstToolCallTotal int64                    `json:"timedOutBeforeFirstToolCallTotal,omitempty"`
+	Task                             runTaskAxisJSON          `json:"task"`
+	Evidence                         runEvidenceAxisJSON      `json:"evidence"`
+	Orchestration                    runOrchestrationAxisJSON `json:"orchestration"`
 
 	TokenEstimates *schema.TokenEstimatesV1 `json:"tokenEstimates,omitempty"`
+}
+
+type runTaskAxisJSON struct {
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Unknown int `json:"unknown"`
+}
+
+type runEvidenceAxisJSON struct {
+	Complete   int `json:"complete"`
+	Incomplete int `json:"incomplete"`
+}
+
+type runOrchestrationAxisJSON struct {
+	Healthy            int              `json:"healthy"`
+	InfraFailed        int              `json:"infraFailed"`
+	InfraFailureByCode map[string]int64 `json:"infraFailureByCode,omitempty"`
 }
 
 type runReportJSON struct {
@@ -978,7 +998,10 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 		Aggregate: runReportAggregateJSON{
 			AttemptsTotal:        len(reports),
 			FailureCodeHistogram: map[string]int64{},
-			TokenEstimates:       &schema.TokenEstimatesV1{Source: "attempt.report"},
+			Orchestration: runOrchestrationAxisJSON{
+				InfraFailureByCode: map[string]int64{},
+			},
+			TokenEstimates: &schema.TokenEstimatesV1{Source: "attempt.report"},
 		},
 	}
 	if len(reports) > 0 {
@@ -1002,15 +1025,34 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 	for _, rep := range reports {
 		if rep.OK != nil && *rep.OK {
 			out.Aggregate.Passed++
+			out.Aggregate.Task.Passed++
 		} else {
 			out.Aggregate.Failed++
 			out.OK = false
+			if rep.OK == nil {
+				out.Aggregate.Task.Unknown++
+			} else {
+				out.Aggregate.Task.Failed++
+			}
+		}
+		if reportEvidenceComplete(rep) {
+			out.Aggregate.Evidence.Complete++
+		} else {
+			out.Aggregate.Evidence.Incomplete++
 		}
 		if rep.TimedOutBeforeFirstToolCall {
 			out.Aggregate.TimedOutBeforeFirstToolCallTotal++
 		}
 		for code, n := range rep.FailureCodeHistogram {
 			out.Aggregate.FailureCodeHistogram[code] += n
+			if isOrchestrationInfraCode(code) {
+				out.Aggregate.Orchestration.InfraFailureByCode[code] += n
+			}
+		}
+		if attemptHasInfraFailure(rep) {
+			out.Aggregate.Orchestration.InfraFailed++
+		} else {
+			out.Aggregate.Orchestration.Healthy++
 		}
 		if rep.TokenEstimates != nil {
 			if rep.TokenEstimates.InputTokens != nil {
@@ -1039,6 +1081,9 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 	if len(out.Aggregate.FailureCodeHistogram) == 0 {
 		out.Aggregate.FailureCodeHistogram = nil
 	}
+	if len(out.Aggregate.Orchestration.InfraFailureByCode) == 0 {
+		out.Aggregate.Orchestration.InfraFailureByCode = nil
+	}
 	if hasInput {
 		out.Aggregate.TokenEstimates.InputTokens = i64ptr(inputTotal)
 	}
@@ -1064,6 +1109,31 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 		out.Aggregate.TokenEstimates = nil
 	}
 	return out
+}
+
+func reportEvidenceComplete(rep schema.AttemptReportJSONV1) bool {
+	if rep.Integrity == nil {
+		return false
+	}
+	return rep.Integrity.TraceNonEmpty && rep.Integrity.FeedbackPresent
+}
+
+func isOrchestrationInfraCode(code string) bool {
+	switch strings.TrimSpace(code) {
+	case "ZCL_E_TIMEOUT", "ZCL_E_SPAWN", "ZCL_E_IO":
+		return true
+	default:
+		return false
+	}
+}
+
+func attemptHasInfraFailure(rep schema.AttemptReportJSONV1) bool {
+	for code := range rep.FailureCodeHistogram {
+		if isOrchestrationInfraCode(code) {
+			return true
+		}
+	}
+	return false
 }
 
 func i64ptr(v int64) *int64 {

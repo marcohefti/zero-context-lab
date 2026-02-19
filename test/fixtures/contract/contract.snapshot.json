@@ -377,6 +377,11 @@
       "retryable": true
     },
     {
+      "code": "ZCL_E_TOOL_FAILED",
+      "summary": "Wrapped tool execution completed with a non-zero outcome.",
+      "retryable": true
+    },
+    {
       "code": "ZCL_E_TIMEOUT",
       "summary": "Timed out waiting for a tool operation.",
       "retryable": true

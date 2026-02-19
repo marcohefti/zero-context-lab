@@ -85,7 +85,21 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 			Passed               int              `json:"passed"`
 			Failed               int              `json:"failed"`
 			FailureCodeHistogram map[string]int64 `json:"failureCodeHistogram"`
-			TokenEstimates       *struct {
+			Task                 struct {
+				Passed  int `json:"passed"`
+				Failed  int `json:"failed"`
+				Unknown int `json:"unknown"`
+			} `json:"task"`
+			Evidence struct {
+				Complete   int `json:"complete"`
+				Incomplete int `json:"incomplete"`
+			} `json:"evidence"`
+			Orchestration struct {
+				Healthy            int              `json:"healthy"`
+				InfraFailed        int              `json:"infraFailed"`
+				InfraFailureByCode map[string]int64 `json:"infraFailureByCode"`
+			} `json:"orchestration"`
+			TokenEstimates *struct {
 				TotalTokens *int64 `json:"totalTokens"`
 			} `json:"tokenEstimates"`
 		} `json:"aggregate"`
@@ -98,6 +112,21 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 	}
 	if out.Aggregate.AttemptsTotal != 2 || out.Aggregate.Passed != 1 || out.Aggregate.Failed != 1 || len(out.Attempts) != 2 {
 		t.Fatalf("unexpected aggregate counts: %+v", out.Aggregate)
+	}
+	if out.Aggregate.FailureCodeHistogram["ZCL_E_TOOL_FAILED"] == 0 {
+		t.Fatalf("expected typed tool failure code histogram, got: %+v", out.Aggregate.FailureCodeHistogram)
+	}
+	if out.Aggregate.FailureCodeHistogram["UNKNOWN"] != 0 {
+		t.Fatalf("expected UNKNOWN bucket to be empty, got: %+v", out.Aggregate.FailureCodeHistogram)
+	}
+	if out.Aggregate.Task.Passed != 1 || out.Aggregate.Task.Failed != 1 || out.Aggregate.Task.Unknown != 0 {
+		t.Fatalf("unexpected task axis: %+v", out.Aggregate.Task)
+	}
+	if out.Aggregate.Evidence.Complete != 2 || out.Aggregate.Evidence.Incomplete != 0 {
+		t.Fatalf("unexpected evidence axis: %+v", out.Aggregate.Evidence)
+	}
+	if out.Aggregate.Orchestration.Healthy != 2 || out.Aggregate.Orchestration.InfraFailed != 0 {
+		t.Fatalf("unexpected orchestration axis: %+v", out.Aggregate.Orchestration)
 	}
 	if out.Aggregate.TokenEstimates == nil || out.Aggregate.TokenEstimates.TotalTokens == nil {
 		t.Fatalf("expected aggregate token estimates")

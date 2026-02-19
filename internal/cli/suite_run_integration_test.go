@@ -397,6 +397,87 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_AutoFeedbackOnTimeout(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-timeout-auto-feedback",
+  "defaults": { "mode": "ci", "timeoutMs": 40, "timeoutStart": "attempt_start" },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=sleep",
+	})
+	if code != 1 {
+		t.Fatalf("expected exit code 1 for timeout harness error, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			AttemptDir       string `json:"attemptDir"`
+			AutoFeedback     bool   `json:"autoFeedback"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			Finish           struct {
+				ReportError *struct {
+					Code string `json:"code"`
+				} `json:"reportError"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	a := sum.Attempts[0]
+	if !a.AutoFeedback || a.AutoFeedbackCode != "ZCL_E_TIMEOUT" {
+		t.Fatalf("expected auto timeout feedback, got %+v", a)
+	}
+	if a.Finish.ReportError != nil && a.Finish.ReportError.Code == "ZCL_E_MISSING_ARTIFACT" {
+		t.Fatalf("expected timeout attempt not to fail with missing feedback artifact: %+v", a.Finish.ReportError)
+	}
+
+	fbPath := filepath.Join(a.AttemptDir, "feedback.json")
+	fbBytes, err := os.ReadFile(fbPath)
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		OK         bool `json:"ok"`
+		ResultJSON struct {
+			Kind string `json:"kind"`
+			Code string `json:"code"`
+		} `json:"resultJson"`
+	}
+	if err := json.Unmarshal(fbBytes, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if fb.OK || fb.ResultJSON.Kind != "infra_failure" || fb.ResultJSON.Code != "ZCL_E_TIMEOUT" {
+		t.Fatalf("unexpected synthetic feedback payload: %+v", fb)
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return
@@ -440,6 +521,9 @@ func TestHelperSuiteRunnerProcess(t *testing.T) {
 		os.Exit(exit)
 	case "no-feedback":
 		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		os.Exit(exit)
+	case "sleep":
+		time.Sleep(3 * time.Second)
 		os.Exit(exit)
 	default:
 		os.Exit(103)

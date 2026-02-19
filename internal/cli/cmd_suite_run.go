@@ -55,8 +55,10 @@ type suiteRunAttemptResult struct {
 	// IsolationModel records how the fresh session boundary was orchestrated.
 	IsolationModel string `json:"isolationModel,omitempty"`
 
-	RunnerExitCode  *int   `json:"runnerExitCode,omitempty"`
-	RunnerErrorCode string `json:"runnerErrorCode,omitempty"` // ZCL_E_TIMEOUT|ZCL_E_SPAWN|ZCL_E_CONTAMINATED_PROMPT
+	RunnerExitCode   *int   `json:"runnerExitCode,omitempty"`
+	RunnerErrorCode  string `json:"runnerErrorCode,omitempty"` // ZCL_E_TIMEOUT|ZCL_E_SPAWN|ZCL_E_CONTAMINATED_PROMPT
+	AutoFeedback     bool   `json:"autoFeedback,omitempty"`
+	AutoFeedbackCode string `json:"autoFeedbackCode,omitempty"`
 
 	Finish suiteRunFinishResult `json:"finish"`
 
@@ -567,6 +569,10 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar) || harnessErr
 		stopRunnerLogs()
 	}
+	if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar); err != nil {
+		harnessErr = true
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run: %s\n", err.Error())
+	}
 
 	ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
 	runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
@@ -657,6 +663,103 @@ func envBoolish(name string) bool {
 	default:
 		return false
 	}
+}
+
+func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult) error {
+	if !shouldAutoFailureFeedback(*ar) {
+		return nil
+	}
+	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
+	if outDir == "" {
+		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
+	}
+	feedbackPath := filepath.Join(outDir, "feedback.json")
+	if fileExists(feedbackPath) {
+		return nil
+	}
+
+	envTrace := trace.Env{
+		RunID:     env["ZCL_RUN_ID"],
+		SuiteID:   env["ZCL_SUITE_ID"],
+		MissionID: env["ZCL_MISSION_ID"],
+		AttemptID: env["ZCL_ATTEMPT_ID"],
+		AgentID:   env["ZCL_AGENT_ID"],
+		OutDirAbs: outDir,
+		TmpDirAbs: env["ZCL_TMP_DIR"],
+	}
+	code := autoFailureCode(*ar)
+	msg := "suite runner failed before canonical feedback was written"
+	if ar.RunnerErrorCode != "" {
+		msg += " runnerErrorCode=" + ar.RunnerErrorCode
+	}
+	if ar.RunnerExitCode != nil {
+		msg += fmt.Sprintf(" runnerExitCode=%d", *ar.RunnerExitCode)
+	}
+
+	tracePath := filepath.Join(outDir, "tool.calls.jsonl")
+	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if !nonEmpty {
+		if err := trace.AppendCLIRunEvent(now, envTrace, []string{"zcl", "suite-runner-auto-feedback"}, trace.ResultForTrace{
+			SpawnError: code,
+			DurationMs: 0,
+			OutBytes:   0,
+			ErrBytes:   int64(len(msg)),
+			ErrPreview: msg,
+		}); err != nil {
+			return err
+		}
+	}
+
+	result := map[string]any{
+		"kind":   "infra_failure",
+		"source": "suite_run",
+		"code":   code,
+	}
+	if ar.RunnerErrorCode != "" {
+		result["runnerErrorCode"] = ar.RunnerErrorCode
+	}
+	if ar.RunnerExitCode != nil {
+		result["runnerExitCode"] = *ar.RunnerExitCode
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+
+	decisionTags := []string{schema.DecisionTagBlocked}
+	if code == "ZCL_E_TIMEOUT" || ar.RunnerErrorCode == "ZCL_E_TIMEOUT" {
+		decisionTags = append(decisionTags, schema.DecisionTagTimeout)
+	}
+	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
+		OK:           false,
+		ResultJSON:   string(b),
+		DecisionTags: decisionTags,
+	}); err != nil {
+		return err
+	}
+	ar.AutoFeedback = true
+	ar.AutoFeedbackCode = code
+	return nil
+}
+
+func shouldAutoFailureFeedback(ar suiteRunAttemptResult) bool {
+	if ar.RunnerErrorCode == "ZCL_E_TIMEOUT" || ar.RunnerErrorCode == "ZCL_E_SPAWN" || ar.RunnerErrorCode == "ZCL_E_IO" {
+		return true
+	}
+	return ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0
+}
+
+func autoFailureCode(ar suiteRunAttemptResult) string {
+	if ar.RunnerErrorCode != "" {
+		return ar.RunnerErrorCode
+	}
+	if ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0 {
+		return "ZCL_E_TOOL_FAILED"
+	}
+	return "ZCL_E_TOOL_FAILED"
 }
 
 func fileExists(path string) bool {

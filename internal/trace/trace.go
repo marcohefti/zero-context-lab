@@ -59,6 +59,10 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		exitCode := res.ExitCode
 		exitCodePtr = &exitCode
 	}
+	code := res.SpawnError
+	if code == "" && res.ExitCode != 0 {
+		code = "ZCL_E_TOOL_FAILED"
+	}
 
 	outPrev, outApplied := redact.Text(res.OutPreview)
 	errPrev, errApplied := redact.Text(res.ErrPreview)
@@ -85,7 +89,7 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 			OK:         res.SpawnError == "" && res.ExitCode == 0,
 			ExitCode:   exitCodePtr,
 			DurationMs: res.DurationMs,
-			Code:       res.SpawnError,
+			Code:       code,
 		},
 		IO: schema.TraceIOV1{
 			OutBytes:   res.OutBytes,

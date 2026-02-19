@@ -269,6 +269,7 @@ func Build(version string) Contract {
 			{Code: "ZCL_E_CONTRACT", Summary: "Artifact/event violates the ZCL contract shape.", Retryable: false},
 			{Code: "ZCL_E_CONTAINMENT", Summary: "Artifact path escapes attempt/run directory (symlink traversal).", Retryable: false},
 			{Code: "ZCL_E_SPAWN", Summary: "Failed to spawn or execute a wrapped command in the funnel.", Retryable: true},
+			{Code: "ZCL_E_TOOL_FAILED", Summary: "Wrapped tool execution completed with a non-zero outcome.", Retryable: true},
 			{Code: "ZCL_E_TIMEOUT", Summary: "Timed out waiting for a tool operation.", Retryable: true},
 			{Code: "ZCL_E_CONTAMINATED_PROMPT", Summary: "Blind mode rejected a prompt containing harness terms.", Retryable: false},
 			{Code: "ZCL_E_FUNNEL_BYPASS", Summary: "Primary evidence missing/empty despite a final outcome being recorded (funnel bypass suspected).", Retryable: false},
