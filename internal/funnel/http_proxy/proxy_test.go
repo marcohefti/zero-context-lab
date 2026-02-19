@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +47,16 @@ func TestProxy_ForwardsAndEmitsTrace(t *testing.T) {
 	}
 	defer func() { _ = h.Close() }()
 
-	resp, err := http.Get("http://" + h.ListenAddr + "/hello?q=1")
+	// Avoid HTTP_PROXY/HTTPS_PROXY env affecting loopback calls in CI.
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout: 2 * time.Second,
+			}).DialContext,
+		},
+	}
+	resp, err := client.Get("http://" + h.ListenAddr + "/hello?q=1")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
