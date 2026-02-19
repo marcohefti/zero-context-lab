@@ -70,7 +70,7 @@ jobs:
         run: |
           go run ./cmd/zcl help | grep -q "zcl enrich --runner"
           attempt_dir="$(mktemp -d)"
-          err_output="$(ZCL_OUT_DIR="$attempt_dir" go run ./cmd/zcl enrich --runner invalid --rollout /tmp/missing 2>&1 || true)"
+          err_output="$(go run ./cmd/zcl enrich --runner invalid --rollout /tmp/missing "$attempt_dir" 2>&1 || true)"
           rm -rf "$attempt_dir"
           echo "$err_output"
           echo "$err_output" | grep -q "ZCL_E_USAGE"
