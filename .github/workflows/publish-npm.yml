@@ -1,0 +1,41 @@
+name: publish-npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm >= 11.5.1
+        run: npm i -g npm@^11.5.1
+
+      - name: Publish
+        shell: bash
+        working-directory: npm/zcl
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "invalid tag: $tag (expected vX.Y.Z...)" >&2
+            exit 2
+          fi
+          version="${tag#v}"
+
+          npm pkg set version="$version" >/dev/null
+          npm publish --access public

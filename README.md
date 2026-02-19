@@ -48,8 +48,8 @@ go install github.com/marcohefti/zero-context-lab/cmd/zcl@latest
 ```
 
 Planned distribution channels (not published yet):
-- Homebrew formula/tap
-- npm wrapper package
+- Homebrew: `brew install marcohefti/zero-context-lab/zcl` (after the first tagged release)
+- npm: `npm i -g @marcohefti/zcl` (after npm publishing is enabled)
 
 ## Quick Start (Single Attempt)
 

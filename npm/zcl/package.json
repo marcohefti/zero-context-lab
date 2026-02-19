@@ -1,0 +1,26 @@
+{
+  "name": "@marcohefti/zcl",
+  "version": "0.0.0-dev",
+  "description": "Zero Context Lab (ZCL): evaluate agentic tools with trace-backed evidence.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcohefti/zero-context-lab.git"
+  },
+  "homepage": "https://github.com/marcohefti/zero-context-lab",
+  "bugs": {
+    "url": "https://github.com/marcohefti/zero-context-lab/issues"
+  },
+  "bin": {
+    "zcl": "bin/zcl.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "scripts": {
+    "postinstall": "node bin/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
