@@ -1,14 +1,17 @@
 # Zero Context Lab (ZCL)
 
-[![Release](https://img.shields.io/github/v/release/marcohefti/zero-context-lab?sort=semver&style=flat-square)](https://github.com/marcohefti/zero-context-lab/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/ci.yml?branch=main&label=ci&style=flat-square)](https://github.com/marcohefti/zero-context-lab/actions/workflows/ci.yml)
-[![Entropy Guard](https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/entropy-guard.yml?branch=main&label=entropy%20guard&style=flat-square)](https://github.com/marcohefti/zero-context-lab/actions/workflows/entropy-guard.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/marcohefti/zero-context-lab?style=flat-square)](https://github.com/marcohefti/zero-context-lab/blob/main/go.mod)
-[![Homebrew (planned)](https://img.shields.io/badge/homebrew-planned-lightgrey?style=flat-square&logo=homebrew)](#install)
-[![npm (planned)](https://img.shields.io/badge/npm-planned-lightgrey?style=flat-square&logo=npm)](#install)
-
 <p align="center">
   <img src="assets/brand/zcl-banner.png" width="720" alt="Zero Context Lab">
+</p>
+
+<p align="center">
+  <a href="https://github.com/marcohefti/zero-context-lab/releases"><img alt="Release" src="https://img.shields.io/github/v/release/marcohefti/zero-context-lab?sort=semver&amp;style=flat-square"></a>
+  <a href="https://github.com/marcohefti/zero-context-lab/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/ci.yml?branch=main&amp;label=ci&amp;style=flat-square"></a>
+  <a href="https://github.com/marcohefti/zero-context-lab/actions/workflows/entropy-guard.yml"><img alt="Entropy Guard" src="https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/entropy-guard.yml?branch=main&amp;label=entropy%20guard&amp;style=flat-square"></a>
+  <a href="https://github.com/marcohefti/zero-context-lab/blob/main/go.mod"><img alt="Go Version" src="https://img.shields.io/github/go-mod/go-version/marcohefti/zero-context-lab?style=flat-square"></a>
+  <a href="#install"><img alt="Homebrew (planned)" src="https://img.shields.io/badge/homebrew-planned-lightgrey?style=flat-square&amp;logo=homebrew"></a>
+  <a href="#install"><img alt="npm (planned)" src="https://img.shields.io/badge/npm-planned-lightgrey?style=flat-square&amp;logo=npm"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/marcohefti/zero-context-lab?style=flat-square"></a>
 </p>
 
 ZCL helps you build better agentic tools by testing them with real agents and turning each run into structured evidence.
