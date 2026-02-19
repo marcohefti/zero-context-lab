@@ -9,8 +9,8 @@
   <a href="https://github.com/marcohefti/zero-context-lab/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/ci.yml?branch=main&amp;label=ci&amp;style=flat-square"></a>
   <a href="https://github.com/marcohefti/zero-context-lab/actions/workflows/entropy-guard.yml"><img alt="Entropy Guard" src="https://img.shields.io/github/actions/workflow/status/marcohefti/zero-context-lab/entropy-guard.yml?branch=main&amp;label=entropy%20guard&amp;style=flat-square"></a>
   <a href="https://github.com/marcohefti/zero-context-lab/blob/main/go.mod"><img alt="Go Version" src="https://img.shields.io/github/go-mod/go-version/marcohefti/zero-context-lab?style=flat-square"></a>
-  <a href="#install"><img alt="Homebrew (planned)" src="https://img.shields.io/badge/homebrew-planned-lightgrey?style=flat-square&amp;logo=homebrew"></a>
-  <a href="#install"><img alt="npm (planned)" src="https://img.shields.io/badge/npm-planned-lightgrey?style=flat-square&amp;logo=npm"></a>
+  <a href="#install"><img alt="Homebrew" src="https://img.shields.io/badge/homebrew-available-2e7d32?style=flat-square&amp;logo=homebrew"></a>
+  <a href="https://www.npmjs.com/package/@marcohefti/zcl"><img alt="npm" src="https://img.shields.io/npm/v/%40marcohefti/zcl?style=flat-square"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/marcohefti/zero-context-lab?style=flat-square"></a>
 </p>
 
@@ -41,15 +41,23 @@ go build -o bin/zcl ./cmd/zcl
 zcl version
 ```
 
+Homebrew:
+
+```bash
+brew install marcohefti/zero-context-lab/zcl
+```
+
+npm:
+
+```bash
+npm i -g @marcohefti/zcl
+```
+
 Alternative (Go toolchain install):
 
 ```bash
 go install github.com/marcohefti/zero-context-lab/cmd/zcl@latest
 ```
-
-Planned distribution channels (not published yet):
-- Homebrew: `brew install marcohefti/zero-context-lab/zcl` (after the first tagged release)
-- npm: `npm i -g @marcohefti/zcl` (after npm publishing is enabled)
 
 ## Quick Start (Single Attempt)
 
