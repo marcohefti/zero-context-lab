@@ -70,6 +70,23 @@
       ]
     },
     {
+      "id": "campaign.state.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.state.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "suiteId",
+        "updatedAt",
+        "latestRunId",
+        "runs"
+      ]
+    },
+    {
       "id": "attempt.json",
       "kind": "json",
       "schemaVersions": [
@@ -339,14 +356,29 @@
       "summary": "Fast post-mortem view: show ids/outcome, validate/expect status, and a tail of tool.calls.jsonl (uses ZCL_OUT_DIR when <attemptDir> is omitted)."
     },
     {
+      "id": "attempt list",
+      "usage": "zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json",
+      "summary": "List attempts as machine-readable index rows with optional suite/mission/status/tag filters."
+    },
+    {
+      "id": "attempt latest",
+      "usage": "zcl attempt latest [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] --json",
+      "summary": "Return the latest attempt row matching filters (or found=false)."
+    },
+    {
+      "id": "runs list",
+      "usage": "zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json",
+      "summary": "List run-level machine-readable index rows with aggregate attempt status counts."
+    },
+    {
       "id": "suite plan",
       "usage": "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--out-root .zcl] --json",
       "summary": "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators)."
     },
     {
       "id": "suite run",
-      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
-      "summary": "Run a suite with capability-aware isolation selection, wave parallelism, and just-in-time attempt allocation, then finish/validate/expect each attempt."
+      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+      "summary": "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt."
     },
     {
       "id": "replay",

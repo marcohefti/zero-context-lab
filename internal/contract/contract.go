@@ -81,6 +81,14 @@ func Build(version string) Contract {
 				RequiredFields: []string{"schemaVersion", "target", "runId", "suiteId", "path", "attempts", "aggregate"},
 			},
 			{
+				ID:             "campaign.state.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/campaigns/<campaignId>/campaign.state.json",
+				RequiredFields: []string{"schemaVersion", "campaignId", "suiteId", "updatedAt", "latestRunId", "runs"},
+			},
+			{
 				ID:             "attempt.json",
 				Kind:           "json",
 				SchemaVersions: []int{1},
@@ -259,14 +267,29 @@ func Build(version string) Contract {
 				Summary: "Fast post-mortem view: show ids/outcome, validate/expect status, and a tail of tool.calls.jsonl (uses ZCL_OUT_DIR when <attemptDir> is omitted).",
 			},
 			{
+				ID:      "attempt list",
+				Usage:   "zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json",
+				Summary: "List attempts as machine-readable index rows with optional suite/mission/status/tag filters.",
+			},
+			{
+				ID:      "attempt latest",
+				Usage:   "zcl attempt latest [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] --json",
+				Summary: "Return the latest attempt row matching filters (or found=false).",
+			},
+			{
+				ID:      "runs list",
+				Usage:   "zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json",
+				Summary: "List run-level machine-readable index rows with aggregate attempt status counts.",
+			},
+			{
 				ID:      "suite plan",
 				Usage:   "zcl suite plan --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--out-root .zcl] --json",
 				Summary: "Allocate attempt dirs for every mission in a suite file and print env/pointers per mission (for orchestrators).",
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
-				Summary: "Run a suite with capability-aware isolation selection, wave parallelism, and just-in-time attempt allocation, then finish/validate/expect each attempt.",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+				Summary: "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt.",
 			},
 			{
 				ID:      "replay",

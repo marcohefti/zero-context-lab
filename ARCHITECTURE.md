@@ -38,10 +38,13 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl update status [--cached] [--json]`
 - `zcl contract --json`
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-- `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]`
+- `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] --json -- <runner-cmd> [args...]`
+- `zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json`
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--isolation-model process_runner|native_spawn] --json`
 - `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`
 - `zcl attempt explain [--strict] [--json] [--tail N] [<attemptDir>]`
+- `zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json`
+- `zcl attempt latest [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] --json`
 - `zcl run -- <cmd> [args...]`
 - `zcl mcp proxy -- <server-cmd> [args...]`
 - `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]`
@@ -62,6 +65,7 @@ Stdout/stderr contract (operator UX + automation):
 - When `--json` is present, stdout is JSON only.
 - Human progress logs and runner passthrough go to stderr.
 - `zcl report --json <runDir>` also persists `run.report.json` in the run directory.
+- `zcl suite run --progress-jsonl <path|->` emits structured progress events suitable for dashboards/watchers.
 
 ## Contracts (v1)
 Exact shapes are in `SCHEMAS.md` and `zcl contract --json`.

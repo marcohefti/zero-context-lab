@@ -34,9 +34,10 @@ When an operator says "run this through ZCL: <mission>", do this:
    - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
 5. Use process-runner orchestration only as an explicit fallback (Mode B):
-   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --shim surfwright --json -- <runner-cmd> [args...]`
+   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --shim surfwright --json -- <runner-cmd> [args...]`
    - `--shim surfwright` lets the agent *visibly* type `surfwright ...` while ZCL still records invocations to `tool.calls.jsonl`.
    - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
+   - `--feedback-policy strict` disables synthetic feedback finalization; `auto_fail` writes canonical infra-failure feedback when missing.
 6. Require the agent to finish by running:
    - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
 7. Optionally ask for self-report feedback and persist it as secondary evidence:
@@ -45,6 +46,10 @@ When an operator says "run this through ZCL: <mission>", do this:
    - Primary: `tool.calls.jsonl`, `feedback.json`
    - Derived: `attempt.report.json`
    - Post-mortem: `zcl attempt explain [<attemptDir>]` (tail trace + pointers)
+9. For retrieval/reporting automation use native query commands:
+   - Latest attempt: `zcl attempt latest --suite <suiteId> --mission <missionId> --status ok --json`
+   - Attempt index rows: `zcl attempt list --suite <suiteId> --status any --json`
+   - Run index rows: `zcl runs list --suite <suiteId> --json`
 
 ## Fixed Harness Preamble (Turn 1)
 

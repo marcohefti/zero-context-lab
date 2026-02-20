@@ -34,10 +34,10 @@ We must also avoid silently preferring process orchestration when the host can n
 - Tests: `internal/cli/suite_run_integration_test.go`
 
 ## Runtime Flow
-Per `zcl suite run --file ... --session-isolation auto|process|native --parallel N --total M --json -- <runner-cmd> ...`:
+Per `zcl suite run --file ... --session-isolation auto|process|native --feedback-policy strict|auto_fail --campaign-id <id> --campaign-state <path> --progress-jsonl <path|-> --parallel N --total M --json -- <runner-cmd> ...`:
 
 1. Parse suite:
-   - Read suite file once and resolve defaults/overrides (`mode`, `timeoutMs`, `timeoutStart`, `blind`).
+   - Read suite file once and resolve defaults/overrides (`mode`, `timeoutMs`, `timeoutStart`, `feedbackPolicy`, `blind`).
 2. Resolve session isolation:
    - Parse `--session-isolation` (`auto|process|native`).
    - Read host capability signal `ZCL_HOST_NATIVE_SPAWN`.
@@ -61,17 +61,24 @@ Per `zcl suite run --file ... --session-isolation auto|process|native --parallel
      - stream runner stdout/stderr to ZCL stderr
      - apply attempt deadline semantics from attempt timeout config
 5. Finish attempt:
-   - If runner exits early and `feedback.json` is missing, write canonical fail evidence (`tool.calls.jsonl` + `feedback.json`) with typed infra code.
+   - If runner exits early and `feedback.json` is missing:
+     - `feedbackPolicy=auto_fail`: write canonical fail evidence (`tool.calls.jsonl` + `feedback.json`) with typed infra code.
+     - `feedbackPolicy=strict`: do not synthesize feedback; finishing fails on missing artifact.
    - Build and write `attempt.report.json`
    - Run `validate` and `expect`
 6. Emit one JSON summary on stdout and exit:
    - `0` if all attempts OK
    - `2` if suite completed but some attempts failed finish/expect/validate/outcome
    - `1` for harness errors (spawn/I/O/timeouts/runner non-zero exit)
+7. Update campaign continuity:
+   - Persist/update `campaign.state.json` with run-level continuity metadata.
+8. Optional progress stream:
+   - Emit JSONL events (`run_started`, `attempt_started`, `attempt_finished`, `run_finished`) when `--progress-jsonl` is set.
 
 ## Invariants / Guardrails
 - `--json` is required.
 - `--session-isolation=auto` will not silently use process orchestration when `ZCL_HOST_NATIVE_SPAWN=1`.
+- `--feedback-policy=strict` never auto-finalizes missing feedback.
 - Runner command must be provided after `--`.
 - Runner is spawned with a clean, explicit attempt env (no implicit globals required besides the runner binary).
 - ZCL does not consider the suite successful unless:
@@ -85,6 +92,8 @@ Per `zcl suite run --file ... --session-isolation auto|process|native --parallel
    - includes `sessionIsolationRequested`, `sessionIsolation`, and `hostNativeSpawnCapable`
    - includes `runnerExitCode`, typed `runnerErrorCode` (`ZCL_E_TIMEOUT`, `ZCL_E_SPAWN`, `ZCL_E_CONTAMINATED_PROMPT`), and finish results.
    - summary is also persisted as `suite.run.summary.json` in the run directory for post-mortems.
+- Campaign continuity is persisted in `campaign.state.json` (default `.zcl/campaigns/<campaignId>/campaign.state.json`).
+- Optional progress stream emits one JSON object per lifecycle event to `--progress-jsonl` target.
 
 ## Testing Expectations
 - Happy path:

@@ -54,6 +54,13 @@ func ParseFile(path string) (ParsedSuite, error) {
 	if s.Defaults.Mode != "" && s.Defaults.Mode != "discovery" && s.Defaults.Mode != "ci" {
 		return ParsedSuite{}, fmt.Errorf("invalid defaults.mode (expected discovery|ci)")
 	}
+	if strings.TrimSpace(s.Defaults.FeedbackPolicy) != "" {
+		fp := strings.ToLower(strings.TrimSpace(s.Defaults.FeedbackPolicy))
+		if !schema.IsValidFeedbackPolicyV1(fp) {
+			return ParsedSuite{}, fmt.Errorf("invalid defaults.feedbackPolicy (expected strict|auto_fail)")
+		}
+		s.Defaults.FeedbackPolicy = fp
+	}
 	if !schema.IsValidTimeoutStartV1(s.Defaults.TimeoutStart) {
 		return ParsedSuite{}, fmt.Errorf("invalid defaults.timeoutStart (expected attempt_start|first_tool_call)")
 	}

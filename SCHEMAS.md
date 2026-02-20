@@ -65,6 +65,7 @@ Minimal v1 suite shape (example):
   "defaults": {
     "timeoutMs": 120000,
     "timeoutStart": "first_tool_call",
+    "feedbackPolicy": "auto_fail",
     "mode": "discovery",
     "blind": true,
     "blindTerms": ["zcl", "feedback.json"]
@@ -110,6 +111,21 @@ Example:
   "sessionIsolationRequested": "process",
   "sessionIsolation": "process_runner",
   "hostNativeSpawnCapable": false,
+  "feedbackPolicy": "auto_fail",
+  "campaignId": "heftiweb-smoke",
+  "campaignStatePath": ".zcl/campaigns/heftiweb-smoke/campaign.state.json",
+  "campaignProfile": {
+    "mode": "discovery",
+    "timeoutMs": 120000,
+    "timeoutStart": "first_tool_call",
+    "isolationModel": "process_runner",
+    "feedbackPolicy": "auto_fail",
+    "parallel": 1,
+    "total": 2,
+    "failFast": true,
+    "blind": false
+  },
+  "comparabilityKey": "cp-abcdef0123456789",
   "attempts": [],
   "passed": 0,
   "failed": 0,
@@ -389,6 +405,39 @@ Required fields:
       "infraFailed": 0
     }
   }
+}
+```
+
+## `campaign.state.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.state.json`
+
+Written/updated by `zcl suite run` when campaign continuity is enabled (default campaign id = suite id).
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "heftiweb-smoke",
+  "suiteId": "heftiweb-smoke",
+  "updatedAt": "2026-02-20T10:01:02.123456789Z",
+  "latestRunId": "20260215-180012Z-09c5a6",
+  "runs": [
+    {
+      "runId": "20260215-180012Z-09c5a6",
+      "createdAt": "2026-02-15T18:00:12.123456789Z",
+      "mode": "discovery",
+      "outRoot": ".zcl",
+      "sessionIsolation": "process_runner",
+      "comparabilityKey": "cp-abcdef0123456789",
+      "feedbackPolicy": "auto_fail",
+      "parallel": 1,
+      "total": 2,
+      "failFast": true,
+      "passed": 2,
+      "failed": 0
+    }
+  ]
 }
 ```
 

@@ -62,6 +62,10 @@ func (r Runner) Run(args []string) int {
 		printRootHelp(r.Stdout)
 		return 0
 	}
+	if args[0] == "--version" || args[0] == "-v" {
+		fmt.Fprintf(r.Stdout, "%s\n", r.Version)
+		return 0
+	}
 	if exit, stop := r.enforceVersionFloor(args); stop {
 		return exit
 	}
@@ -100,6 +104,8 @@ func (r Runner) Run(args []string) int {
 		return r.runAttempt(args[1:])
 	case "suite":
 		return r.runSuite(args[1:])
+	case "runs":
+		return r.runRuns(args[1:])
 	case "replay":
 		return r.runReplay(args[1:])
 	case "expect":
@@ -184,9 +190,28 @@ func (r Runner) runAttempt(args []string) int {
 		return r.runAttemptFinish(args[1:])
 	case "explain":
 		return r.runAttemptExplain(args[1:])
+	case "list":
+		return r.runAttemptList(args[1:])
+	case "latest":
+		return r.runAttemptLatest(args[1:])
 	default:
 		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown attempt subcommand %q\n", args[0])
 		printAttemptHelp(r.Stderr)
+		return 2
+	}
+}
+
+func (r Runner) runRuns(args []string) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		printRunsHelp(r.Stdout)
+		return 0
+	}
+	switch args[0] {
+	case "list":
+		return r.runRunsList(args[1:])
+	default:
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown runs subcommand %q\n", args[0])
+		printRunsHelp(r.Stderr)
 		return 2
 	}
 }
@@ -414,7 +439,11 @@ func (r Runner) runFeedback(args []string) int {
 		Classification: *classification,
 		DecisionTags:   []string(decisionTags),
 	}); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		msg := err.Error()
+		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", msg)
+		if hint := feedbackHint(msg); hint != "" {
+			fmt.Fprintf(r.Stderr, "hint: %s\n", hint)
+		}
 		return 2
 	}
 
@@ -1198,6 +1227,9 @@ Usage:
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
   zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
+  zcl runs list --json
+  zcl attempt list [filters...] --json
+  zcl attempt latest [filters...] --json
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
@@ -1222,6 +1254,9 @@ Commands:
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   suite run       Run a suite end-to-end with capability-aware isolation selection.
+  runs list       List run index rows for automation (use --json).
+  attempt list    List attempts with filters (suite/mission/status/tags) as JSON index rows.
+  attempt latest  Return latest attempt matching filters as one JSON row.
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
@@ -1256,6 +1291,14 @@ func printAttemptHelp(w io.Writer) {
   zcl attempt start --suite <suiteId> --mission <missionId> --json
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
+  zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json
+  zcl attempt latest [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] --json
+`)
+}
+
+func printRunsHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json
 `)
 }
 
@@ -1301,7 +1344,23 @@ func printFeedbackHelp(w io.Writer) {
   zcl feedback --ok|--fail --result <string> --classification <missing_primitive|naming_ux|output_shape|already_possible_better_way>
   zcl feedback --ok|--fail --result <string> --decision-tag blocked --decision-tag timeout
   zcl feedback --ok|--fail --result <string> --decision-tags blocked,timeout
+
+Notes:
+  - Requires ZCL attempt context (ZCL_* env from zcl attempt start/suite run).
+  - Requires non-empty tool.calls.jsonl before writing feedback (funnel-first evidence).
 `)
+}
+
+func feedbackHint(msg string) string {
+	switch {
+	case strings.Contains(msg, "missing attempt.json in attempt directory"):
+		return "start an attempt first (`zcl attempt start --json`) and run feedback inside that attempt context (ZCL_* env)."
+	case strings.Contains(msg, "tool.calls.jsonl is required before feedback"),
+		strings.Contains(msg, "tool.calls.jsonl must be non-empty before feedback"):
+		return "record at least one funnel action first (for example: `zcl run -- echo hi`), then run `zcl feedback` again."
+	default:
+		return ""
+	}
 }
 
 func printNoteHelp(w io.Writer) {

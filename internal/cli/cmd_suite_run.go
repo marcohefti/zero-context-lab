@@ -20,9 +20,11 @@ import (
 
 	"github.com/marcohefti/zero-context-lab/internal/attempt"
 	"github.com/marcohefti/zero-context-lab/internal/blind"
+	"github.com/marcohefti/zero-context-lab/internal/campaign"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/expect"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
+	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/planner"
 	"github.com/marcohefti/zero-context-lab/internal/redact"
 	"github.com/marcohefti/zero-context-lab/internal/report"
@@ -100,6 +102,12 @@ type suiteRunSummary struct {
 	CampaignProfile suiteRunCampaignProfile `json:"campaignProfile"`
 	// ComparabilityKey is a stable hash of CampaignProfile.
 	ComparabilityKey string `json:"comparabilityKey"`
+	// FeedbackPolicy controls missing feedback behavior.
+	FeedbackPolicy string `json:"feedbackPolicy"`
+	// CampaignID groups continuity across multiple runs.
+	CampaignID string `json:"campaignId,omitempty"`
+	// CampaignStatePath points to the canonical campaign state file.
+	CampaignStatePath string `json:"campaignStatePath,omitempty"`
 
 	Attempts []suiteRunAttemptResult `json:"attempts"`
 
@@ -114,6 +122,10 @@ type suiteRunCampaignProfile struct {
 	TimeoutMs      int64    `json:"timeoutMs"`
 	TimeoutStart   string   `json:"timeoutStart"`
 	IsolationModel string   `json:"isolationModel"`
+	FeedbackPolicy string   `json:"feedbackPolicy"`
+	Parallel       int      `json:"parallel"`
+	Total          int      `json:"total"`
+	FailFast       bool     `json:"failFast"`
 	Blind          bool     `json:"blind"`
 	Shims          []string `json:"shims,omitempty"`
 }
@@ -139,11 +151,15 @@ func (r Runner) runSuiteRun(args []string) int {
 	mode := fs.String("mode", "", "optional mode override: discovery|ci (default from suite file)")
 	timeoutMs := fs.Int64("timeout-ms", 0, "optional attempt timeout override in ms (default from suite defaults.timeoutMs)")
 	timeoutStart := fs.String("timeout-start", "", "optional timeout anchor override: attempt_start|first_tool_call")
+	feedbackPolicy := fs.String("feedback-policy", "", "missing feedback policy override: strict|auto_fail (default from suite defaults, else auto_fail)")
 	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
+	campaignID := fs.String("campaign-id", "", "campaign id for cross-run continuity (default suiteId)")
+	campaignStatePath := fs.String("campaign-state", "", "path to campaign.state.json (default <outRoot>/campaigns/<campaignId>/campaign.state.json)")
+	progressJSONL := fs.String("progress-jsonl", "", "write structured progress events to path or '-' (stderr)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	failFast := fs.Bool("fail-fast", true, "stop scheduling new missions after the first failed attempt and mark the remainder as skipped")
 	strict := fs.Bool("strict", true, "run finish in strict mode (enforces evidence + contract)")
@@ -231,6 +247,13 @@ func (r Runner) runSuiteRun(args []string) int {
 	if resolvedMode != "discovery" && resolvedMode != "ci" {
 		return r.failUsage("suite run: invalid --mode (expected discovery|ci)")
 	}
+	resolvedFeedbackPolicy := schema.NormalizeFeedbackPolicyV1(parsed.Suite.Defaults.FeedbackPolicy)
+	if strings.TrimSpace(*feedbackPolicy) != "" {
+		resolvedFeedbackPolicy = schema.NormalizeFeedbackPolicyV1(*feedbackPolicy)
+	}
+	if !schema.IsValidFeedbackPolicyV1(resolvedFeedbackPolicy) {
+		return r.failUsage("suite run: invalid --feedback-policy (expected strict|auto_fail)")
+	}
 
 	resolvedTimeoutMs := *timeoutMs
 	if resolvedTimeoutMs == 0 {
@@ -286,6 +309,7 @@ func (r Runner) runSuiteRun(args []string) int {
 		SessionIsolationRequested: requestedIsolation,
 		SessionIsolation:          effectiveIsolation,
 		HostNativeSpawnCapable:    hostNativeCapable,
+		FeedbackPolicy:            resolvedFeedbackPolicy,
 		CreatedAt:                 r.Now().UTC().Format(time.RFC3339Nano),
 	}
 	summary.CampaignProfile = suiteRunCampaignProfile{
@@ -293,10 +317,37 @@ func (r Runner) runSuiteRun(args []string) int {
 		TimeoutMs:      resolvedTimeoutMs,
 		TimeoutStart:   resolvedTimeoutStart,
 		IsolationModel: effectiveIsolation,
+		FeedbackPolicy: resolvedFeedbackPolicy,
+		Parallel:       *parallel,
+		Total:          resolvedTotal,
+		FailFast:       *failFast,
 		Blind:          resolvedBlind,
 		Shims:          dedupeSortedStrings([]string(shims)),
 	}
 	summary.ComparabilityKey = suiteRunComparabilityKey(summary.CampaignProfile)
+	summary.CampaignID = ids.SanitizeComponent(strings.TrimSpace(*campaignID))
+	if summary.CampaignID == "" {
+		summary.CampaignID = parsed.Suite.SuiteID
+	}
+	if summary.CampaignID == "" {
+		return r.failUsage("suite run: invalid --campaign-id (no usable characters)")
+	}
+	if strings.TrimSpace(*campaignStatePath) == "" {
+		summary.CampaignStatePath = campaign.DefaultStatePath(m.OutRoot, summary.CampaignID)
+	} else {
+		summary.CampaignStatePath = strings.TrimSpace(*campaignStatePath)
+	}
+
+	progress, err := newSuiteRunProgressEmitter(strings.TrimSpace(*progressJSONL), r.Stderr)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		return 1
+	}
+	defer func() {
+		if progress != nil {
+			_ = progress.Close()
+		}
+	}()
 
 	// Keep stdout reserved for JSON; runner output is streamed to stderr.
 	runnerCmd := argv[0]
@@ -335,6 +386,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	execOpts := suiteRunExecOpts{
 		RunnerCmd:        runnerCmd,
 		RunnerArgs:       runnerArgs,
+		FeedbackPolicy:   resolvedFeedbackPolicy,
 		Strict:           *strict,
 		StrictExpect:     *strictExpect,
 		CaptureRunnerIO:  *captureRunnerIO,
@@ -346,6 +398,27 @@ func (r Runner) runSuiteRun(args []string) int {
 		BlindTerms:       resolvedBlindTerms,
 		IsolationModel:   effectiveIsolation,
 		StderrWriter:     errWriter,
+		Progress:         progress,
+	}
+	if progress != nil {
+		if err := progress.Emit(suiteRunProgressEvent{
+			TS:         r.Now().UTC().Format(time.RFC3339Nano),
+			Kind:       "run_started",
+			RunID:      summary.RunID,
+			SuiteID:    summary.SuiteID,
+			Mode:       summary.Mode,
+			OutRoot:    summary.OutRoot,
+			CampaignID: summary.CampaignID,
+			Details: map[string]any{
+				"feedbackPolicy": resolvedFeedbackPolicy,
+				"parallel":       *parallel,
+				"total":          resolvedTotal,
+				"failFast":       *failFast,
+			},
+		}); err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+			return 1
+		}
 	}
 
 	wave := *parallel
@@ -406,6 +479,24 @@ func (r Runner) runSuiteRun(args []string) int {
 					OutDirAbs: started.OutDirAbs,
 					Env:       started.Env,
 				}
+				if progress != nil {
+					if err := progress.Emit(suiteRunProgressEvent{
+						TS:        r.Now().UTC().Format(time.RFC3339Nano),
+						Kind:      "attempt_started",
+						RunID:     started.RunID,
+						SuiteID:   started.SuiteID,
+						MissionID: mission.MissionID,
+						AttemptID: started.AttemptID,
+						Mode:      started.Mode,
+						OutDir:    started.OutDirAbs,
+						Details: map[string]any{
+							"tags": mission.Tags,
+						},
+					}); err != nil {
+						harnessErr.Store(true)
+						fmt.Fprintf(errWriter, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+					}
+				}
 				ar, hard := r.executeSuiteRunMission(pm, execOpts)
 				ar.IsolationModel = effectiveIsolation
 				if hard {
@@ -434,6 +525,48 @@ func (r Runner) runSuiteRun(args []string) int {
 	if summary.RunID != "" {
 		_ = store.WriteJSONAtomic(filepath.Join(summary.OutRoot, "runs", summary.RunID, "suite.run.summary.json"), summary)
 	}
+	if summary.RunID != "" && summary.CampaignStatePath != "" {
+		if _, err := campaign.UpdateState(summary.CampaignStatePath, campaign.UpdateInput{
+			Now:              r.Now(),
+			CampaignID:       summary.CampaignID,
+			SuiteID:          summary.SuiteID,
+			RunID:            summary.RunID,
+			CreatedAt:        summary.CreatedAt,
+			Mode:             summary.Mode,
+			OutRoot:          summary.OutRoot,
+			SessionIsolation: summary.SessionIsolation,
+			ComparabilityKey: summary.ComparabilityKey,
+			FeedbackPolicy:   summary.FeedbackPolicy,
+			Parallel:         summary.CampaignProfile.Parallel,
+			Total:            summary.CampaignProfile.Total,
+			FailFast:         summary.CampaignProfile.FailFast,
+			Passed:           summary.Passed,
+			Failed:           summary.Failed,
+		}); err != nil {
+			harnessErr.Store(true)
+			summary.OK = false
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run campaign state: %s\n", err.Error())
+		}
+	}
+	if progress != nil {
+		if err := progress.Emit(suiteRunProgressEvent{
+			TS:         r.Now().UTC().Format(time.RFC3339Nano),
+			Kind:       "run_finished",
+			RunID:      summary.RunID,
+			SuiteID:    summary.SuiteID,
+			Mode:       summary.Mode,
+			CampaignID: summary.CampaignID,
+			Details: map[string]any{
+				"ok":     summary.OK,
+				"passed": summary.Passed,
+				"failed": summary.Failed,
+			},
+		}); err != nil {
+			harnessErr.Store(true)
+			summary.OK = false
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+		}
+	}
 
 	enc := json.NewEncoder(r.Stdout)
 	enc.SetIndent("", "  ")
@@ -455,6 +588,7 @@ func (r Runner) runSuiteRun(args []string) int {
 type suiteRunExecOpts struct {
 	RunnerCmd        string
 	RunnerArgs       []string
+	FeedbackPolicy   string
 	Strict           bool
 	StrictExpect     bool
 	CaptureRunnerIO  bool
@@ -466,6 +600,7 @@ type suiteRunExecOpts struct {
 	BlindTerms       []string
 	IsolationModel   string
 	StderrWriter     io.Writer
+	Progress         *suiteRunProgressEmitter
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
@@ -634,7 +769,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
 		stopRunnerLogs()
 	}
-	if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar); err != nil {
+	if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar, opts.FeedbackPolicy); err != nil {
 		harnessErr = true
 		fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 	}
@@ -642,6 +777,24 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
 	runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
 	ar.OK = runnerOK && ar.Finish.OK
+	if opts.Progress != nil {
+		_ = opts.Progress.Emit(suiteRunProgressEvent{
+			TS:        r.Now().UTC().Format(time.RFC3339Nano),
+			Kind:      "attempt_finished",
+			RunID:     env["ZCL_RUN_ID"],
+			SuiteID:   env["ZCL_SUITE_ID"],
+			MissionID: env["ZCL_MISSION_ID"],
+			AttemptID: env["ZCL_ATTEMPT_ID"],
+			OutDir:    pm.OutDirAbs,
+			Details: map[string]any{
+				"ok":               ar.OK,
+				"runnerErrorCode":  ar.RunnerErrorCode,
+				"autoFeedback":     ar.AutoFeedback,
+				"autoFeedbackCode": ar.AutoFeedbackCode,
+				"finishOk":         ar.Finish.OK,
+			},
+		})
+	}
 	return ar, harnessErr
 }
 
@@ -711,11 +864,15 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
   - --session-isolation=auto refuses process fallback when host advertises native spawn via ZCL_HOST_NATIVE_SPAWN=1.
+  - --feedback-policy=auto_fail writes canonical infra-failure feedback when runners exit without feedback.
+  - --feedback-policy=strict leaves missing feedback as a failing contract condition (no auto-finalization).
+  - --progress-jsonl writes machine-readable run progress events for dashboard automation.
+  - campaign.state.json is updated after run completion for cross-run continuity.
   - Attempts are allocated just-in-time, in waves (--parallel), to avoid pre-expiry before execution.
   - When --shim is used, ZCL prepends an attempt-local bin dir to PATH so the agent can type the tool name (e.g. surfwright) and still have invocations traced via zcl run.
   - In blind mode, contaminated prompts are rejected and recorded with typed evidence.
@@ -733,13 +890,16 @@ func envBoolish(name string) bool {
 	}
 }
 
-func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult) error {
+func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, feedbackPolicy string) error {
 	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
 	if outDir == "" {
 		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
 	}
 	feedbackPath := filepath.Join(outDir, "feedback.json")
 	if fileExists(feedbackPath) {
+		return nil
+	}
+	if schema.NormalizeFeedbackPolicyV1(feedbackPolicy) == schema.FeedbackPolicyStrictV1 {
 		return nil
 	}
 

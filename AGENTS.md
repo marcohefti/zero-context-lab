@@ -36,7 +36,7 @@ Repo validation (must be green after meaningful changes):
 3. Start attempt (JSON output is required for automation):
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-   - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --json -- <runner-cmd> [args...]`
+   - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
 4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
@@ -52,12 +52,18 @@ Repo validation (must be green after meaningful changes):
    - `zcl validate --strict <attemptDir|runDir>`
    - If using suites with `expects`: `zcl expect --strict --json <attemptDir|runDir>`
    - Optional: reproduce from trace: `zcl replay --json <attemptDir>`
+8. Query/index (automation-friendly):
+   - Latest attempt: `zcl attempt latest --suite <suiteId> --mission <missionId> --status ok --json`
+   - Attempt index rows: `zcl attempt list --suite <suiteId> --status any --json`
+   - Run index rows: `zcl runs list --suite <suiteId> --json`
 
 ## Artifact Layout (Default)
 
 Root: `.zcl/`
 ```
 .zcl/
+  campaigns/<campaignId>/
+    campaign.state.json         (optional; canonical cross-run campaign continuity)
   runs/<runId>/
     run.json
     suite.json                  (optional snapshot)

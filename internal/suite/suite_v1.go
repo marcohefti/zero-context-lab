@@ -10,11 +10,14 @@ type SuiteFileV1 struct {
 }
 
 type DefaultsV1 struct {
-	TimeoutMs    int64    `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
-	TimeoutStart string   `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"` // attempt_start|first_tool_call
-	Mode         string   `json:"mode,omitempty" yaml:"mode,omitempty"`                 // discovery|ci
-	Blind        bool     `json:"blind,omitempty" yaml:"blind,omitempty"`
-	BlindTerms   []string `json:"blindTerms,omitempty" yaml:"blindTerms,omitempty"`
+	TimeoutMs    int64  `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
+	TimeoutStart string `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"` // attempt_start|first_tool_call
+	Mode         string `json:"mode,omitempty" yaml:"mode,omitempty"`                 // discovery|ci
+	// FeedbackPolicy controls missing-feedback behavior in suite orchestration.
+	// Allowed values: strict|auto_fail (default auto_fail).
+	FeedbackPolicy string   `json:"feedbackPolicy,omitempty" yaml:"feedbackPolicy,omitempty"`
+	Blind          bool     `json:"blind,omitempty" yaml:"blind,omitempty"`
+	BlindTerms     []string `json:"blindTerms,omitempty" yaml:"blindTerms,omitempty"`
 }
 
 type MissionV1 struct {

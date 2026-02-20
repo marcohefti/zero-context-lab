@@ -538,6 +538,150 @@ func TestSuiteRun_AutoFeedbackOnTimeout(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_FeedbackPolicyStrict_DoesNotAutoFinalize(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-feedback-policy-strict",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--feedback-policy", "strict",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=no-feedback",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		FeedbackPolicy string `json:"feedbackPolicy"`
+		Attempts       []struct {
+			AutoFeedback bool `json:"autoFeedback"`
+			Finish       struct {
+				ReportError *struct {
+					Code string `json:"code"`
+				} `json:"reportError"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if sum.FeedbackPolicy != "strict" {
+		t.Fatalf("expected feedbackPolicy=strict, got %+v", sum)
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].AutoFeedback {
+		t.Fatalf("expected no auto feedback in strict policy")
+	}
+	if sum.Attempts[0].Finish.ReportError == nil || sum.Attempts[0].Finish.ReportError.Code != "ZCL_E_MISSING_ARTIFACT" {
+		t.Fatalf("expected missing artifact report error, got %+v", sum.Attempts[0].Finish.ReportError)
+	}
+}
+
+func TestSuiteRun_WritesCampaignStateAndProgress(t *testing.T) {
+	outRoot := t.TempDir()
+	progressPath := filepath.Join(t.TempDir(), "suite.progress.jsonl")
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-campaign",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--campaign-id", "campaign-alpha",
+		"--progress-jsonl", progressPath,
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		RunID             string `json:"runId"`
+		CampaignID        string `json:"campaignId"`
+		CampaignStatePath string `json:"campaignStatePath"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if sum.RunID == "" || sum.CampaignID != "campaign-alpha" {
+		t.Fatalf("unexpected summary campaign fields: %+v", sum)
+	}
+
+	progressBytes, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatalf("read progress jsonl: %v", err)
+	}
+	if !strings.Contains(string(progressBytes), `"kind":"run_started"`) || !strings.Contains(string(progressBytes), `"kind":"run_finished"`) {
+		t.Fatalf("expected run_started/run_finished events, got %s", string(progressBytes))
+	}
+
+	statePath := sum.CampaignStatePath
+	if statePath == "" {
+		statePath = filepath.Join(outRoot, "campaigns", "campaign-alpha", "campaign.state.json")
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read campaign state: %v", err)
+	}
+	var st struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		CampaignID    string `json:"campaignId"`
+		SuiteID       string `json:"suiteId"`
+		LatestRunID   string `json:"latestRunId"`
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatalf("unmarshal campaign state: %v", err)
+	}
+	if st.SchemaVersion != 1 || st.CampaignID != "campaign-alpha" || st.SuiteID != "suite-run-campaign" || st.LatestRunID != sum.RunID {
+		t.Fatalf("unexpected campaign state: %+v", st)
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return

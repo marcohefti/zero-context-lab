@@ -95,6 +95,15 @@ func TestVersionFloorAllowsVersionAndUpdateHelp(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
+	if code := r.Run([]string{"--version"}); code != 0 {
+		t.Fatalf("--version should bypass floor, got %d stderr=%q", code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "0.1.0" {
+		t.Fatalf("unexpected --version stdout=%q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
 	if code := r.Run([]string{"update", "--help"}); code != 0 {
 		t.Fatalf("update --help should bypass floor, got %d stderr=%q", code, stderr.String())
 	}

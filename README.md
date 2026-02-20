@@ -162,6 +162,9 @@ Process-runner fallback path:
 ```bash
 zcl suite run \
   --file suite.yaml \
+  --feedback-policy auto_fail \
+  --campaign-id smoke-campaign \
+  --progress-jsonl .zcl/progress/smoke.jsonl \
   --session-isolation process \
   --json \
   -- <runner-cmd> [args...]
@@ -196,8 +199,9 @@ Core commands:
 - `zcl init`
 - `zcl update status [--cached] [--json]`
 - `zcl contract --json`
-- `zcl attempt start|finish|explain`
+- `zcl attempt start|finish|explain|list|latest`
 - `zcl suite plan|run`
+- `zcl runs list`
 - `zcl run`
 - `zcl mcp proxy`
 - `zcl http proxy`
@@ -216,6 +220,44 @@ For machine-readable command + artifact contract:
 
 ```bash
 zcl contract --json
+```
+
+## Operator FAQ
+
+Find latest successful attempt for a mission:
+
+```bash
+zcl attempt latest --suite <suiteId> --mission <missionId> --status ok --json
+```
+
+List attempts/runs for automation dashboards:
+
+```bash
+zcl attempt list --suite <suiteId> --status any --limit 100 --json
+zcl runs list --suite <suiteId> --json
+```
+
+Control missing feedback behavior:
+
+```bash
+# strict: missing feedback stays a hard failure
+zcl suite run --file suite.yaml --feedback-policy strict --json -- <runner>
+
+# auto_fail: synthesize canonical infra-failure feedback when runner exits early
+zcl suite run --file suite.yaml --feedback-policy auto_fail --json -- <runner>
+```
+
+Stream live machine-readable status:
+
+```bash
+zcl suite run --file suite.yaml --progress-jsonl .zcl/progress/suite.jsonl --json -- <runner>
+```
+
+Canonical campaign continuity state:
+
+```bash
+zcl suite run --file suite.yaml --campaign-id <campaignId> --json -- <runner>
+# writes .zcl/campaigns/<campaignId>/campaign.state.json by default
 ```
 
 ## Developer Flow

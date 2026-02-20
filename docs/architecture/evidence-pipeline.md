@@ -24,6 +24,7 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
   - MCP funnel: `internal/funnel/mcp_proxy/proxy.go`
   - HTTP funnel: `internal/cli/cmd_http_proxy.go`, `internal/funnel/http_proxy`
 - Outcome writing: `internal/feedback/feedback.go` (writes `feedback.json`, enforces prerequisites)
+- Suite auto-finalization policy: `internal/cli/cmd_suite_run.go` (`feedbackPolicy=strict|auto_fail`)
 - Report: `internal/report/report.go` (computes `attempt.report.json`)
 - Validation: `internal/validate/validate.go` (typed integrity errors, strict enforcement)
 - Finish orchestration: `internal/cli/cmd_attempt_finish.go` (report -> validate -> expect)
@@ -42,6 +43,7 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
    - `zcl attempt finish --json [--strict] [--strict-expect]`
    - writes `attempt.report.json` then runs validate + expect
    - run-level reporting: `zcl report --json <runDir>` writes `run.report.json` and returns the same JSON.
+   - suite orchestration can optionally synthesize canonical infra-failure feedback when missing (`feedbackPolicy=auto_fail`).
 
 ## Invariants / Guardrails
 - Attempt identity boundary is the attempt directory (`ZCL_OUT_DIR`).
