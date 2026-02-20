@@ -90,7 +90,7 @@ func TestRun_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
 	openAIKey := "sk-1234567890ABCDEF"
 	ghToken := "ghp_1234567890abcdef"
 
-	payloadOut := "token=" + openAIKey + "\n"
+	payloadOut := "token=" + openAIKey
 	payloadErr := "gh=" + ghToken + "\n"
 
 	var stdout bytes.Buffer
@@ -145,7 +145,7 @@ func TestRun_CaptureRedactsByDefault(t *testing.T) {
 	setAttemptEnv(t, outDir)
 
 	openAIKey := "sk-1234567890ABCDEF"
-	payloadOut := "token=" + openAIKey + "\n"
+	payloadOut := "token=" + openAIKey
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -179,7 +179,7 @@ func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
 	setAttemptEnv(t, outDir)
 
 	openAIKey := "sk-1234567890ABCDEF"
-	payloadOut := "token=" + openAIKey + "\n"
+	payloadOut := "token=" + openAIKey
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
