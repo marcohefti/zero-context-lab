@@ -45,13 +45,10 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 	}
 
 	if m.Expects.Result != nil {
+		failures = append(failures, ValidateResultShape(m.Expects.Result, fb)...)
 		switch m.Expects.Result.Type {
 		case "string":
 			if len(fb.ResultJSON) > 0 {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_RESULT_TYPE",
-					Message: "expected result type string, got resultJson",
-				})
 				break
 			}
 			if m.Expects.Result.Equals != "" && fb.Result != m.Expects.Result.Equals {
@@ -75,18 +72,9 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 				}
 			}
 		case "json":
-			if len(fb.ResultJSON) == 0 {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_RESULT_TYPE",
-					Message: "expected result type json, got result",
-				})
-			}
+			// Shape checks already handled by ValidateResultShape.
 		default:
-			// Parse already validates, but keep evaluation resilient.
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_RESULT_TYPE",
-				Message: "unsupported expects.result.type",
-			})
+			// Parse already validates, but keep evaluation resilient (handled above too).
 		}
 	}
 

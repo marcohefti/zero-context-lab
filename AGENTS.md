@@ -27,6 +27,13 @@ Repo validation (must be green after meaningful changes):
 - Deterministic shapes: stable JSON, versioned schemas, atomic writes, safe JSONL appends.
 - If you change artifact layout or schema: update `SCHEMAS.md`, `zcl contract --json`, contract snapshot, and tests together.
 
+## Triggered Routines (Keyword -> Doc)
+
+- Feedback triage + recommendation quality:
+  - Use `docs/feedback-evaluation.md` when prompts mention: `feedback`, `recommendation`, `user error`, `out of scope`, `single user`, `generalize`, `should we add this`.
+  - Apply the broad-value gate before proposing or implementing changes.
+  - Anchor conclusions in artifacts (`report`/`validate`/`attempt explain`), not transcripts.
+
 ## Operator Workflow (Golden Path)
 
 1. Initialize: `zcl init`
@@ -37,6 +44,7 @@ Repo validation (must be green after meaningful changes):
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
+   - Env handoff: source `<attemptDir>/attempt.env.sh` (auto-written), or run `zcl attempt env --format sh <attemptDir>`
 4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
@@ -71,6 +79,7 @@ Root: `.zcl/`
     run.report.json             (optional; `zcl report --json <runDir>` aggregate)
     attempts/<attemptId>/
       attempt.json
+      attempt.env.sh            (ready-to-source env handoff)
       prompt.txt                (optional snapshot)
       tool.calls.jsonl          (primary evidence)
       feedback.json             (primary evidence)

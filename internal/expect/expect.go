@@ -135,6 +135,15 @@ func expectAttempt(attemptDir string, strict bool) (Result, error) {
 	}
 
 	runDir := filepath.Dir(filepath.Dir(attemptDir))
+	if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
+		if strict && os.IsNotExist(err) {
+			res.OK = false
+			res.Failures = append(res.Failures, Finding{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing run.json", Path: filepath.Join(runDir, "run.json")})
+			return res, nil
+		}
+		// Without run.json this does not look like a real runDir boundary.
+		return res, nil
+	}
 	suitePath := filepath.Join(runDir, "suite.json")
 	suiteBytes, err := os.ReadFile(suitePath)
 	if err != nil {

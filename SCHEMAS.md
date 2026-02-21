@@ -78,8 +78,8 @@ Minimal v1 suite shape (example):
       "expects": {
         "ok": true,
         "result": {
-          "type": "string",
-          "pattern": "^ARTICLE_TITLE=.*"
+          "type": "json",
+          "requiredJsonPointers": ["/proof/title"]
         },
         "trace": {
           "maxToolCallsTotal": 30,
@@ -92,6 +92,11 @@ Minimal v1 suite shape (example):
   ]
 }
 ```
+
+`expects.result` supports:
+- `type`: `string|json`
+- `equals`, `pattern` (for `type=string`)
+- `requiredJsonPointers` (for `type=json`): RFC 6901 pointers that must exist in `feedback.resultJson`
 
 ## `suite.run.summary.json` (optional; v1)
 
@@ -159,12 +164,19 @@ Optional fields:
 - `blind` (enable zero-context prompt contamination checks)
 - `blindTerms` (normalized harness terms used by contamination checks)
 - `scratchDir` (path relative to `<outRoot>/` for per-attempt scratch space under `<outRoot>/tmp/<runId>/<attemptId>`)
+- `attemptEnvSh` (ready-to-source env handoff file path relative to attemptDir; default `attempt.env.sh`)
 
 ## `prompt.txt` (snapshot; optional)
 
 Path: `.zcl/runs/<runId>/attempts/<attemptId>/prompt.txt`
 
 If `zcl attempt start --prompt <text>` is used, ZCL snapshots the prompt text here.
+
+## `attempt.env.sh` (optional; auto-written)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.env.sh`
+
+Shell export file containing canonical attempt `ZCL_*` env for sourcing.
 
 ## `tool.calls.jsonl` trace events (v1)
 
@@ -305,6 +317,7 @@ Required fields (metrics fields may be zero when computed from partial evidence 
     "attemptJson": "attempt.json",
     "toolCallsJsonl": "tool.calls.jsonl",
     "feedbackJson": "feedback.json",
+    "attemptEnvSh": "attempt.env.sh",
     "notesJsonl": "notes.jsonl",
     "promptTxt": "prompt.txt",
     "runnerCommandTxt": "runner.command.txt",

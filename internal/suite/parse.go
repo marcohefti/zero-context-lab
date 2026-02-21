@@ -90,6 +90,28 @@ func ParseFile(path string) (ParsedSuite, error) {
 				return ParsedSuite{}, fmt.Errorf("mission %q: expects.result.type must be string|json", m.MissionID)
 			}
 			m.Expects.Result.Type = rt
+			if len(m.Expects.Result.RequiredJSONPointers) > 0 {
+				if rt != "json" {
+					return ParsedSuite{}, fmt.Errorf("mission %q: expects.result.requiredJsonPointers requires expects.result.type=json", m.MissionID)
+				}
+				seenPointers := map[string]bool{}
+				normalized := make([]string, 0, len(m.Expects.Result.RequiredJSONPointers))
+				for _, ptr := range m.Expects.Result.RequiredJSONPointers {
+					ptr = strings.TrimSpace(ptr)
+					if ptr == "" {
+						return ParsedSuite{}, fmt.Errorf("mission %q: expects.result.requiredJsonPointers cannot contain empty pointers", m.MissionID)
+					}
+					if !IsValidJSONPointer(ptr) {
+						return ParsedSuite{}, fmt.Errorf("mission %q: invalid expects.result.requiredJsonPointers entry %q", m.MissionID, ptr)
+					}
+					if seenPointers[ptr] {
+						continue
+					}
+					seenPointers[ptr] = true
+					normalized = append(normalized, ptr)
+				}
+				m.Expects.Result.RequiredJSONPointers = normalized
+			}
 		}
 		if m.Expects != nil && m.Expects.Trace != nil {
 			tr := m.Expects.Trace

@@ -41,6 +41,7 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] --json -- <runner-cmd> [args...]`
 - `zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json`
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--isolation-model process_runner|native_spawn] --json`
+- `zcl attempt env [--format sh|dotenv] [--json] [<attemptDir>]`
 - `zcl attempt finish [--strict] [--strict-expect] [--json] [<attemptDir>]`
 - `zcl attempt explain [--strict] [--json] [--tail N] [<attemptDir>]`
 - `zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json`
@@ -78,6 +79,7 @@ Attempt context is provided to runners as env vars:
 - `ZCL_ISOLATION_MODEL` (optional; `process_runner|native_spawn`)
 - `ZCL_PROMPT_PATH` (optional pointer to `prompt.txt`; set by orchestration when present)
 - `ZCL_MIN_VERSION` (optional semver floor; if set and current `zcl` is below floor, commands fail fast with `ZCL_E_VERSION_FLOOR`)
+- `attempt.env.sh` is auto-written in each attempt dir and can be sourced directly for operator/agent handoff.
 
 Safety knobs:
 - `zcl run --capture --capture-raw` is blocked in CI/strict contexts unless `ZCL_ALLOW_UNSAFE_CAPTURE=1`.
@@ -85,7 +87,7 @@ Safety knobs:
 ## Code Map (Where Things Live)
 - `cmd/zcl`: CLI entrypoint.
 - `internal/cli`: command handlers (UX + stable JSON output).
-- `internal/attempt`: attempt allocation + metadata (`attempt.json`, `prompt.txt`, `ZCL_TMP_DIR`).
+- `internal/attempt`: attempt allocation + metadata (`attempt.json`, `attempt.env.sh`, `prompt.txt`, `ZCL_TMP_DIR`).
 - `internal/planner`: suite planning (suite file -> planned attempts + env).
 - `internal/suite`: suite parsing + expectations (runner-agnostic).
 - `internal/funnel`: protocol funnels (CLI/MCP/HTTP).

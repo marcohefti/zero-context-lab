@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,87 @@ func TestWrite_ResultJSONCanonicalizes(t *testing.T) {
 	want := map[string]any{"a": float64(1), "b": float64(2)}
 	if m, ok := got.(map[string]any); !ok || len(m) != 2 || m["a"] != want["a"] || m["b"] != want["b"] {
 		t.Fatalf("unexpected resultJson: %#v", got)
+	}
+}
+
+func TestWrite_EnforcesSuiteResultShapeWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runDir := filepath.Join(base, "runs", "20260215-180012Z-09c5a6")
+	outDir := filepath.Join(runDir, "attempts", "001-latest-blog-title-r1")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir attempt dir: %v", err)
+	}
+	env := trace.Env{
+		RunID:     "20260215-180012Z-09c5a6",
+		SuiteID:   "heftiweb-smoke",
+		MissionID: "latest-blog-title",
+		AttemptID: "001-latest-blog-title-r1",
+		OutDirAbs: outDir,
+	}
+	writeAttemptJSON(t, outDir, env, "discovery")
+	writeDummyTrace(t, outDir, env)
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(`{"schemaVersion":1,"artifactLayoutVersion":1,"runId":"20260215-180012Z-09c5a6","suiteId":"heftiweb-smoke","createdAt":"2026-02-15T18:00:00Z"}`), 0o644); err != nil {
+		t.Fatalf("write run.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "suite.json"), []byte(`{
+  "version":1,
+  "suiteId":"heftiweb-smoke",
+  "missions":[{"missionId":"latest-blog-title","expects":{"result":{"type":"json","requiredJsonPointers":["/proof/value"]}}}]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite.json: %v", err)
+	}
+
+	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
+	err := Write(now, env, WriteOpts{
+		OK:         true,
+		ResultJSON: `{"value":1}`,
+	})
+	if err == nil {
+		t.Fatalf("expected shape enforcement error")
+	}
+	if !strings.Contains(err.Error(), "missing required resultJson pointer /proof/value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWrite_SkipSuiteResultShapeForSyntheticFeedback(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	runDir := filepath.Join(base, "runs", "20260215-180012Z-09c5a6")
+	outDir := filepath.Join(runDir, "attempts", "001-latest-blog-title-r1")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir attempt dir: %v", err)
+	}
+	env := trace.Env{
+		RunID:     "20260215-180012Z-09c5a6",
+		SuiteID:   "heftiweb-smoke",
+		MissionID: "latest-blog-title",
+		AttemptID: "001-latest-blog-title-r1",
+		OutDirAbs: outDir,
+	}
+	writeAttemptJSON(t, outDir, env, "discovery")
+	writeDummyTrace(t, outDir, env)
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(`{"schemaVersion":1,"artifactLayoutVersion":1,"runId":"20260215-180012Z-09c5a6","suiteId":"heftiweb-smoke","createdAt":"2026-02-15T18:00:00Z"}`), 0o644); err != nil {
+		t.Fatalf("write run.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "suite.json"), []byte(`{
+  "version":1,
+  "suiteId":"heftiweb-smoke",
+  "missions":[{"missionId":"latest-blog-title","expects":{"result":{"type":"json","requiredJsonPointers":["/proof/value"]}}}]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite.json: %v", err)
+	}
+
+	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
+	if err := Write(now, env, WriteOpts{
+		OK:                   false,
+		Result:               "CONTAMINATED_PROMPT",
+		SkipSuiteResultShape: true,
+	}); err != nil {
+		t.Fatalf("Write with skip should succeed: %v", err)
 	}
 }
 

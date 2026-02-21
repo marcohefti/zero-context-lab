@@ -107,22 +107,28 @@ Set `ZCL_DISABLE_UPDATE_NOTIFY=1` to silence notices, or `ZCL_ENABLE_UPDATE_NOTI
 zcl init
 ```
 
-2. Allocate attempt and write an env file:
+2. Allocate attempt:
 
 ```bash
-zcl attempt start \
-  --suite smoke \
-  --mission hello-world \
-  --prompt "Run echo hello and finish with zcl feedback." \
-  --isolation-model native_spawn \
-  --env-file .zcl/current-attempt.env \
-  --env-format sh \
-  --json
-```
+	zcl attempt start \
+	  --suite smoke \
+	  --mission hello-world \
+	  --prompt "Run echo hello and finish with zcl feedback." \
+	  --isolation-model native_spawn \
+	  --json
+	```
 
-3. Load attempt env:
+3. Load attempt env (pick one):
 
 ```bash
+# auto-written per attempt:
+source .zcl/runs/<runId>/attempts/<attemptId>/attempt.env.sh
+
+# or explicit export from any attempt dir:
+zcl attempt env --format sh <attemptDir>
+
+# optional custom output path:
+zcl attempt start --env-file .zcl/current-attempt.env --env-format sh --json ...
 source .zcl/current-attempt.env
 ```
 
@@ -179,6 +185,7 @@ Root: `.zcl/`
     run.report.json             (optional)
     attempts/<attemptId>/
       attempt.json
+      attempt.env.sh            (ready-to-source env handoff)
       prompt.txt                (optional snapshot)
       tool.calls.jsonl          (primary evidence)
       feedback.json             (primary evidence)
@@ -195,7 +202,7 @@ Core commands:
 - `zcl init`
 - `zcl update status [--cached] [--json]`
 - `zcl contract --json`
-- `zcl attempt start|finish|explain|list|latest`
+- `zcl attempt start|env|finish|explain|list|latest`
 - `zcl suite plan|run`
 - `zcl runs list`
 - `zcl run`
@@ -273,3 +280,4 @@ This runs formatting/tests/vet + contract/docs/skills checks.
 - `ARCHITECTURE.md` (system model + command map)
 - `SCHEMAS.md` (exact v1 schemas and canonical IDs)
 - `AGENTS.md` (operator workflow + builder index)
+- `docs/feedback-evaluation.md` (feedback triage and broad-value recommendation routine)

@@ -11,6 +11,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/redact"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/store"
+	"github.com/marcohefti/zero-context-lab/internal/suite"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 )
 
@@ -20,6 +21,9 @@ type WriteOpts struct {
 	ResultJSON     string
 	Classification string
 	DecisionTags   []string
+	// SkipSuiteResultShape skips suite expects.result type/shape enforcement.
+	// Use only for synthetic infra-failure feedback written by orchestration.
+	SkipSuiteResultShape bool
 }
 
 func Write(now time.Time, env trace.Env, opts WriteOpts) error {
@@ -41,7 +45,8 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		}
 	}
 
-	if err := requireEvidenceForMode(env); err != nil {
+	attemptMeta, err := requireEvidenceForMode(env)
+	if err != nil {
 		return err
 	}
 
@@ -87,33 +92,38 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		CreatedAt:         now.UTC().Format(time.RFC3339Nano),
 		RedactionsApplied: applied,
 	}
+	if !opts.SkipSuiteResultShape {
+		if err := enforceSuiteResultShape(env, attemptMeta, payload); err != nil {
+			return err
+		}
+	}
 
 	path := filepath.Join(env.OutDirAbs, "feedback.json")
 	return store.WriteJSONAtomic(path, payload)
 }
 
-func requireEvidenceForMode(env trace.Env) error {
+func requireEvidenceForMode(env trace.Env) (schema.AttemptJSONV1, error) {
 	// Enforce "funnel-first" semantics: primary evidence must exist before we accept a final outcome.
 	// This makes it harder to accidentally record a result without funnel-backed actions.
 	rawAttempt, err := os.ReadFile(filepath.Join(env.OutDirAbs, "attempt.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("missing attempt.json in attempt directory (need zcl attempt start context)")
+			return schema.AttemptJSONV1{}, fmt.Errorf("missing attempt.json in attempt directory (need zcl attempt start context)")
 		}
-		return err
+		return schema.AttemptJSONV1{}, err
 	}
 	var a schema.AttemptJSONV1
 	if err := json.Unmarshal(rawAttempt, &a); err != nil {
-		return fmt.Errorf("invalid attempt.json (cannot determine mode): %w", err)
+		return schema.AttemptJSONV1{}, fmt.Errorf("invalid attempt.json (cannot determine mode): %w", err)
 	}
 
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	f, err := os.Open(tracePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("tool.calls.jsonl is required before feedback")
+			return schema.AttemptJSONV1{}, fmt.Errorf("tool.calls.jsonl is required before feedback")
 		}
-		return err
+		return schema.AttemptJSONV1{}, err
 	}
 	defer func() { _ = f.Close() }()
 
@@ -124,7 +134,7 @@ func requireEvidenceForMode(env trace.Env) error {
 		if n > 0 {
 			for _, b := range buf[:n] {
 				if b != ' ' && b != '\n' && b != '\t' && b != '\r' {
-					return nil
+					return a, nil
 				}
 			}
 		}
@@ -132,5 +142,40 @@ func requireEvidenceForMode(env trace.Env) error {
 			break
 		}
 	}
-	return fmt.Errorf("tool.calls.jsonl must be non-empty before feedback")
+	return schema.AttemptJSONV1{}, fmt.Errorf("tool.calls.jsonl must be non-empty before feedback")
+}
+
+func enforceSuiteResultShape(env trace.Env, attemptMeta schema.AttemptJSONV1, payload schema.FeedbackJSONV1) error {
+	runDir := filepath.Dir(filepath.Dir(env.OutDirAbs))
+	if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	suitePath := filepath.Join(runDir, "suite.json")
+	b, err := os.ReadFile(suitePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var sf suite.SuiteFileV1
+	if err := json.Unmarshal(b, &sf); err != nil {
+		return fmt.Errorf("invalid suite.json while enforcing feedback shape: %w", err)
+	}
+	m := suite.FindMission(sf, attemptMeta.MissionID)
+	if m == nil || m.Expects == nil || m.Expects.Result == nil {
+		return nil
+	}
+	failures := suite.ValidateResultShape(m.Expects.Result, payload)
+	if len(failures) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(failures))
+	for _, f := range failures {
+		msgs = append(msgs, f.Code+": "+f.Message)
+	}
+	return fmt.Errorf("feedback result shape violates suite expects for mission %q: %s", attemptMeta.MissionID, strings.Join(msgs, "; "))
 }

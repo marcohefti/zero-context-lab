@@ -186,6 +186,8 @@ func (r Runner) runAttempt(args []string) int {
 	switch args[0] {
 	case "start":
 		return r.runAttemptStart(args[1:])
+	case "env":
+		return r.runAttemptEnv(args[1:])
 	case "finish":
 		return r.runAttemptFinish(args[1:])
 	case "explain":
@@ -1223,6 +1225,7 @@ Usage:
   zcl update status [--cached] [--json]
   zcl contract --json
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl attempt env [--format sh|dotenv] [--json] [<attemptDir>]
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
@@ -1250,6 +1253,7 @@ Commands:
   update status   Check latest release status (manual updates only; no auto-update).
   contract        Print the ZCL surface contract (use --json).
   attempt start   Allocate a run/attempt dir and print canonical IDs + env (use --json).
+  attempt env     Print canonical attempt env (or return it as JSON).
   attempt finish  Write attempt.report.json, then validate + expect (use --json for automation).
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
@@ -1289,6 +1293,7 @@ func printContractHelp(w io.Writer) {
 func printAttemptHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl attempt start --suite <suiteId> --mission <missionId> --json
+  zcl attempt env [--format sh|dotenv] [--json] [<attemptDir>]
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json
@@ -1305,7 +1310,20 @@ func printRunsHelp(w io.Writer) {
 func printAttemptStartHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
 	  zcl attempt start --suite <suiteId> --mission <missionId> [--prompt <text>] [--suite-file <path>] [--run-id <runId>] [--agent-id <id>] [--isolation-model process_runner|native_spawn] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--blind] [--blind-terms a,b,c] [--out-root .zcl] [--retry 1] [--env-file <path>] [--env-format sh|dotenv] [--print-env sh|dotenv] --json
-		`)
+
+	Notes:
+	  - Always writes <attemptDir>/attempt.env.sh and records it in attempt.json.
+			`)
+}
+
+func printAttemptEnvHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl attempt env [--format sh|dotenv] [--json] [<attemptDir>]
+
+Notes:
+  - If <attemptDir> is omitted, ZCL_OUT_DIR is used.
+  - Backfills attempt.env.sh for older attempts when missing.
+`)
 }
 
 func printSuiteHelp(w io.Writer) {

@@ -46,6 +46,8 @@ type AttemptJSONV1 struct {
 	// ScratchDir is a per-attempt scratch directory under <outRoot>/tmp.
 	// It is optional but recommended for tools that need temporary files.
 	ScratchDir string `json:"scratchDir,omitempty"`
+	// AttemptEnvSH is a ready-to-source shell env file path relative to attemptDir.
+	AttemptEnvSH string `json:"attemptEnvSh,omitempty"`
 }
 
 // FeedbackJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/feedback.json
@@ -111,6 +113,7 @@ type AttemptArtifactsV1 struct {
 	AttemptJSON  string `json:"attemptJson"`
 	TraceJSONL   string `json:"toolCallsJsonl"`
 	FeedbackJSON string `json:"feedbackJson"`
+	AttemptEnvSH string `json:"attemptEnvSh,omitempty"`
 	NotesJSONL   string `json:"notesJsonl,omitempty"`
 	PromptTXT    string `json:"promptTxt,omitempty"`
 	// Runner* are produced by suite orchestration when runner IO capture is enabled.

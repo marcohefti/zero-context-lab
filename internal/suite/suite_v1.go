@@ -42,6 +42,10 @@ type ResultExpectsV1 struct {
 
 	// Equals is an exact match applied to feedback.result when Type=="string".
 	Equals string `json:"equals,omitempty" yaml:"equals,omitempty"`
+
+	// RequiredJSONPointers are JSON pointers (RFC 6901) that must exist in
+	// feedback.resultJson when Type=="json".
+	RequiredJSONPointers []string `json:"requiredJsonPointers,omitempty" yaml:"requiredJsonPointers,omitempty"`
 }
 
 // TraceExpectsV1 are expectations derived from tool.calls.jsonl evidence (not from agent claims).

@@ -29,6 +29,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	feedbackPath := filepath.Join(attemptDir, "feedback.json")
 	notesPath := filepath.Join(attemptDir, "notes.jsonl")
 	promptPath := filepath.Join(attemptDir, "prompt.txt")
+	attemptEnvPath := filepath.Join(attemptDir, schema.AttemptEnvShFileNameV1)
 	runnerCmdPath := filepath.Join(attemptDir, "runner.command.txt")
 	runnerStdoutPath := filepath.Join(attemptDir, "runner.stdout.log")
 	runnerStderrPath := filepath.Join(attemptDir, "runner.stderr.log")
@@ -110,6 +111,9 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	}
 	if _, err := os.Stat(promptPath); err == nil {
 		artifacts.PromptTXT = "prompt.txt"
+	}
+	if _, err := os.Stat(attemptEnvPath); err == nil {
+		artifacts.AttemptEnvSH = schema.AttemptEnvShFileNameV1
 	}
 	if _, err := os.Stat(runnerCmdPath); err == nil {
 		artifacts.RunnerCommandTXT = "runner.command.txt"
@@ -663,6 +667,12 @@ func quantileMillis(sorted []int64, q float64) int64 {
 
 func loadSuiteForAttempt(attemptDir string) (suite.SuiteFileV1, bool, error) {
 	runDir := filepath.Dir(filepath.Dir(attemptDir))
+	if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
+		if os.IsNotExist(err) {
+			return suite.SuiteFileV1{}, false, nil
+		}
+		return suite.SuiteFileV1{}, false, err
+	}
 	suitePath := filepath.Join(runDir, "suite.json")
 	raw, err := os.ReadFile(suitePath)
 	if err != nil {

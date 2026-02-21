@@ -752,9 +752,10 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 				ar.RunnerErrorCode = "ZCL_E_IO"
 				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 			} else if err := feedback.Write(r.Now(), envTrace, feedback.WriteOpts{
-				OK:           false,
-				Result:       "CONTAMINATED_PROMPT",
-				DecisionTags: []string{schema.DecisionTagBlocked, schema.DecisionTagContaminatedPrompt},
+				OK:                   false,
+				Result:               "CONTAMINATED_PROMPT",
+				DecisionTags:         []string{schema.DecisionTagBlocked, schema.DecisionTagContaminatedPrompt},
+				SkipSuiteResultShape: true,
 			}); err != nil {
 				harnessErr = true
 				ar.RunnerErrorCode = "ZCL_E_IO"
@@ -959,9 +960,10 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 		decisionTags = append(decisionTags, schema.DecisionTagTimeout)
 	}
 	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
-		OK:           false,
-		ResultJSON:   string(b),
-		DecisionTags: decisionTags,
+		OK:                   false,
+		ResultJSON:           string(b),
+		DecisionTags:         decisionTags,
+		SkipSuiteResultShape: true,
 	}); err != nil {
 		return err
 	}

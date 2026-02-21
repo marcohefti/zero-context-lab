@@ -42,6 +42,7 @@ type StartResult struct {
 	Mode           string            `json:"mode"`
 	OutDir         string            `json:"outDir"`
 	OutDirAbs      string            `json:"outDirAbs"`
+	AttemptEnvFile string            `json:"attemptEnvFile,omitempty"`
 	Env            map[string]string `json:"env"`
 	CreatedAt      string            `json:"createdAt"`
 }
@@ -206,6 +207,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		StartedAt:      now.UTC().Format(time.RFC3339Nano),
 		Blind:          opts.Blind,
 		BlindTerms:     append([]string(nil), opts.BlindTerms...),
+		AttemptEnvSH:   schema.AttemptEnvShFileNameV1,
 	}
 	if opts.TimeoutMs > 0 {
 		timeoutStart := strings.TrimSpace(opts.TimeoutStart)
@@ -234,9 +236,6 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, err
 	}
 	attemptMeta.ScratchDir = scratchRel
-	if err := store.WriteJSONAtomic(filepath.Join(outDir, "attempt.json"), attemptMeta); err != nil {
-		return nil, err
-	}
 
 	env := map[string]string{
 		"ZCL_RUN_ID":     runID,
@@ -252,6 +251,13 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 	if opts.IsolationModel != "" {
 		env["ZCL_ISOLATION_MODEL"] = opts.IsolationModel
 	}
+	if err := store.WriteJSONAtomic(filepath.Join(outDir, "attempt.json"), attemptMeta); err != nil {
+		return nil, err
+	}
+	attemptEnvFile := filepath.Join(outDir, attemptMeta.AttemptEnvSH)
+	if err := WriteEnvSh(attemptEnvFile, env); err != nil {
+		return nil, err
+	}
 
 	return &StartResult{
 		OK:             true,
@@ -264,6 +270,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		Mode:           mode,
 		OutDir:         outDir,
 		OutDirAbs:      outDirAbs,
+		AttemptEnvFile: attemptEnvFile,
 		Env:            env,
 		CreatedAt:      now.UTC().Format(time.RFC3339Nano),
 	}, nil
