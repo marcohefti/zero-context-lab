@@ -21,6 +21,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/campaign"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
+	"github.com/marcohefti/zero-context-lab/internal/integrations/codex_app_server"
 	"github.com/marcohefti/zero-context-lab/internal/runners"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/semantic"
@@ -650,6 +651,25 @@ func (r Runner) runCampaignDoctor(args []string) int {
 
 	requiredBins := map[string]bool{}
 	for _, flow := range parsed.Spec.Flows {
+		if flow.Runner.Type == campaign.RunnerTypeCodexAppSrv {
+			addCheck("runner_command_"+flow.FlowID, true, "native runtime mode (no runner.command required)")
+			runtime := codexappserver.NewRuntime(codexappserver.Config{
+				Command: codexappserver.DefaultCommandFromEnv(),
+			})
+			if err := runtime.Probe(context.Background()); err != nil {
+				addCheck("native_runtime_"+flow.FlowID, false, err.Error())
+			} else {
+				addCheck("native_runtime_"+flow.FlowID, true, "")
+			}
+			if len(flow.Runner.RuntimeStrategies) > 0 {
+				if strings.TrimSpace(flow.Runner.RuntimeStrategies[0]) != string(campaign.RunnerTypeCodexAppSrv) {
+					addCheck("native_runtime_chain_"+flow.FlowID, false, "first runtime strategy must be codex_app_server for this build")
+				} else {
+					addCheck("native_runtime_chain_"+flow.FlowID, true, "")
+				}
+			}
+			continue
+		}
 		if len(flow.Runner.Command) == 0 {
 			addCheck("runner_command_"+flow.FlowID, false, "runner.command is empty")
 			continue
@@ -1180,8 +1200,13 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	for _, shim := range flow.Runner.Shims {
 		args = append(args, "--shim", shim)
 	}
-	args = append(args, "--")
-	args = append(args, flow.Runner.Command...)
+	if len(flow.Runner.RuntimeStrategies) > 0 {
+		args = append(args, "--runtime-strategies", strings.Join(flow.Runner.RuntimeStrategies, ","))
+	}
+	if len(flow.Runner.Command) > 0 {
+		args = append(args, "--")
+		args = append(args, flow.Runner.Command...)
+	}
 
 	env := map[string]string{}
 	for k, v := range flow.Runner.Env {

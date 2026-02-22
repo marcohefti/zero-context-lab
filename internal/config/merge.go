@@ -13,6 +13,9 @@ type Merged struct {
 
 	// Source is informational for operator UX/debugging.
 	Source string
+
+	RuntimeStrategyChain  []string
+	RuntimeStrategySource string
 }
 
 func DefaultGlobalConfigPath() (string, error) {
@@ -27,6 +30,7 @@ type GlobalConfigV1 struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	OutRoot       string             `json:"outRoot,omitempty"`
 	Redaction     *RedactionConfigV1 `json:"redaction,omitempty"`
+	Runtime       RuntimeConfigV1    `json:"runtime,omitempty"`
 }
 
 func LoadMerged(flagOutRoot string) (Merged, error) {
@@ -36,27 +40,54 @@ func LoadMerged(flagOutRoot string) (Merged, error) {
 	// 3) project config (zcl.config.json)
 	// 4) global config (~/.zcl/config.json)
 	// 5) defaults
-	if strings.TrimSpace(flagOutRoot) != "" {
-		return Merged{OutRoot: flagOutRoot, Source: "flag"}, nil
-	}
-	if v := strings.TrimSpace(os.Getenv("ZCL_OUT_ROOT")); v != "" {
-		return Merged{OutRoot: v, Source: "env:ZCL_OUT_ROOT"}, nil
-	}
-	if cfg, ok, err := loadProject(DefaultProjectConfigPath); err != nil {
+	projectCfg, hasProjectCfg, err := loadProject(DefaultProjectConfigPath)
+	if err != nil {
 		return Merged{}, err
-	} else if ok {
-		return Merged{OutRoot: cfg.OutRoot, Source: DefaultProjectConfigPath}, nil
 	}
 	globalPath, err := DefaultGlobalConfigPath()
 	if err != nil {
 		return Merged{}, err
 	}
-	if g, ok, err := loadGlobal(globalPath); err != nil {
+	globalCfg, hasGlobalCfg, err := loadGlobal(globalPath)
+	if err != nil {
 		return Merged{}, err
-	} else if ok && strings.TrimSpace(g.OutRoot) != "" {
-		return Merged{OutRoot: g.OutRoot, Source: globalPath}, nil
 	}
-	return Merged{OutRoot: ".zcl", Source: "default"}, nil
+
+	res := Merged{
+		OutRoot:               ".zcl",
+		Source:                "default",
+		RuntimeStrategyChain:  DefaultRuntimeStrategyChain(),
+		RuntimeStrategySource: "default",
+	}
+	if strings.TrimSpace(flagOutRoot) != "" {
+		res.OutRoot = flagOutRoot
+		res.Source = "flag"
+	} else if v := strings.TrimSpace(os.Getenv("ZCL_OUT_ROOT")); v != "" {
+		res.OutRoot = v
+		res.Source = "env:ZCL_OUT_ROOT"
+	} else if hasProjectCfg {
+		res.OutRoot = projectCfg.OutRoot
+		res.Source = DefaultProjectConfigPath
+	} else if hasGlobalCfg && strings.TrimSpace(globalCfg.OutRoot) != "" {
+		res.OutRoot = globalCfg.OutRoot
+		res.Source = globalPath
+	}
+
+	if v := ParseRuntimeStrategyCSV(os.Getenv("ZCL_RUNTIME_STRATEGIES")); len(v) > 0 {
+		res.RuntimeStrategyChain = v
+		res.RuntimeStrategySource = "env:ZCL_RUNTIME_STRATEGIES"
+	} else if hasProjectCfg {
+		if chain := NormalizeRuntimeStrategyChain(projectCfg.Runtime.StrategyChain); len(chain) > 0 {
+			res.RuntimeStrategyChain = chain
+			res.RuntimeStrategySource = DefaultProjectConfigPath
+		}
+	} else if hasGlobalCfg {
+		if chain := NormalizeRuntimeStrategyChain(globalCfg.Runtime.StrategyChain); len(chain) > 0 {
+			res.RuntimeStrategyChain = chain
+			res.RuntimeStrategySource = globalPath
+		}
+	}
+	return res, nil
 }
 
 func loadProject(path string) (ProjectConfigV1, bool, error) {

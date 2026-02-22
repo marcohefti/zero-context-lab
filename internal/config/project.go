@@ -21,6 +21,7 @@ type ProjectConfigV1 struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	OutRoot       string             `json:"outRoot"`
 	Redaction     *RedactionConfigV1 `json:"redaction,omitempty"`
+	Runtime       RuntimeConfigV1    `json:"runtime,omitempty"`
 }
 
 type InitResult struct {

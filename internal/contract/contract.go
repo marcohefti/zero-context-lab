@@ -3,6 +3,7 @@ package contract
 import (
 	"github.com/marcohefti/zero-context-lab/internal/campaign"
 	"github.com/marcohefti/zero-context-lab/internal/codes"
+	"github.com/marcohefti/zero-context-lab/internal/native"
 	"github.com/marcohefti/zero-context-lab/internal/runners"
 )
 
@@ -16,6 +17,7 @@ type Contract struct {
 	Commands              []Command      `json:"commands"`
 	Errors                []Error        `json:"errors"`
 	CampaignSchema        CampaignSchema `json:"campaignSchema,omitempty"`
+	RuntimeSchema         RuntimeSchema  `json:"runtimeSchema,omitempty"`
 }
 
 type Artifact struct {
@@ -81,6 +83,22 @@ type CampaignSchemaField struct {
 	Enum        []string `json:"enum,omitempty"`
 	Default     any      `json:"default,omitempty"`
 	Description string   `json:"description"`
+}
+
+type RuntimeSchema struct {
+	SchemaVersion        int                     `json:"schemaVersion"`
+	StrategyChainEnv     string                  `json:"strategyChainEnv"`
+	DefaultStrategyChain []string                `json:"defaultStrategyChain"`
+	Capabilities         []string                `json:"capabilities"`
+	HealthMetrics        []string                `json:"healthMetrics"`
+	Strategies           []RuntimeStrategySchema `json:"strategies"`
+}
+
+type RuntimeStrategySchema struct {
+	ID           string          `json:"id"`
+	Description  string          `json:"description"`
+	Recommended  bool            `json:"recommended"`
+	Capabilities map[string]bool `json:"capabilities"`
 }
 
 func Build(version string) Contract {
@@ -399,7 +417,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]",
 				Summary: "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt.",
 			},
 			{
@@ -474,6 +492,20 @@ func Build(version string) Contract {
 			{Code: codes.Spawn, Summary: "Failed to spawn or execute a wrapped command in the funnel.", Retryable: true},
 			{Code: codes.ToolFailed, Summary: "Wrapped tool execution completed with a non-zero outcome.", Retryable: true},
 			{Code: codes.Timeout, Summary: "Timed out waiting for a tool operation.", Retryable: true},
+			{Code: codes.RuntimeStrategyUnsupported, Summary: "Configured runtime strategy ID is not registered.", Retryable: false},
+			{Code: codes.RuntimeStrategyUnavailable, Summary: "No runtime strategy in the fallback chain is currently available.", Retryable: true},
+			{Code: codes.RuntimeCapabilityUnsupported, Summary: "Selected runtime does not support required capabilities.", Retryable: false},
+			{Code: codes.RuntimeCompatibility, Summary: "Runtime protocol/version is below the supported contract.", Retryable: false},
+			{Code: codes.RuntimeStartup, Summary: "Failed to start native runtime process.", Retryable: true},
+			{Code: codes.RuntimeTransport, Summary: "Native runtime transport I/O failure.", Retryable: true},
+			{Code: codes.RuntimeProtocol, Summary: "Native runtime returned an invalid/unsupported protocol response.", Retryable: false},
+			{Code: codes.RuntimeTimeout, Summary: "Native runtime request timed out.", Retryable: true},
+			{Code: codes.RuntimeStreamDisconnect, Summary: "Native runtime event stream disconnected before completion.", Retryable: true},
+			{Code: codes.RuntimeEnvPolicy, Summary: "Native runtime environment policy blocked explicit variables.", Retryable: false},
+			{Code: codes.RuntimeAuth, Summary: "Native runtime authentication/authorization failure.", Retryable: false},
+			{Code: codes.RuntimeRateLimit, Summary: "Native runtime/provider rate limit exceeded.", Retryable: true},
+			{Code: codes.RuntimeListenerFailure, Summary: "Native runtime listener pipeline failed.", Retryable: true},
+			{Code: codes.RuntimeCrash, Summary: "Native runtime process crashed before turn completion.", Retryable: true},
 			{Code: codes.MCPMaxToolCalls, Summary: "MCP proxy stopped after configured max tool calls.", Retryable: true},
 			{Code: codes.ContaminatedPrompt, Summary: "Blind mode rejected a prompt containing harness terms.", Retryable: false},
 			{Code: codes.VersionFloor, Summary: "Installed zcl version does not satisfy required minimum version.", Retryable: false},
@@ -493,7 +525,7 @@ func Build(version string) Contract {
 			SchemaVersion:      1,
 			SpecSchemaPath:     "internal/campaign/campaign.spec.schema.json",
 			TraceProfiles:      []string{campaign.TraceProfileNone, campaign.TraceProfileStrictBrowserComp, campaign.TraceProfileMCPRequired},
-			RunnerTypes:        []string{campaign.RunnerTypeProcessCmd, campaign.RunnerTypeCodexExec, campaign.RunnerTypeCodexSub, campaign.RunnerTypeClaudeSub},
+			RunnerTypes:        []string{campaign.RunnerTypeProcessCmd, campaign.RunnerTypeCodexExec, campaign.RunnerTypeCodexSub, campaign.RunnerTypeClaudeSub, campaign.RunnerTypeCodexAppSrv},
 			ToolDriverKinds:    []string{campaign.ToolDriverShell, campaign.ToolDriverCLIFunnel, campaign.ToolDriverMCPProxy, campaign.ToolDriverHTTPProxy},
 			FinalizationModes:  []string{campaign.FinalizationModeStrict, campaign.FinalizationModeAutoFail, campaign.FinalizationModeAutoFromResultJSON},
 			ResultChannelKinds: []string{campaign.ResultChannelNone, campaign.ResultChannelFileJSON, campaign.ResultChannelStdoutJSON},
@@ -595,5 +627,39 @@ func Build(version string) Contract {
 				},
 			},
 		},
+		RuntimeSchema: RuntimeSchema{
+			SchemaVersion:        1,
+			StrategyChainEnv:     "ZCL_RUNTIME_STRATEGIES",
+			DefaultStrategyChain: []string{"codex_app_server"},
+			Capabilities: []string{
+				string(native.CapabilityThreadStart),
+				string(native.CapabilityTurnSteer),
+				string(native.CapabilityInterrupt),
+				string(native.CapabilityEventStream),
+				string(native.CapabilityParallelSessions),
+			},
+			HealthMetrics: native.CanonicalHealthMetrics(),
+			Strategies:    runtimeContractStrategies(),
+		},
 	}
+}
+
+func runtimeContractStrategies() []RuntimeStrategySchema {
+	descriptors := native.BuiltinStrategyCatalog()
+	out := make([]RuntimeStrategySchema, 0, len(descriptors))
+	for _, d := range descriptors {
+		out = append(out, RuntimeStrategySchema{
+			ID:          string(d.ID),
+			Description: d.Description,
+			Recommended: d.Recommended,
+			Capabilities: map[string]bool{
+				string(native.CapabilityThreadStart):      d.Capabilities.SupportsThreadStart,
+				string(native.CapabilityTurnSteer):        d.Capabilities.SupportsTurnSteer,
+				string(native.CapabilityInterrupt):        d.Capabilities.SupportsInterrupt,
+				string(native.CapabilityEventStream):      d.Capabilities.SupportsEventStream,
+				string(native.CapabilityParallelSessions): d.Capabilities.SupportsParallelSessions,
+			},
+		})
+	}
+	return out
 }

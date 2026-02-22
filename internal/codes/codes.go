@@ -54,6 +54,21 @@ const (
 	CampaignTraceProfileBootstrapOnly       = "ZCL_E_CAMPAIGN_TRACE_PROFILE_BOOTSTRAP_ONLY"
 
 	Shim = "ZCL_E_SHIM"
+
+	RuntimeStrategyUnsupported   = "ZCL_E_RUNTIME_STRATEGY_UNSUPPORTED"
+	RuntimeStrategyUnavailable   = "ZCL_E_RUNTIME_STRATEGY_UNAVAILABLE"
+	RuntimeCapabilityUnsupported = "ZCL_E_RUNTIME_CAPABILITY_UNSUPPORTED"
+	RuntimeCompatibility         = "ZCL_E_RUNTIME_COMPATIBILITY"
+	RuntimeStartup               = "ZCL_E_RUNTIME_STARTUP"
+	RuntimeTransport             = "ZCL_E_RUNTIME_TRANSPORT"
+	RuntimeProtocol              = "ZCL_E_RUNTIME_PROTOCOL"
+	RuntimeTimeout               = "ZCL_E_RUNTIME_TIMEOUT"
+	RuntimeStreamDisconnect      = "ZCL_E_RUNTIME_STREAM_DISCONNECT"
+	RuntimeEnvPolicy             = "ZCL_E_RUNTIME_ENV_POLICY"
+	RuntimeAuth                  = "ZCL_E_RUNTIME_AUTH"
+	RuntimeRateLimit             = "ZCL_E_RUNTIME_RATE_LIMIT"
+	RuntimeListenerFailure       = "ZCL_E_RUNTIME_LISTENER_FAILURE"
+	RuntimeCrash                 = "ZCL_E_RUNTIME_CRASH"
 )
 
 func CampaignFlowExit(exitCode int) string {

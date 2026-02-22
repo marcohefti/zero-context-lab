@@ -47,6 +47,18 @@ type ToolCallInput struct {
 	Argv []string `json:"argv"`
 }
 
+type NativeRuntimeEvent struct {
+	RuntimeID string
+	SessionID string
+	ThreadID  string
+	TurnID    string
+	CallID    string
+	EventName string
+	Payload   json.RawMessage
+	Code      string
+	Partial   bool
+}
+
 func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace) error {
 	redArgv, argvApplied := redactStrings(argv)
 	input, inputTruncated, inputWarn, err := boundedToolInputJSON(ToolCallInput{Argv: redArgv}, schema.ToolInputMaxBytesV1)
@@ -136,6 +148,108 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 
 	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	return store.AppendJSONL(path, ev)
+}
+
+func AppendNativeRuntimeEvent(now time.Time, env Env, evIn NativeRuntimeEvent) error {
+	eventName := strings.TrimSpace(evIn.EventName)
+	if eventName == "" {
+		eventName = "unknown"
+	}
+	op := strings.ToLower(strings.TrimSpace(eventName))
+	op = strings.ReplaceAll(op, "codex/event/", "")
+	op = strings.ReplaceAll(op, "/", "_")
+	if op == "" {
+		op = "unknown"
+	}
+	payload := map[string]any{
+		"runtimeId": strings.TrimSpace(evIn.RuntimeID),
+		"sessionId": strings.TrimSpace(evIn.SessionID),
+		"threadId":  strings.TrimSpace(evIn.ThreadID),
+		"turnId":    strings.TrimSpace(evIn.TurnID),
+		"callId":    strings.TrimSpace(evIn.CallID),
+		"eventName": eventName,
+	}
+	var redactions []string
+	if len(evIn.Payload) > 0 {
+		var decoded any
+		if err := json.Unmarshal(evIn.Payload, &decoded); err == nil {
+			redacted, applied := redactAny(decoded)
+			payload["payload"] = redacted
+			redactions = unionStrings(redactions, applied)
+		} else {
+			red, applied := redact.Text(strings.TrimSpace(string(evIn.Payload)))
+			payload["payloadRaw"] = red
+			redactions = unionStrings(redactions, applied.Names)
+		}
+	}
+	input, inputTruncated, warnings, err := boundedToolInputJSON(payload, schema.ToolInputMaxBytesV1)
+	if err != nil {
+		return err
+	}
+	ok := !evIn.Partial
+	code := strings.TrimSpace(evIn.Code)
+	if code != "" {
+		ok = false
+	}
+	if evIn.Partial && code == "" {
+		code = "ZCL_E_RUNTIME_STREAM_DISCONNECT"
+	}
+	traceEvent := schema.TraceEventV1{
+		V:         schema.TraceSchemaV1,
+		TS:        now.UTC().Format(time.RFC3339Nano),
+		RunID:     env.RunID,
+		SuiteID:   env.SuiteID,
+		MissionID: env.MissionID,
+		AttemptID: env.AttemptID,
+		AgentID:   env.AgentID,
+		Tool:      "native",
+		Op:        op,
+		Input:     input,
+		Result: schema.TraceResultV1{
+			OK:         ok,
+			Code:       code,
+			DurationMs: 0,
+		},
+		IO: schema.TraceIOV1{
+			OutBytes: 0,
+			ErrBytes: 0,
+		},
+		Warnings:          warnings,
+		RedactionsApplied: redactions,
+		Integrity: &schema.TraceIntegrityV1{
+			Truncated: inputTruncated || evIn.Partial,
+		},
+	}
+	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	return store.AppendJSONL(path, traceEvent)
+}
+
+func redactAny(v any) (any, []string) {
+	switch x := v.(type) {
+	case string:
+		red, applied := redact.Text(x)
+		return red, applied.Names
+	case []any:
+		out := make([]any, len(x))
+		var all []string
+		for i, item := range x {
+			red, names := redactAny(item)
+			out[i] = red
+			all = unionStrings(all, names)
+		}
+		return out, all
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		var all []string
+		for k, val := range x {
+			red, names := redactAny(val)
+			out[k] = red
+			all = unionStrings(all, names)
+		}
+		return out, all
+	default:
+		return v, nil
+	}
 }
 
 type ResultForTrace struct {

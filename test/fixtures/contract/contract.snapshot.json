@@ -507,7 +507,7 @@
     },
     {
       "id": "suite run",
-      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]",
       "summary": "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt."
     },
     {
@@ -643,6 +643,76 @@
       "retryable": true
     },
     {
+      "code": "ZCL_E_RUNTIME_STRATEGY_UNSUPPORTED",
+      "summary": "Configured runtime strategy ID is not registered.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_STRATEGY_UNAVAILABLE",
+      "summary": "No runtime strategy in the fallback chain is currently available.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_CAPABILITY_UNSUPPORTED",
+      "summary": "Selected runtime does not support required capabilities.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_COMPATIBILITY",
+      "summary": "Runtime protocol/version is below the supported contract.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_STARTUP",
+      "summary": "Failed to start native runtime process.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_TRANSPORT",
+      "summary": "Native runtime transport I/O failure.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_PROTOCOL",
+      "summary": "Native runtime returned an invalid/unsupported protocol response.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_TIMEOUT",
+      "summary": "Native runtime request timed out.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_STREAM_DISCONNECT",
+      "summary": "Native runtime event stream disconnected before completion.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_ENV_POLICY",
+      "summary": "Native runtime environment policy blocked explicit variables.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_AUTH",
+      "summary": "Native runtime authentication/authorization failure.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_RUNTIME_RATE_LIMIT",
+      "summary": "Native runtime/provider rate limit exceeded.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_LISTENER_FAILURE",
+      "summary": "Native runtime listener pipeline failed.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_RUNTIME_CRASH",
+      "summary": "Native runtime process crashed before turn completion.",
+      "retryable": true
+    },
+    {
       "code": "ZCL_E_MCP_MAX_TOOL_CALLS",
       "summary": "MCP proxy stopped after configured max tool calls.",
       "retryable": true
@@ -725,7 +795,8 @@
       "process_cmd",
       "codex_exec",
       "codex_subagent",
-      "claude_subagent"
+      "claude_subagent",
+      "codex_app_server"
     ],
     "toolDriverKinds": [
       "shell",
@@ -878,6 +949,60 @@
         "required": false,
         "default": 1,
         "description": "Minimum mission result payload turn accepted for finalization (supports 3-turn feedback loops)."
+      }
+    ]
+  },
+  "runtimeSchema": {
+    "schemaVersion": 1,
+    "strategyChainEnv": "ZCL_RUNTIME_STRATEGIES",
+    "defaultStrategyChain": [
+      "codex_app_server"
+    ],
+    "capabilities": [
+      "supports_thread_start",
+      "supports_turn_steer",
+      "supports_interrupt",
+      "supports_event_stream",
+      "supports_parallel_sessions"
+    ],
+    "healthMetrics": [
+      "session_start",
+      "session_start_fail",
+      "session_closed",
+      "request_sent",
+      "request_fail",
+      "stream_disconnect",
+      "runtime_crash",
+      "rate_limited",
+      "auth_fail",
+      "listener_failure",
+      "interrupted",
+      "scheduler_wait"
+    ],
+    "strategies": [
+      {
+        "id": "codex_app_server",
+        "description": "Codex app-server JSON-RPC runtime (stdio transport).",
+        "recommended": true,
+        "capabilities": {
+          "supports_event_stream": true,
+          "supports_interrupt": true,
+          "supports_parallel_sessions": true,
+          "supports_thread_start": true,
+          "supports_turn_steer": true
+        }
+      },
+      {
+        "id": "provider_stub",
+        "description": "Provider onboarding stub (documents unsupported control-plane/API gaps).",
+        "recommended": false,
+        "capabilities": {
+          "supports_event_stream": false,
+          "supports_interrupt": false,
+          "supports_parallel_sessions": false,
+          "supports_thread_start": false,
+          "supports_turn_steer": false
+        }
       }
     ]
   }

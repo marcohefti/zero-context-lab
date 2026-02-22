@@ -23,6 +23,7 @@ const (
 	RunnerTypeCodexExec    = "codex_exec"
 	RunnerTypeCodexSub     = "codex_subagent"
 	RunnerTypeClaudeSub    = "claude_subagent"
+	RunnerTypeCodexAppSrv  = "codex_app_server"
 	PromptModeDefault      = "default"
 	PromptModeMissionOnly  = "mission_only"
 	RunStatusValid         = "valid"
@@ -178,6 +179,8 @@ type RunnerAdapterSpec struct {
 	Command []string          `json:"command" yaml:"command"`
 	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 	Shims   []string          `json:"shims,omitempty" yaml:"shims,omitempty"`
+	// RuntimeStrategies is an ordered native runtime fallback chain used when sessionIsolation=native.
+	RuntimeStrategies []string `json:"runtimeStrategies,omitempty" yaml:"runtimeStrategies,omitempty"`
 
 	SessionIsolation string           `json:"sessionIsolation,omitempty" yaml:"sessionIsolation,omitempty"` // auto|process|native
 	FeedbackPolicy   string           `json:"feedbackPolicy,omitempty" yaml:"feedbackPolicy,omitempty"`     // strict|auto_fail
@@ -424,14 +427,19 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 			f.Runner.Type = RunnerTypeProcessCmd
 		}
 		if !isValidRunnerType(f.Runner.Type) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.type (expected %s|%s|%s|%s)", f.FlowID, RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub)
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.type (expected %s|%s|%s|%s|%s)", f.FlowID, RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub, RunnerTypeCodexAppSrv)
 		}
 		f.Runner.Command = normalizeCommand(f.Runner.Command)
-		if len(f.Runner.Command) == 0 {
+		f.Runner.RuntimeStrategies = normalizeLowerTerms(f.Runner.RuntimeStrategies)
+		if len(f.Runner.Command) == 0 && f.Runner.Type != RunnerTypeCodexAppSrv {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.command is required", f.FlowID)
 		}
 		if strings.TrimSpace(f.Runner.SessionIsolation) == "" {
-			f.Runner.SessionIsolation = "process"
+			if f.Runner.Type == RunnerTypeCodexAppSrv {
+				f.Runner.SessionIsolation = "native"
+			} else {
+				f.Runner.SessionIsolation = "process"
+			}
 		}
 		if strings.TrimSpace(f.Runner.FeedbackPolicy) == "" {
 			f.Runner.FeedbackPolicy = schema.FeedbackPolicyAutoFailV1
@@ -964,6 +972,22 @@ func normalizeTerms(in []string) []string {
 	return dedupeStringsStable(in)
 }
 
+func normalizeLowerTerms(in []string) []string {
+	in = normalizeCommand(in)
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, term := range in {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term == "" {
+			continue
+		}
+		out = append(out, term)
+	}
+	return dedupeStringsStable(out)
+}
+
 func dedupeStringsStable(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -986,7 +1010,7 @@ func dedupeStringsStable(in []string) []string {
 
 func isValidRunnerType(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
-	case RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub:
+	case RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub, RunnerTypeCodexAppSrv:
 		return true
 	default:
 		return false

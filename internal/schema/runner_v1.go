@@ -13,6 +13,10 @@ type RunnerRefJSONV1 struct {
 
 	RolloutPath string `json:"rolloutPath,omitempty"`
 	ThreadID    string `json:"threadId,omitempty"`
+
+	RuntimeID string `json:"runtimeId,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // RunnerMetricsJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/runner.metrics.json

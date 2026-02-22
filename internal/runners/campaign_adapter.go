@@ -29,10 +29,11 @@ func NewCampaignExecutor(invoker FlowMissionInvoker) (*CampaignExecutor, error) 
 		return &suiteRunFlowAdapter{kind: kind, invoker: invoker}
 	}
 	return &CampaignExecutor{adapters: map[string]FlowAdapter{
-		campaign.RunnerTypeProcessCmd: mk(campaign.RunnerTypeProcessCmd),
-		campaign.RunnerTypeCodexExec:  mk(campaign.RunnerTypeCodexExec),
-		campaign.RunnerTypeCodexSub:   mk(campaign.RunnerTypeCodexSub),
-		campaign.RunnerTypeClaudeSub:  mk(campaign.RunnerTypeClaudeSub),
+		campaign.RunnerTypeProcessCmd:  mk(campaign.RunnerTypeProcessCmd),
+		campaign.RunnerTypeCodexExec:   mk(campaign.RunnerTypeCodexExec),
+		campaign.RunnerTypeCodexSub:    mk(campaign.RunnerTypeCodexSub),
+		campaign.RunnerTypeClaudeSub:   mk(campaign.RunnerTypeClaudeSub),
+		campaign.RunnerTypeCodexAppSrv: mk(campaign.RunnerTypeCodexAppSrv),
 	}}, nil
 }
 

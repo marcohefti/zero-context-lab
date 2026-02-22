@@ -119,12 +119,12 @@
           "suiteFile": { "type": "string", "minLength": 1 },
           "runner": {
             "type": "object",
-            "required": ["command"],
             "properties": {
-              "type": { "type": "string", "enum": ["process_cmd", "codex_exec", "codex_subagent", "claude_subagent"] },
+              "type": { "type": "string", "enum": ["process_cmd", "codex_exec", "codex_subagent", "claude_subagent", "codex_app_server"] },
               "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
               "env": { "type": "object", "additionalProperties": { "type": "string" } },
               "shims": { "type": "array", "items": { "type": "string" } },
+              "runtimeStrategies": { "type": "array", "items": { "type": "string" } },
               "sessionIsolation": { "type": "string", "enum": ["auto", "process", "native"] },
               "feedbackPolicy": { "type": "string", "enum": ["strict", "auto_fail"] },
               "mode": { "type": "string", "enum": ["discovery", "ci"] },

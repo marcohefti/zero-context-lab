@@ -1,11 +1,14 @@
 package doctor
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/marcohefti/zero-context-lab/internal/config"
+	"github.com/marcohefti/zero-context-lab/internal/integrations/codex_app_server"
+	"github.com/marcohefti/zero-context-lab/internal/native"
 )
 
 type Check struct {
@@ -69,6 +72,20 @@ func Run(outRootFlag string) (Result, error) {
 		res.Checks = append(res.Checks, Check{ID: "runner_codex", OK: true})
 	} else {
 		res.Checks = append(res.Checks, Check{ID: "runner_codex", OK: true, Message: "codex not on PATH (ok if not enriching)"})
+	}
+	runtime := codexappserver.NewRuntime(codexappserver.Config{
+		Command: codexappserver.DefaultCommandFromEnv(),
+	})
+	if err := runtime.Probe(context.Background()); err != nil {
+		res.Checks = append(res.Checks, Check{ID: "runtime_codex_app_server", OK: true, Message: "native codex runtime unavailable (" + err.Error() + ")"})
+	} else {
+		res.Checks = append(res.Checks, Check{ID: "runtime_codex_app_server", OK: true})
+	}
+	health := native.HealthSnapshot()
+	if len(health) == 0 {
+		res.Checks = append(res.Checks, Check{ID: "runtime_health", OK: true, Message: "no runtime health counters recorded yet"})
+	} else {
+		res.Checks = append(res.Checks, Check{ID: "runtime_health", OK: true, Message: "runtime health counters available"})
 	}
 
 	return res, nil

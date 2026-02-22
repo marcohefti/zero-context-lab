@@ -26,6 +26,9 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/expect"
 	"github.com/marcohefti/zero-context-lab/internal/feedback"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
+	"github.com/marcohefti/zero-context-lab/internal/integrations/codex_app_server"
+	"github.com/marcohefti/zero-context-lab/internal/integrations/provider_stub"
+	"github.com/marcohefti/zero-context-lab/internal/native"
 	"github.com/marcohefti/zero-context-lab/internal/planner"
 	"github.com/marcohefti/zero-context-lab/internal/redact"
 	"github.com/marcohefti/zero-context-lab/internal/report"
@@ -99,6 +102,10 @@ type suiteRunSummary struct {
 	SessionIsolation string `json:"sessionIsolation"`
 	// HostNativeSpawnCapable reflects ZCL_HOST_NATIVE_SPAWN parsing (informational).
 	HostNativeSpawnCapable bool `json:"hostNativeSpawnCapable"`
+	// RuntimeStrategyChain is the ordered native runtime fallback chain.
+	RuntimeStrategyChain []string `json:"runtimeStrategyChain,omitempty"`
+	// RuntimeStrategySelected is the resolved native runtime strategy when native mode is used.
+	RuntimeStrategySelected string `json:"runtimeStrategySelected,omitempty"`
 	// CampaignProfile captures key run-shape controls for comparability across campaigns.
 	CampaignProfile suiteRunCampaignProfile `json:"campaignProfile"`
 	// ComparabilityKey is a stable hash of CampaignProfile.
@@ -119,20 +126,21 @@ type suiteRunSummary struct {
 }
 
 type suiteRunCampaignProfile struct {
-	Mode           string   `json:"mode"`
-	TimeoutMs      int64    `json:"timeoutMs"`
-	TimeoutStart   string   `json:"timeoutStart"`
-	IsolationModel string   `json:"isolationModel"`
-	FeedbackPolicy string   `json:"feedbackPolicy"`
-	Finalization   string   `json:"finalization"`
-	ResultChannel  string   `json:"resultChannel"`
-	ResultMinTurn  int      `json:"resultMinTurn"`
-	Parallel       int      `json:"parallel"`
-	Total          int      `json:"total"`
-	MissionOffset  int      `json:"missionOffset,omitempty"`
-	FailFast       bool     `json:"failFast"`
-	Blind          bool     `json:"blind"`
-	Shims          []string `json:"shims,omitempty"`
+	Mode            string   `json:"mode"`
+	TimeoutMs       int64    `json:"timeoutMs"`
+	TimeoutStart    string   `json:"timeoutStart"`
+	IsolationModel  string   `json:"isolationModel"`
+	FeedbackPolicy  string   `json:"feedbackPolicy"`
+	Finalization    string   `json:"finalization"`
+	ResultChannel   string   `json:"resultChannel"`
+	ResultMinTurn   int      `json:"resultMinTurn"`
+	RuntimeStrategy string   `json:"runtimeStrategy,omitempty"`
+	Parallel        int      `json:"parallel"`
+	Total           int      `json:"total"`
+	MissionOffset   int      `json:"missionOffset,omitempty"`
+	FailFast        bool     `json:"failFast"`
+	Blind           bool     `json:"blind"`
+	Shims           []string `json:"shims,omitempty"`
 }
 
 type stringListFlag []string
@@ -169,6 +177,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
+	runtimeStrategiesCSV := fs.String("runtime-strategies", "", "ordered native runtime strategy chain (comma-separated; default from config/env)")
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
 	missionOffset := fs.Int("mission-offset", 0, "0-based mission offset before scheduling (for campaign resume/canary windows)")
@@ -216,40 +225,73 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		return r.failUsage("suite run: invalid --timeout-start (expected attempt_start|first_tool_call)")
 	}
 
-	hostNativeCapable := envBoolish("ZCL_HOST_NATIVE_SPAWN")
-	requestedIsolation := strings.ToLower(strings.TrimSpace(*sessionIsolation))
-	if requestedIsolation == "" {
-		requestedIsolation = "auto"
-	}
-	effectiveIsolation := schema.IsolationModelProcessRunnerV1
-	switch requestedIsolation {
-	case "auto":
-		if hostNativeCapable {
-			printSuiteRunHelp(r.Stderr)
-			return r.failUsage("suite run: host advertises native spawning (ZCL_HOST_NATIVE_SPAWN=1); refusing implicit process fallback. Use `zcl suite plan --json`/`zcl attempt start --json` with native spawn, or pass --session-isolation process to force process orchestration")
-		}
-	case "process":
-		effectiveIsolation = schema.IsolationModelProcessRunnerV1
-	case "native":
-		printSuiteRunHelp(r.Stderr)
-		return r.failUsage("suite run: native isolation is host-orchestrated (not process-spawned by suite run). Use `zcl suite plan --json` and spawn one fresh native session per attempt")
-	default:
-		return r.failUsage("suite run: invalid --session-isolation (expected auto|process|native)")
-	}
-
 	argv := fs.Args()
 	if len(argv) >= 1 && argv[0] == "--" {
 		argv = argv[1:]
-	}
-	if len(argv) == 0 {
-		printSuiteRunHelp(r.Stderr)
-		return r.failUsage("suite run: missing runner command (use: zcl suite run ... -- <runner-cmd> ...)")
 	}
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
+	}
+
+	hostNativeCapable := envBoolish("ZCL_HOST_NATIVE_SPAWN")
+	requestedIsolation := strings.ToLower(strings.TrimSpace(*sessionIsolation))
+	if requestedIsolation == "" {
+		requestedIsolation = "auto"
+	}
+	effectiveIsolation := schema.IsolationModelProcessRunnerV1
+	nativeMode := false
+	switch requestedIsolation {
+	case "auto":
+		if hostNativeCapable {
+			nativeMode = true
+			effectiveIsolation = schema.IsolationModelNativeSpawnV1
+		}
+	case "process":
+		effectiveIsolation = schema.IsolationModelProcessRunnerV1
+	case "native":
+		nativeMode = true
+		effectiveIsolation = schema.IsolationModelNativeSpawnV1
+	default:
+		return r.failUsage("suite run: invalid --session-isolation (expected auto|process|native)")
+	}
+	if nativeMode && len(argv) > 0 {
+		return r.failUsage("suite run: native runtime mode does not accept -- <runner-cmd> arguments")
+	}
+	if !nativeMode && len(argv) == 0 {
+		printSuiteRunHelp(r.Stderr)
+		return r.failUsage("suite run: missing runner command (use: zcl suite run ... -- <runner-cmd> ...)")
+	}
+
+	runtimeStrategyChain := config.ParseRuntimeStrategyCSV(*runtimeStrategiesCSV)
+	if len(runtimeStrategyChain) == 0 {
+		runtimeStrategyChain = append([]string(nil), m.RuntimeStrategyChain...)
+	}
+	var nativeRuntimeSelection native.ResolveResult
+	if nativeMode {
+		registry := buildNativeRuntimeRegistry()
+		selection, selErr := native.Resolve(context.Background(), registry, native.ResolveInput{
+			StrategyChain: native.NormalizeStrategyChain(runtimeStrategyChain),
+			RequiredCapabilities: []native.Capability{
+				native.CapabilityThreadStart,
+				native.CapabilityEventStream,
+				native.CapabilityInterrupt,
+			},
+		})
+		if selErr != nil {
+			if nerr, ok := native.AsError(selErr); ok {
+				fmt.Fprintf(r.Stderr, "%s: suite run native runtime selection failed: %s\n", nerr.Code, nerr.Message)
+				for _, f := range nerr.Failures {
+					fmt.Fprintf(r.Stderr, "  %s %s: %s\n", f.Code, f.Strategy, f.Message)
+				}
+				return 2
+			}
+			fmt.Fprintf(r.Stderr, codeIO+": suite run native runtime selection failed: %s\n", selErr.Error())
+			return 1
+		}
+		nativeRuntimeSelection = selection
 	}
 
 	parsed, err := suite.ParseFile(strings.TrimSpace(*file))
@@ -378,24 +420,29 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		SessionIsolationRequested: requestedIsolation,
 		SessionIsolation:          effectiveIsolation,
 		HostNativeSpawnCapable:    hostNativeCapable,
+		RuntimeStrategyChain:      append([]string(nil), runtimeStrategyChain...),
 		FeedbackPolicy:            resolvedFeedbackPolicy,
 		CreatedAt:                 r.Now().UTC().Format(time.RFC3339Nano),
 	}
+	if nativeMode {
+		summary.RuntimeStrategySelected = string(nativeRuntimeSelection.Selected)
+	}
 	summary.CampaignProfile = suiteRunCampaignProfile{
-		Mode:           resolvedMode,
-		TimeoutMs:      resolvedTimeoutMs,
-		TimeoutStart:   resolvedTimeoutStart,
-		IsolationModel: effectiveIsolation,
-		FeedbackPolicy: resolvedFeedbackPolicy,
-		Finalization:   resolvedFinalizationMode,
-		ResultChannel:  resolvedResultChannel.Kind,
-		ResultMinTurn:  resolvedResultChannel.MinFinalTurn,
-		Parallel:       *parallel,
-		Total:          resolvedTotal,
-		MissionOffset:  *missionOffset,
-		FailFast:       *failFast,
-		Blind:          resolvedBlind,
-		Shims:          dedupeSortedStrings([]string(shims)),
+		Mode:            resolvedMode,
+		TimeoutMs:       resolvedTimeoutMs,
+		TimeoutStart:    resolvedTimeoutStart,
+		IsolationModel:  effectiveIsolation,
+		FeedbackPolicy:  resolvedFeedbackPolicy,
+		Finalization:    resolvedFinalizationMode,
+		ResultChannel:   resolvedResultChannel.Kind,
+		ResultMinTurn:   resolvedResultChannel.MinFinalTurn,
+		RuntimeStrategy: string(nativeRuntimeSelection.Selected),
+		Parallel:        *parallel,
+		Total:           resolvedTotal,
+		MissionOffset:   *missionOffset,
+		FailFast:        *failFast,
+		Blind:           resolvedBlind,
+		Shims:           dedupeSortedStrings([]string(shims)),
 	}
 	summary.ComparabilityKey = suiteRunComparabilityKey(summary.CampaignProfile)
 	summary.CampaignID = ids.SanitizeComponent(strings.TrimSpace(*campaignID))
@@ -423,8 +470,14 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	}()
 
 	// Keep stdout reserved for JSON; runner output is streamed to stderr.
-	runnerCmd := argv[0]
-	runnerArgs := argv[1:]
+	runnerCmd := ""
+	runnerArgs := []string{}
+	if len(argv) > 0 {
+		runnerCmd = argv[0]
+		if len(argv) > 1 {
+			runnerArgs = argv[1:]
+		}
+	}
 	zclExe, _ := os.Executable()
 	if zclExe != "" {
 		base := strings.ToLower(filepath.Base(zclExe))
@@ -459,6 +512,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	execOpts := suiteRunExecOpts{
 		RunnerCmd:        runnerCmd,
 		RunnerArgs:       runnerArgs,
+		NativeMode:       nativeMode,
+		NativeSelection:  nativeRuntimeSelection,
+		NativeScheduler:  buildNativeAttemptScheduler(nativeRuntimeSelection.Selected, *parallel),
 		FeedbackPolicy:   resolvedFeedbackPolicy,
 		FinalizationMode: resolvedFinalizationMode,
 		ResultChannel:    resolvedResultChannel,
@@ -664,6 +720,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 type suiteRunExecOpts struct {
 	RunnerCmd        string
 	RunnerArgs       []string
+	NativeMode       bool
+	NativeSelection  native.ResolveResult
+	NativeScheduler  *nativeAttemptScheduler
 	FeedbackPolicy   string
 	FinalizationMode string
 	ResultChannel    suiteRunResultChannel
@@ -738,6 +797,31 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	}
 	if opts.ZCLExe != "" {
 		env["ZCL_SHIM_ZCL_PATH"] = opts.ZCLExe
+	}
+	if opts.NativeMode {
+		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, &ar, errWriter)
+		ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
+		runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
+		ar.OK = runnerOK && ar.Finish.OK
+		if opts.Progress != nil {
+			_ = opts.Progress.Emit(suiteRunProgressEvent{
+				TS:        r.Now().UTC().Format(time.RFC3339Nano),
+				Kind:      "attempt_finished",
+				RunID:     env["ZCL_RUN_ID"],
+				SuiteID:   env["ZCL_SUITE_ID"],
+				MissionID: env["ZCL_MISSION_ID"],
+				AttemptID: env["ZCL_ATTEMPT_ID"],
+				OutDir:    pm.OutDirAbs,
+				Details: map[string]any{
+					"ok":               ar.OK,
+					"runnerErrorCode":  ar.RunnerErrorCode,
+					"autoFeedback":     ar.AutoFeedback,
+					"autoFeedbackCode": ar.AutoFeedbackCode,
+					"finishOk":         ar.Finish.OK,
+				},
+			})
+		}
+		return ar, harnessErr
 	}
 
 	var shimBinDir string
@@ -980,6 +1064,697 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 	return false
 }
 
+type nativeAttemptState string
+
+const (
+	nativeStateQueued        nativeAttemptState = "queued"
+	nativeStateSessionStart  nativeAttemptState = "session_starting"
+	nativeStateSessionReady  nativeAttemptState = "session_ready"
+	nativeStateThreadStarted nativeAttemptState = "thread_started"
+	nativeStateTurnStarted   nativeAttemptState = "turn_started"
+	nativeStateTurnCompleted nativeAttemptState = "turn_completed"
+	nativeStateInterrupted   nativeAttemptState = "interrupted"
+	nativeStateFailed        nativeAttemptState = "failed"
+	nativeStateFinalized     nativeAttemptState = "finalized"
+)
+
+var nativeStateRank = map[nativeAttemptState]int{
+	nativeStateQueued:        1,
+	nativeStateSessionStart:  2,
+	nativeStateSessionReady:  3,
+	nativeStateThreadStarted: 4,
+	nativeStateTurnStarted:   5,
+	nativeStateTurnCompleted: 6,
+	nativeStateInterrupted:   6,
+	nativeStateFailed:        6,
+	nativeStateFinalized:     7,
+}
+
+type nativeAttemptSupervisor struct {
+	mu    sync.Mutex
+	state nativeAttemptState
+}
+
+func newNativeAttemptSupervisor() *nativeAttemptSupervisor {
+	return &nativeAttemptSupervisor{state: nativeStateQueued}
+}
+
+func (s *nativeAttemptSupervisor) Transition(next nativeAttemptState) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	curr := s.state
+	if curr == next {
+		return false
+	}
+	currRank := nativeStateRank[curr]
+	nextRank := nativeStateRank[next]
+	if nextRank == 0 || nextRank < currRank {
+		return false
+	}
+	s.state = next
+	return true
+}
+
+func (s *nativeAttemptSupervisor) State() nativeAttemptState {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
+}
+
+type nativeAttemptScheduler struct {
+	strategy            native.StrategyID
+	sem                 chan struct{}
+	minStartInterval    time.Duration
+	mu                  sync.Mutex
+	nextAllowedStartUTC time.Time
+}
+
+func buildNativeAttemptScheduler(strategy native.StrategyID, defaultParallel int) *nativeAttemptScheduler {
+	if strings.TrimSpace(string(strategy)) == "" {
+		return nil
+	}
+	maxInflight := parsePositiveIntEnv("ZCL_NATIVE_MAX_INFLIGHT_PER_STRATEGY", 0)
+	if maxInflight <= 0 {
+		maxInflight = defaultParallel
+	}
+	if maxInflight <= 0 {
+		maxInflight = 1
+	}
+	minStartMs := parsePositiveIntEnv("ZCL_NATIVE_MIN_START_INTERVAL_MS", 0)
+	s := &nativeAttemptScheduler{
+		strategy: strategy,
+	}
+	if maxInflight > 0 {
+		s.sem = make(chan struct{}, maxInflight)
+	}
+	if minStartMs > 0 {
+		s.minStartInterval = time.Duration(minStartMs) * time.Millisecond
+	}
+	return s
+}
+
+func (s *nativeAttemptScheduler) Acquire(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if s.sem != nil {
+		select {
+		case s.sem <- struct{}{}:
+		default:
+			native.RecordHealth(s.strategy, native.HealthSchedulerWait)
+			select {
+			case s.sem <- struct{}{}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	if s.minStartInterval <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if now.Before(s.nextAllowedStartUTC) {
+		wait := time.Until(s.nextAllowedStartUTC)
+		native.RecordHealth(s.strategy, native.HealthSchedulerWait)
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if s.sem != nil {
+				select {
+				case <-s.sem:
+				default:
+				}
+			}
+			return ctx.Err()
+		}
+	}
+	s.nextAllowedStartUTC = time.Now().UTC().Add(s.minStartInterval)
+	return nil
+}
+
+func (s *nativeAttemptScheduler) Release() {
+	if s == nil || s.sem == nil {
+		return
+	}
+	select {
+	case <-s.sem:
+	default:
+	}
+}
+
+func parsePositiveIntEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	if errWriter == nil {
+		errWriter = r.Stderr
+	}
+	supervisor := newNativeAttemptSupervisor()
+	emitNativeState := func(state nativeAttemptState, force bool, details map[string]any) {
+		if !force && !supervisor.Transition(state) {
+			return
+		}
+		if opts.Progress == nil {
+			return
+		}
+		d := map[string]any{"state": string(state)}
+		for k, v := range details {
+			d[k] = v
+		}
+		_ = opts.Progress.Emit(suiteRunProgressEvent{
+			TS:        r.Now().UTC().Format(time.RFC3339Nano),
+			Kind:      "attempt_native_state",
+			RunID:     env["ZCL_RUN_ID"],
+			SuiteID:   env["ZCL_SUITE_ID"],
+			MissionID: env["ZCL_MISSION_ID"],
+			AttemptID: env["ZCL_ATTEMPT_ID"],
+			OutDir:    pm.OutDirAbs,
+			Details:   d,
+		})
+	}
+	emitNativeState(nativeStateQueued, true, nil)
+
+	now := r.Now()
+	ctx, cancel, timedOut := attemptCtxForDeadline(now, pm.OutDirAbs)
+	if cancel != nil {
+		defer cancel()
+	}
+	if timedOut {
+		ar.RunnerErrorCode = codeTimeout
+		ec := 1
+		ar.RunnerExitCode = &ec
+		return false
+	}
+	if opts.NativeScheduler != nil {
+		if err := opts.NativeScheduler.Acquire(ctx); err != nil {
+			ar.RunnerErrorCode = codeTimeout
+			ec := 1
+			ar.RunnerExitCode = &ec
+			emitNativeState(nativeStateFailed, false, map[string]any{
+				"reason": "scheduler_acquire_timeout",
+				"code":   ar.RunnerErrorCode,
+			})
+			return false
+		}
+		defer opts.NativeScheduler.Release()
+	}
+	rt := opts.NativeSelection.Runtime
+	if rt == nil {
+		ar.RunnerErrorCode = codeUsage
+		ec := 1
+		ar.RunnerExitCode = &ec
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "runtime_not_selected",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+	envTrace := trace.Env{
+		RunID:     env["ZCL_RUN_ID"],
+		SuiteID:   env["ZCL_SUITE_ID"],
+		MissionID: env["ZCL_MISSION_ID"],
+		AttemptID: env["ZCL_ATTEMPT_ID"],
+		AgentID:   env["ZCL_AGENT_ID"],
+		OutDirAbs: env["ZCL_OUT_DIR"],
+		TmpDirAbs: env["ZCL_TMP_DIR"],
+	}
+	emitNativeState(nativeStateSessionStart, false, nil)
+	native.RecordHealth(opts.NativeSelection.Selected, native.HealthSessionStart)
+	sess, err := rt.StartSession(ctx, native.SessionOptions{
+		RunID:      env["ZCL_RUN_ID"],
+		SuiteID:    env["ZCL_SUITE_ID"],
+		MissionID:  env["ZCL_MISSION_ID"],
+		AttemptID:  env["ZCL_ATTEMPT_ID"],
+		AttemptDir: pm.OutDirAbs,
+		Env:        env,
+	})
+	if err != nil {
+		native.RecordHealth(opts.NativeSelection.Selected, native.HealthSessionStartFail)
+		ar.RunnerErrorCode = nativeErrorCode(err)
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+		ec := 1
+		ar.RunnerExitCode = &ec
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "session_start_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		_ = trace.AppendNativeRuntimeEvent(now, envTrace, trace.NativeRuntimeEvent{
+			RuntimeID: string(opts.NativeSelection.Selected),
+			EventName: "codex/event/session_start_failed",
+			Code:      ar.RunnerErrorCode,
+			Partial:   true,
+		})
+		return false
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer closeCancel()
+		native.RecordHealth(opts.NativeSelection.Selected, native.HealthSessionClosed)
+		_ = sess.Close(closeCtx)
+	}()
+
+	_ = trace.AppendNativeRuntimeEvent(now, envTrace, trace.NativeRuntimeEvent{
+		RuntimeID: string(opts.NativeSelection.Selected),
+		SessionID: sess.SessionID(),
+		EventName: "codex/event/session_started",
+	})
+	emitNativeState(nativeStateSessionReady, false, map[string]any{
+		"sessionId": sess.SessionID(),
+	})
+
+	var (
+		traceErrMu sync.Mutex
+		traceErr   error
+	)
+	events := make(chan native.Event, 128)
+	listenerID, lerr := sess.AddListener(func(ev native.Event) {
+		if err := trace.AppendNativeRuntimeEvent(ev.ReceivedAt, envTrace, trace.NativeRuntimeEvent{
+			RuntimeID: string(opts.NativeSelection.Selected),
+			SessionID: sess.SessionID(),
+			ThreadID:  ev.ThreadID,
+			TurnID:    ev.TurnID,
+			CallID:    ev.CallID,
+			EventName: ev.Name,
+			Payload:   ev.Payload,
+		}); err != nil {
+			traceErrMu.Lock()
+			if traceErr == nil {
+				traceErr = err
+			}
+			traceErrMu.Unlock()
+		}
+		select {
+		case events <- ev:
+		default:
+		}
+	})
+	if lerr != nil {
+		native.RecordHealth(opts.NativeSelection.Selected, native.HealthListenerFailure)
+		ar.RunnerErrorCode = nativeErrorCode(lerr)
+		ec := 1
+		ar.RunnerExitCode = &ec
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "listener_add_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+	defer func() {
+		_ = sess.RemoveListener(listenerID)
+	}()
+
+	cwd, _ := os.Getwd()
+	thread, err := sess.StartThread(ctx, native.ThreadStartRequest{Cwd: cwd})
+	if err != nil {
+		ar.RunnerErrorCode = nativeErrorCode(err)
+		ec := 1
+		ar.RunnerExitCode = &ec
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "thread_start_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return false
+	}
+	emitNativeState(nativeStateThreadStarted, false, map[string]any{
+		"threadId": thread.ThreadID,
+	})
+	prompt := strings.TrimSpace(pm.Prompt)
+	if prompt == "" {
+		prompt = "complete mission and provide final result"
+	}
+	turn, err := sess.StartTurn(ctx, native.TurnStartRequest{
+		ThreadID: thread.ThreadID,
+		Input:    []native.InputItem{{Type: "text", Text: prompt}},
+	})
+	if err != nil {
+		ar.RunnerErrorCode = nativeErrorCode(err)
+		ec := 1
+		ar.RunnerExitCode = &ec
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "turn_start_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return false
+	}
+	emitNativeState(nativeStateTurnStarted, false, map[string]any{
+		"turnId": turn.TurnID,
+	})
+	if err := writeNativeRunnerRef(pm.OutDirAbs, env, opts.NativeSelection.Selected, sess.SessionID(), thread.ThreadID); err != nil {
+		ar.RunnerErrorCode = codeIO
+		ec := 1
+		ar.RunnerExitCode = &ec
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "runner_ref_write_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+
+	var finalResult strings.Builder
+	completed := false
+	for !completed {
+		select {
+		case ev := <-events:
+			switch ev.Name {
+			case "codex/event/item_agentMessage_delta":
+				if delta := extractNativeEventDelta(ev.Payload); delta != "" {
+					finalResult.WriteString(delta)
+				}
+			case "codex/event/turn_completed":
+				if ev.TurnID == "" || turn.TurnID == "" || ev.TurnID == turn.TurnID {
+					emitNativeState(nativeStateTurnCompleted, false, map[string]any{
+						"turnId": turn.TurnID,
+					})
+					completed = true
+				}
+			case "codex/event/turn_failed":
+				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
+				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+				emitNativeState(nativeStateFailed, false, map[string]any{
+					"reason": "turn_failed",
+					"code":   ar.RunnerErrorCode,
+				})
+				completed = true
+			case "codex/event/error":
+				if ar.RunnerErrorCode == "" {
+					ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
+					recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+					emitNativeState(nativeStateFailed, false, map[string]any{
+						"reason": "runtime_error_event",
+						"code":   ar.RunnerErrorCode,
+					})
+				}
+			case "codex/event/stream_disconnected":
+				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeStreamDisconnect)
+				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+				emitNativeState(nativeStateFailed, false, map[string]any{
+					"reason": "stream_disconnected",
+					"code":   ar.RunnerErrorCode,
+				})
+				completed = true
+			case "codex/event/runtime_crashed":
+				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeCrash)
+				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+				emitNativeState(nativeStateFailed, false, map[string]any{
+					"reason": "runtime_crashed",
+					"code":   ar.RunnerErrorCode,
+				})
+				completed = true
+			}
+		case <-ctx.Done():
+			ar.RunnerErrorCode = codeTimeout
+			recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
+			native.RecordHealth(opts.NativeSelection.Selected, native.HealthInterrupted)
+			if strings.TrimSpace(turn.TurnID) != "" {
+				_ = sess.InterruptTurn(context.Background(), native.TurnInterruptRequest{ThreadID: thread.ThreadID, TurnID: turn.TurnID})
+			}
+			emitNativeState(nativeStateInterrupted, false, map[string]any{
+				"reason": "attempt_timeout",
+				"code":   ar.RunnerErrorCode,
+			})
+			completed = true
+		}
+	}
+	traceErrMu.Lock()
+	localTraceErr := traceErr
+	traceErrMu.Unlock()
+	if localTraceErr != nil {
+		ar.RunnerErrorCode = codeIO
+		ec := 1
+		ar.RunnerExitCode = &ec
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", localTraceErr.Error())
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "trace_append_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+
+	if ar.RunnerErrorCode == "" {
+		ec := 0
+		ar.RunnerExitCode = &ec
+	} else {
+		ec := 1
+		ar.RunnerExitCode = &ec
+	}
+
+	feedbackPath := filepath.Join(pm.OutDirAbs, "feedback.json")
+	if fileExists(feedbackPath) {
+		return false
+	}
+	if ar.RunnerErrorCode == "" {
+		result := strings.TrimSpace(finalResult.String())
+		if result == "" {
+			result = "NATIVE_TURN_COMPLETED"
+		}
+		if err := feedback.Write(now, envTrace, feedback.WriteOpts{OK: true, Result: result}); err != nil {
+			ar.RunnerErrorCode = codeIO
+			ec := 1
+			ar.RunnerExitCode = &ec
+			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+			emitNativeState(nativeStateFailed, false, map[string]any{
+				"reason": "feedback_write_failed",
+				"code":   ar.RunnerErrorCode,
+			})
+			return true
+		}
+		ar.AutoFeedback = true
+		emitNativeState(nativeStateFinalized, false, map[string]any{
+			"feedbackAuto": true,
+			"state":        string(supervisor.State()),
+		})
+		return false
+	}
+
+	resultJSON, _ := store.CanonicalJSON(map[string]any{
+		"kind":   "runtime_failure",
+		"code":   ar.RunnerErrorCode,
+		"turnId": turn.TurnID,
+	})
+	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
+		OK:                   false,
+		ResultJSON:           string(resultJSON),
+		DecisionTags:         []string{schema.DecisionTagBlocked},
+		SkipSuiteResultShape: true,
+	}); err != nil {
+		ar.RunnerErrorCode = codeIO
+		ec := 1
+		ar.RunnerExitCode = &ec
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "feedback_write_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+	ar.AutoFeedback = true
+	ar.AutoFeedbackCode = ar.RunnerErrorCode
+	emitNativeState(nativeStateFinalized, false, map[string]any{
+		"feedbackAuto": true,
+		"code":         ar.RunnerErrorCode,
+		"state":        string(supervisor.State()),
+	})
+	return false
+}
+
+func nativeErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	if nerr, ok := native.AsError(err); ok {
+		return nerr.Code
+	}
+	return codeIO
+}
+
+func classifyNativeFailureCode(raw json.RawMessage, fallback string) string {
+	code := strings.TrimSpace(classifyNativeFailureCodeInner(raw))
+	if code != "" {
+		return code
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback
+	}
+	return codeToolFailed
+}
+
+func classifyNativeFailureCodeInner(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	code := strings.TrimSpace(firstFailureString(payload, "code"))
+	if strings.HasPrefix(code, "ZCL_E_") {
+		return code
+	}
+	errPayload := firstFailureMap(payload, "error")
+	if turn := firstFailureMap(payload, "turn"); len(turn) > 0 {
+		if nestedErr := firstFailureMap(turn, "error"); len(nestedErr) > 0 {
+			errPayload = nestedErr
+		}
+	}
+	if len(errPayload) > 0 {
+		if nestedCode := strings.TrimSpace(firstFailureString(errPayload, "code")); strings.HasPrefix(nestedCode, "ZCL_E_") {
+			return nestedCode
+		}
+	}
+	msg := strings.ToLower(strings.TrimSpace(firstFailureString(errPayload, "message")))
+	if msg == "" {
+		msg = strings.ToLower(strings.TrimSpace(firstFailureString(payload, "message")))
+	}
+	info := firstFailureAny(errPayload, "codexErrorInfo")
+	if info == nil {
+		info = firstFailureAny(payload, "codexErrorInfo")
+	}
+	if isRateLimitFailure(msg, info) {
+		return codeRuntimeRateLimit
+	}
+	if isAuthFailure(msg, info) {
+		return codeRuntimeAuth
+	}
+	return ""
+}
+
+func firstFailureAny(payload map[string]any, key string) any {
+	if len(payload) == 0 {
+		return nil
+	}
+	v, _ := payload[key]
+	return v
+}
+
+func firstFailureString(payload map[string]any, key string) string {
+	v := firstFailureAny(payload, key)
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func firstFailureMap(payload map[string]any, key string) map[string]any {
+	v := firstFailureAny(payload, key)
+	out, _ := v.(map[string]any)
+	return out
+}
+
+func isRateLimitFailure(msg string, info any) bool {
+	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "usage limit") || strings.Contains(msg, "quota") || strings.Contains(msg, "429") {
+		return true
+	}
+	switch v := info.(type) {
+	case string:
+		low := strings.ToLower(strings.TrimSpace(v))
+		return strings.Contains(low, "usagelimit") || strings.Contains(low, "rate")
+	case map[string]any:
+		kind := strings.ToLower(strings.TrimSpace(firstFailureString(v, "kind")))
+		if strings.Contains(kind, "usagelimit") || strings.Contains(kind, "rate") {
+			return true
+		}
+		statusCode := firstFailureString(v, "httpStatusCode")
+		if statusCode == "429" {
+			return true
+		}
+	}
+	return false
+}
+
+func isAuthFailure(msg string, info any) bool {
+	if strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "auth") || strings.Contains(msg, "401") || strings.Contains(msg, "403") {
+		return true
+	}
+	switch v := info.(type) {
+	case string:
+		low := strings.ToLower(strings.TrimSpace(v))
+		if strings.Contains(low, "auth") {
+			return true
+		}
+	case map[string]any:
+		kind := strings.ToLower(strings.TrimSpace(firstFailureString(v, "kind")))
+		statusCode := firstFailureString(v, "httpStatusCode")
+		if strings.Contains(kind, "httpconnectionfailed") && (statusCode == "401" || statusCode == "403") {
+			return true
+		}
+	}
+	return false
+}
+
+func recordNativeFailureHealth(strategy native.StrategyID, code string) {
+	switch strings.TrimSpace(code) {
+	case codeRuntimeRateLimit:
+		native.RecordHealth(strategy, native.HealthRateLimited)
+	case codeRuntimeAuth:
+		native.RecordHealth(strategy, native.HealthAuthFail)
+	case codeRuntimeStreamDisconnect:
+		native.RecordHealth(strategy, native.HealthStreamDisconnect)
+	case codeRuntimeCrash:
+		native.RecordHealth(strategy, native.HealthRuntimeCrash)
+	case codeRuntimeListenerFailure:
+		native.RecordHealth(strategy, native.HealthListenerFailure)
+	}
+}
+
+func extractNativeEventDelta(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	delta, _ := payload["delta"].(string)
+	return strings.TrimSpace(delta)
+}
+
+func buildNativeRuntimeRegistry() *native.Registry {
+	reg := native.NewRegistry()
+	reg.MustRegister(codexappserver.NewRuntime(codexappserver.Config{
+		Command: codexappserver.DefaultCommandFromEnv(),
+	}))
+	reg.MustRegister(providerstub.NewRuntime())
+	return reg
+}
+
+func writeNativeRunnerRef(attemptDir string, env map[string]string, runtimeID native.StrategyID, sessionID string, threadID string) error {
+	ref := schema.RunnerRefJSONV1{
+		SchemaVersion: schema.ArtifactSchemaV1,
+		Runner:        string(runtimeID),
+		RunID:         env["ZCL_RUN_ID"],
+		SuiteID:       env["ZCL_SUITE_ID"],
+		MissionID:     env["ZCL_MISSION_ID"],
+		AttemptID:     env["ZCL_ATTEMPT_ID"],
+		AgentID:       env["ZCL_AGENT_ID"],
+		ThreadID:      strings.TrimSpace(threadID),
+		RuntimeID:     string(runtimeID),
+		SessionID:     strings.TrimSpace(sessionID),
+		Transport:     "stdio",
+	}
+	return store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.ref.json"), ref)
+}
+
 func promptContamination(attemptDir string, terms []string) []string {
 	b, err := os.ReadFile(filepath.Join(attemptDir, "prompt.txt"))
 	if err != nil {
@@ -990,11 +1765,13 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
-  - --session-isolation=auto refuses process fallback when host advertises native spawn via ZCL_HOST_NATIVE_SPAWN=1.
+  - process mode requires -- <runner-cmd>; native mode forbids it.
+  - --session-isolation=auto chooses native mode when ZCL_HOST_NATIVE_SPAWN=1, otherwise process mode.
+  - --runtime-strategies controls ordered native runtime fallback chain (default from config/env).
   - --feedback-policy controls default finalization behavior when --finalization-mode is omitted.
   - --feedback-policy=auto_fail writes canonical infra-failure feedback when runners exit without feedback.
   - --feedback-policy=strict leaves missing feedback as a failing contract condition unless --finalization-mode overrides it.

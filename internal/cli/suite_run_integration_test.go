@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -395,7 +398,7 @@ func TestSuiteRun_RefusesImplicitProcessFallbackWhenHostIsNativeCapable(t *testi
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "host advertises native spawning") {
+	if !strings.Contains(stderr.String(), "native runtime mode does not accept -- <runner-cmd> arguments") {
 		t.Fatalf("expected native-capability guard error, got stderr=%q", stderr.String())
 	}
 }
@@ -454,6 +457,574 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 	}
 	if !sum.HostNativeSpawnCapable {
 		t.Fatalf("expected hostNativeSpawnCapable=true")
+	}
+}
+
+func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-runtime-e2e",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK                      bool   `json:"ok"`
+		RuntimeStrategySelected string `json:"runtimeStrategySelected"`
+		Attempts                []struct {
+			AttemptDir      string `json:"attemptDir"`
+			RunnerErrorCode string `json:"runnerErrorCode"`
+			OK              bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	if sum.RuntimeStrategySelected != "codex_app_server" {
+		t.Fatalf("unexpected runtime strategy selected: %+v", sum)
+	}
+	if sum.Attempts[0].RunnerErrorCode != "" {
+		t.Fatalf("unexpected runner error: %+v", sum.Attempts[0])
+	}
+	attemptDir := sum.Attempts[0].AttemptDir
+	if attemptDir == "" {
+		t.Fatalf("expected attemptDir")
+	}
+	if _, err := os.Stat(filepath.Join(attemptDir, "feedback.json")); err != nil {
+		t.Fatalf("expected feedback.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attemptDir, "tool.calls.jsonl")); err != nil {
+		t.Fatalf("expected tool.calls.jsonl: %v", err)
+	}
+	refRaw, err := os.ReadFile(filepath.Join(attemptDir, "runner.ref.json"))
+	if err != nil {
+		t.Fatalf("read runner.ref.json: %v", err)
+	}
+	var ref struct {
+		RuntimeID string `json:"runtimeId"`
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(refRaw, &ref); err != nil {
+		t.Fatalf("unmarshal runner.ref.json: %v", err)
+	}
+	if ref.RuntimeID != "codex_app_server" || strings.TrimSpace(ref.SessionID) == "" {
+		t.Fatalf("unexpected runner ref: %+v", ref)
+	}
+}
+
+func TestSuiteRun_NativeProcessParity(t *testing.T) {
+	baseDir := t.TempDir()
+	suitePath := filepath.Join(baseDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-parity",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "parity prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	// Process path.
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	var procStdout bytes.Buffer
+	var procStderr bytes.Buffer
+	rProc := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 10, 0, 0, time.UTC) },
+		Stdout:  &procStdout,
+		Stderr:  &procStderr,
+	}
+	processOutRoot := filepath.Join(baseDir, "process")
+	if code := rProc.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", processOutRoot,
+		"--session-isolation", "process",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
+	}); code != 0 {
+		t.Fatalf("process suite run expected 0, got %d stderr=%q", code, procStderr.String())
+	}
+
+	// Native path.
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+	var nativeStdout bytes.Buffer
+	var nativeStderr bytes.Buffer
+	rNative := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 11, 0, 0, time.UTC) },
+		Stdout:  &nativeStdout,
+		Stderr:  &nativeStderr,
+	}
+	nativeOutRoot := filepath.Join(baseDir, "native")
+	if code := rNative.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", nativeOutRoot,
+		"--session-isolation", "native",
+		"--json",
+	}); code != 0 {
+		t.Fatalf("native suite run expected 0, got %d stderr=%q", code, nativeStderr.String())
+	}
+
+	var procSum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(procStdout.Bytes(), &procSum); err != nil {
+		t.Fatalf("unmarshal process summary: %v", err)
+	}
+	var nativeSum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(nativeStdout.Bytes(), &nativeSum); err != nil {
+		t.Fatalf("unmarshal native summary: %v", err)
+	}
+	if !procSum.OK || !nativeSum.OK || len(procSum.Attempts) != 1 || len(nativeSum.Attempts) != 1 {
+		t.Fatalf("unexpected summaries process=%+v native=%+v", procSum, nativeSum)
+	}
+
+	readFeedbackOK := func(path string) bool {
+		raw, err := os.ReadFile(filepath.Join(path, "feedback.json"))
+		if err != nil {
+			t.Fatalf("read feedback: %v", err)
+		}
+		var payload struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal feedback: %v", err)
+		}
+		return payload.OK
+	}
+	if !readFeedbackOK(procSum.Attempts[0].AttemptDir) || !readFeedbackOK(nativeSum.Attempts[0].AttemptDir) {
+		t.Fatalf("expected process/native parity on feedback.ok")
+	}
+
+	readReport := func(path string) (ok bool, toolCalls int64) {
+		raw, err := os.ReadFile(filepath.Join(path, "attempt.report.json"))
+		if err != nil {
+			t.Fatalf("read attempt.report.json: %v", err)
+		}
+		var payload struct {
+			OK      *bool `json:"ok"`
+			Metrics struct {
+				ToolCallsTotal int64 `json:"toolCallsTotal"`
+			} `json:"metrics"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal attempt.report.json: %v", err)
+		}
+		if payload.OK == nil {
+			t.Fatalf("expected report ok field")
+		}
+		return *payload.OK, payload.Metrics.ToolCallsTotal
+	}
+	procOK, procCalls := readReport(procSum.Attempts[0].AttemptDir)
+	nativeOK, nativeCalls := readReport(nativeSum.Attempts[0].AttemptDir)
+	if !procOK || !nativeOK {
+		t.Fatalf("expected both reports ok=true, process=%v native=%v", procOK, nativeOK)
+	}
+	if procCalls == 0 || nativeCalls == 0 {
+		t.Fatalf("expected non-zero tool calls in both reports, process=%d native=%d", procCalls, nativeCalls)
+	}
+}
+
+func TestSuiteRun_NativeParallelUniqueSessions(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	missions := make([]map[string]any, 0, 20)
+	for i := 1; i <= 20; i++ {
+		missions = append(missions, map[string]any{
+			"missionId": fmt.Sprintf("m%d", i),
+			"prompt":    fmt.Sprintf("parallel prompt %d", i),
+			"expects":   map[string]any{"ok": true},
+		})
+	}
+	suiteObj := map[string]any{
+		"version": 1,
+		"suiteId": "suite-run-native-parallel",
+		"defaults": map[string]any{
+			"mode":      "discovery",
+			"timeoutMs": 60000,
+		},
+		"missions": missions,
+	}
+	rawSuite, _ := json.Marshal(suiteObj)
+	writeSuiteFile(t, suitePath, string(rawSuite))
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 20, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--parallel", "20",
+		"--total", "20",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+			OK         bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v", err)
+	}
+	if !sum.OK || len(sum.Attempts) != 20 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+
+	seenSessions := map[string]bool{}
+	for _, attempt := range sum.Attempts {
+		if !attempt.OK {
+			t.Fatalf("expected attempt ok=true: %+v", attempt)
+		}
+		refRaw, err := os.ReadFile(filepath.Join(attempt.AttemptDir, "runner.ref.json"))
+		if err != nil {
+			t.Fatalf("read runner.ref.json: %v", err)
+		}
+		var ref struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(refRaw, &ref); err != nil {
+			t.Fatalf("unmarshal runner.ref.json: %v", err)
+		}
+		if strings.TrimSpace(ref.SessionID) == "" {
+			t.Fatalf("expected non-empty sessionId in runner.ref.json")
+		}
+		if seenSessions[ref.SessionID] {
+			t.Fatalf("duplicate sessionId detected: %s", ref.SessionID)
+		}
+		seenSessions[ref.SessionID] = true
+	}
+}
+
+func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-timeout-isolation",
+  "defaults": { "mode": "ci", "timeoutMs": 250, "timeoutStart": "attempt_start" },
+  "missions": [
+    { "missionId": "slow", "prompt": "slow mission", "expects": { "ok": true } },
+    { "missionId": "fast", "prompt": "fast mission", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 25, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--parallel", "2",
+		"--fail-fast=false",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected no harness failure, got code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			MissionID       string `json:"missionId"`
+			RunnerErrorCode string `json:"runnerErrorCode"`
+			OK              bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v", err)
+	}
+	if len(sum.Attempts) != 2 {
+		t.Fatalf("expected 2 attempts, got %+v", sum.Attempts)
+	}
+	var sawTimeout bool
+	var sawSuccess bool
+	for _, a := range sum.Attempts {
+		if a.RunnerErrorCode == "ZCL_E_TIMEOUT" {
+			sawTimeout = true
+		}
+		if a.OK {
+			sawSuccess = true
+		}
+	}
+	if !sawTimeout || !sawSuccess {
+		t.Fatalf("expected one timeout and one success, got %+v", sum.Attempts)
+	}
+}
+
+func TestSuiteRun_NativeMapsRateLimitFailure(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-rate-limit",
+  "defaults": { "mode": "ci", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "rate-limit mission" }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "rate_limit_failure")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			RunnerErrorCode  string `json:"runnerErrorCode"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v", err)
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].RunnerErrorCode != codeRuntimeRateLimit || sum.Attempts[0].AutoFeedbackCode != codeRuntimeRateLimit {
+		t.Fatalf("expected rate-limit code, got %+v", sum.Attempts[0])
+	}
+}
+
+func TestSuiteRun_NativeMapsAuthFailure(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-auth",
+  "defaults": { "mode": "ci", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "auth mission" }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "auth_failure")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			RunnerErrorCode  string `json:"runnerErrorCode"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v", err)
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].RunnerErrorCode != codeRuntimeAuth || sum.Attempts[0].AutoFeedbackCode != codeRuntimeAuth {
+		t.Fatalf("expected auth code, got %+v", sum.Attempts[0])
+	}
+}
+
+func TestSuiteRun_NativeCrashDuringTurnIsTyped(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-crash",
+  "defaults": { "mode": "ci", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "crash mission" }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "crash_during_turn")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			RunnerErrorCode string `json:"runnerErrorCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v", err)
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].RunnerErrorCode != codeRuntimeCrash {
+		t.Fatalf("expected runtime crash code, got %+v", sum.Attempts[0])
+	}
+}
+
+func TestSuiteRun_NativeSchedulerRateLimitIsDeterministic(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-scheduler-rate-limit",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } },
+    { "missionId": "m2", "prompt": "p2", "expects": { "ok": true } },
+    { "missionId": "m3", "prompt": "p3", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+	t.Setenv("ZCL_NATIVE_MIN_START_INTERVAL_MS", "220")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	start := time.Now()
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--parallel", "3",
+		"--total", "3",
+		"--json",
+	})
+	elapsed := time.Since(start)
+	if code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr.String())
+	}
+	if elapsed < 400*time.Millisecond {
+		t.Fatalf("expected scheduler delay from rate limit, elapsed=%s", elapsed)
 	}
 }
 
@@ -1123,6 +1694,145 @@ func TestHelperSuiteRunnerProcess(t *testing.T) {
 		os.Exit(exit)
 	default:
 		os.Exit(103)
+	}
+}
+
+func TestHelperSuiteNativeAppServer(t *testing.T) {
+	if os.Getenv("ZCL_HELPER_PROCESS") != "1" {
+		return
+	}
+	mode := strings.TrimSpace(os.Getenv("ZCL_HELPER_MODE"))
+	if mode == "" {
+		mode = "smoke"
+	}
+	runSuiteNativeHelper(mode)
+	os.Exit(0)
+}
+
+func runSuiteNativeHelper(mode string) {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	var mu sync.Mutex
+	writeJSON := func(v any) {
+		b, _ := json.Marshal(v)
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = os.Stdout.Write(append(b, '\n'))
+	}
+
+	threadID := "thr_native_1"
+	turnID := "turn_native_1"
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		method, _ := msg["method"].(string)
+		id, hasID := msg["id"]
+		if !hasID {
+			continue
+		}
+
+		respond := func(result any) {
+			writeJSON(map[string]any{"id": id, "result": result})
+		}
+		respondErr := func(code int, message string) {
+			writeJSON(map[string]any{"id": id, "error": map[string]any{"code": code, "message": message}})
+		}
+
+		switch method {
+		case "initialize":
+			respond(map[string]any{"userAgent": "codex-cli/1.4.0"})
+		case "model/list":
+			switch mode {
+			case "compat_missing_method":
+				respondErr(-32601, "method not found")
+			case "timeout_on_model_list":
+				time.Sleep(2 * time.Second)
+			default:
+				respond(map[string]any{"data": []any{}})
+			}
+		case "thread/start":
+			respond(map[string]any{"thread": map[string]any{"id": threadID}})
+			writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": threadID}})
+		case "thread/resume":
+			respond(map[string]any{"thread": map[string]any{"id": threadID}})
+		case "turn/start":
+			slow := false
+			if params, ok := msg["params"].(map[string]any); ok {
+				if input, ok := params["input"].([]any); ok {
+					for _, item := range input {
+						obj, _ := item.(map[string]any)
+						text, _ := obj["text"].(string)
+						if strings.Contains(strings.ToLower(text), "slow") {
+							slow = true
+							break
+						}
+					}
+				}
+			}
+			respond(map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}})
+			writeJSON(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
+			switch mode {
+			case "rate_limit_failure":
+				writeJSON(map[string]any{
+					"method": "turn/failed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"turn": map[string]any{
+							"id":     turnID,
+							"status": "failed",
+							"error": map[string]any{
+								"message":        "usage limit exceeded",
+								"codexErrorInfo": "UsageLimitExceeded",
+							},
+						},
+					},
+				})
+			case "auth_failure":
+				writeJSON(map[string]any{
+					"method": "turn/failed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"turn": map[string]any{
+							"id":     turnID,
+							"status": "failed",
+							"error": map[string]any{
+								"message": "unauthorized",
+								"codexErrorInfo": map[string]any{
+									"kind":           "HttpConnectionFailed",
+									"httpStatusCode": "401",
+								},
+							},
+						},
+					},
+				})
+			case "crash_during_turn":
+				os.Exit(137)
+			case "disconnect_during_turn":
+				return
+			default:
+				if slow {
+					time.Sleep(900 * time.Millisecond)
+				}
+				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "native-result"}})
+				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
+			}
+		case "turn/steer":
+			respond(map[string]any{"turnId": turnID})
+		case "turn/interrupt":
+			respond(map[string]any{})
+		default:
+			respondErr(-32601, fmt.Sprintf("method not found: %s", method))
+		}
 	}
 }
 

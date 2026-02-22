@@ -142,6 +142,109 @@ flows:
 	}
 }
 
+func TestCampaignRun_NativeCodexAppServerFlow(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite-native.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "campaign-suite-native",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	specPath := filepath.Join(specDir, "campaign-native.yaml")
+	if err := os.WriteFile(specPath, []byte(fmt.Sprintf(`
+schemaVersion: 1
+campaignId: cmp-native
+outRoot: %q
+totalMissions: 1
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-native
+    suiteFile: suite-native.json
+    runner:
+      type: codex_app_server
+      sessionIsolation: native
+      runtimeStrategies: ["codex_app_server"]
+`, outRoot)), 0o644); err != nil {
+		t.Fatalf("write native campaign spec: %v", err)
+	}
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 13, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	if code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign lint expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "doctor", "--spec", specPath, "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign doctor expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	var run struct {
+		CampaignID string `json:"campaignId"`
+		RunID      string `json:"runId"`
+		Status     string `json:"status"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
+		t.Fatalf("unmarshal campaign run json: %v stdout=%q", err, stdout.String())
+	}
+	if run.CampaignID != "cmp-native" || run.RunID == "" || run.Status != "valid" {
+		t.Fatalf("unexpected campaign run summary: %+v", run)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "canary", "--spec", specPath, "--out-root", outRoot, "--missions", "1", "--json"}); code != 0 {
+		t.Fatalf("campaign canary expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "status", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign status expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "report", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign report expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "resume", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign resume expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run([]string{"campaign", "publish-check", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
+		t.Fatalf("campaign publish-check expected 0, got %d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestCampaignRun_InvalidAndPublishCheckFails(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()
