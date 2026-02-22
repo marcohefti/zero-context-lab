@@ -52,6 +52,31 @@ type missionPromptArtifactV1 struct {
 	Prompt       string `json:"prompt"`
 }
 
+const oracleVerdictFileName = "oracle.verdict.json"
+
+type oracleEvaluatorOutput struct {
+	OK          bool     `json:"ok"`
+	ReasonCodes []string `json:"reasonCodes,omitempty"`
+	Message     string   `json:"message,omitempty"`
+}
+
+type oracleVerdictArtifact struct {
+	SchemaVersion int      `json:"schemaVersion"`
+	CampaignID    string   `json:"campaignId"`
+	FlowID        string   `json:"flowId"`
+	MissionID     string   `json:"missionId"`
+	AttemptID     string   `json:"attemptId"`
+	AttemptDir    string   `json:"attemptDir"`
+	OraclePath    string   `json:"oraclePath"`
+	EvaluatorKind string   `json:"evaluatorKind"`
+	EvaluatorCmd  []string `json:"evaluatorCommand"`
+	PromptMode    string   `json:"promptMode"`
+	OK            bool     `json:"ok"`
+	ReasonCodes   []string `json:"reasonCodes,omitempty"`
+	Message       string   `json:"message,omitempty"`
+	ExecutedAt    string   `json:"executedAt"`
+}
+
 func (r Runner) runCampaign(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		printCampaignHelp(r.Stdout)
@@ -125,6 +150,23 @@ func (r Runner) runCampaignLint(args []string) int {
 			"selectedTotal": len(parsed.MissionIndexes),
 			"selectionMode": parsed.Spec.MissionSource.Selection.Mode,
 			"indexes":       parsed.MissionIndexes,
+		},
+		"missionSource": map[string]any{
+			"path": parsed.Spec.MissionSource.Path,
+			"promptSource": map[string]any{
+				"path": parsed.Spec.MissionSource.PromptSource.Path,
+			},
+			"oracleSource": map[string]any{
+				"path":       parsed.Spec.MissionSource.OracleSource.Path,
+				"visibility": parsed.Spec.MissionSource.OracleSource.Visibility,
+			},
+		},
+		"evaluation": map[string]any{
+			"mode": parsed.Spec.Evaluation.Mode,
+			"evaluator": map[string]any{
+				"kind":    parsed.Spec.Evaluation.Evaluator.Kind,
+				"command": parsed.Spec.Evaluation.Evaluator.Command,
+			},
 		},
 		"pairGate": map[string]any{
 			"enabled":                   parsed.Spec.PairGateEnabled(),
@@ -496,6 +538,9 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		"code":       campaign.ReasonPromptModePolicy,
 		"promptMode": "",
 	}
+	oraclePolicyCompliance := map[string]any{
+		"ok": true,
+	}
 	toolDriverCompliance := map[string]any{
 		"ok":   true,
 		"code": campaign.ReasonToolDriverShim,
@@ -512,6 +557,13 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 				switch code {
 				case campaign.ReasonPromptModePolicy:
 					promptModeCompliance["ok"] = false
+					promptModeCompliance["code"] = code
+					promptModeCompliance["error"] = policyPayload["error"]
+					promptModeCompliance["promptMode"] = policyPayload["promptMode"]
+					promptModeCompliance["violations"] = policyPayload["violations"]
+				case campaign.ReasonExamPromptPolicy:
+					promptModeCompliance["ok"] = false
+					promptModeCompliance["code"] = code
 					promptModeCompliance["error"] = policyPayload["error"]
 					promptModeCompliance["promptMode"] = policyPayload["promptMode"]
 					promptModeCompliance["violations"] = policyPayload["violations"]
@@ -519,6 +571,11 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 					toolDriverCompliance["ok"] = false
 					toolDriverCompliance["error"] = policyPayload["error"]
 					toolDriverCompliance["violation"] = policyPayload["violation"]
+				case campaign.ReasonOracleVisibility, campaign.ReasonOracleEvaluator:
+					oraclePolicyCompliance["ok"] = false
+					oraclePolicyCompliance["code"] = code
+					oraclePolicyCompliance["error"] = policyPayload["error"]
+					oraclePolicyCompliance["violation"] = policyPayload["violation"]
 				default:
 					toolDriverCompliance["ok"] = false
 					toolDriverCompliance["error"] = policyPayload["error"]
@@ -530,16 +587,24 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		} else {
 			violations := campaign.EvaluatePromptModeViolations(parsed)
 			promptModeCompliance["promptMode"] = parsed.Spec.PromptMode
+			if parsed.Spec.PromptMode == campaign.PromptModeExam {
+				promptModeCompliance["code"] = campaign.ReasonExamPromptPolicy
+			}
 			if len(violations) > 0 {
 				publishOK = false
 				promptModeCompliance["ok"] = false
-				promptModeCompliance["code"] = campaign.ReasonPromptModePolicy
+				code := campaign.ReasonPromptModePolicy
+				if parsed.Spec.PromptMode == campaign.PromptModeExam {
+					code = campaign.ReasonExamPromptPolicy
+				}
+				promptModeCompliance["code"] = code
 				promptModeCompliance["violations"] = violations
 				promptModeCompliance["error"] = (&campaign.PromptModeViolationError{
+					Code:       code,
 					PromptMode: parsed.Spec.PromptMode,
 					Violations: violations,
 				}).Error()
-				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, campaign.ReasonPromptModePolicy))
+				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
 			}
 		}
 	}
@@ -547,13 +612,14 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		publishOK = true
 	}
 	out := map[string]any{
-		"ok":                   publishOK,
-		"campaignId":           st.CampaignID,
-		"runId":                st.RunID,
-		"status":               st.Status,
-		"reasonCodes":          st.ReasonCodes,
-		"promptModeCompliance": promptModeCompliance,
-		"toolDriverCompliance": toolDriverCompliance,
+		"ok":                     publishOK,
+		"campaignId":             st.CampaignID,
+		"runId":                  st.RunID,
+		"status":                 st.Status,
+		"reasonCodes":            st.ReasonCodes,
+		"promptModeCompliance":   promptModeCompliance,
+		"oraclePolicyCompliance": oraclePolicyCompliance,
+		"toolDriverCompliance":   toolDriverCompliance,
 	}
 	if *jsonOut {
 		writeExit := r.writeJSON(out)
@@ -1122,6 +1188,19 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 				}
 			}
 		}
+		if parsed.Spec.PromptMode == campaign.PromptModeExam {
+			oracleVerdict, oracleErr := r.evaluateOracleForAttempt(parsed, fr.FlowID, missionID, ar)
+			if oracleErr != nil {
+				gateErrors = append(gateErrors, campaign.ReasonOracleEvalError)
+				_ = oracleVerdict
+			} else if !oracleVerdict.OK {
+				if len(oracleVerdict.ReasonCodes) == 0 {
+					gateErrors = append(gateErrors, campaign.ReasonOracleEvalFailed)
+				} else {
+					gateErrors = append(gateErrors, oracleVerdict.ReasonCodes...)
+				}
+			}
+		}
 		if len(gateErrors) == 0 {
 			ma.OK = true
 			ma.Status = campaign.AttemptStatusValid
@@ -1150,6 +1229,119 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 	}
 	mg.Reasons = dedupeSortedStrings(mg.Reasons)
 	return mg, nil
+}
+
+func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID string, missionID string, ar *campaign.AttemptStatusV1) (oracleEvaluatorOutput, error) {
+	out := oracleEvaluatorOutput{
+		OK:          false,
+		ReasonCodes: []string{campaign.ReasonOracleEvalError},
+	}
+	if ar == nil || strings.TrimSpace(ar.AttemptDir) == "" {
+		out.Message = "oracle evaluator requires attemptDir"
+		return out, nil
+	}
+	oraclePath := strings.TrimSpace(parsed.OracleByMissionID[missionID])
+	if oraclePath == "" {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvaluator}
+		out.Message = fmt.Sprintf("missing oracle path for mission %q", missionID)
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+	cmdArgs := make([]string, 0, len(parsed.Spec.Evaluation.Evaluator.Command))
+	for _, part := range parsed.Spec.Evaluation.Evaluator.Command {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			cmdArgs = append(cmdArgs, part)
+		}
+	}
+	if len(cmdArgs) == 0 {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvaluator}
+		out.Message = "missing evaluation.evaluator.command"
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	cmd.Dir = filepath.Dir(parsed.SpecPath)
+	env := map[string]string{
+		"ZCL_EVALUATION_MODE":   parsed.Spec.Evaluation.Mode,
+		"ZCL_PROMPT_MODE":       parsed.Spec.PromptMode,
+		"ZCL_CAMPAIGN_ID":       parsed.Spec.CampaignID,
+		"ZCL_FLOW_ID":           flowID,
+		"ZCL_MISSION_ID":        missionID,
+		"ZCL_ATTEMPT_ID":        ar.AttemptID,
+		"ZCL_ATTEMPT_DIR":       ar.AttemptDir,
+		"ZCL_ORACLE_PATH":       oraclePath,
+		"ZCL_CAMPAIGN_SPEC":     parsed.SpecPath,
+		"ZCL_ORACLE_VISIBILITY": parsed.Spec.MissionSource.OracleSource.Visibility,
+	}
+	cmd.Env = mergeEnviron(os.Environ(), env)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		msg := trimText(strings.TrimSpace(stderr.String()), 1024)
+		if msg == "" {
+			msg = err.Error()
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			msg = "oracle evaluator timed out"
+		}
+		out.Message = msg
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+	var evaluatorOut oracleEvaluatorOutput
+	if err := json.Unmarshal(stdout.Bytes(), &evaluatorOut); err != nil {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		out.Message = "oracle evaluator output must be valid json"
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+	evaluatorOut.ReasonCodes = dedupeSortedStrings(evaluatorOut.ReasonCodes)
+	evaluatorOut.Message = trimText(strings.TrimSpace(evaluatorOut.Message), 1024)
+	if !evaluatorOut.OK && len(evaluatorOut.ReasonCodes) == 0 {
+		evaluatorOut.ReasonCodes = []string{campaign.ReasonOracleEvalFailed}
+	}
+	if _, err := r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, evaluatorOut); err != nil {
+		return evaluatorOut, err
+	}
+	return evaluatorOut, nil
+}
+
+func (r Runner) writeOracleVerdict(parsed campaign.ParsedSpec, flowID string, missionID string, ar *campaign.AttemptStatusV1, oraclePath string, out oracleEvaluatorOutput) (string, error) {
+	if ar == nil || strings.TrimSpace(ar.AttemptDir) == "" {
+		return "", nil
+	}
+	now := time.Now().UTC()
+	if r.Now != nil {
+		now = r.Now().UTC()
+	}
+	artifact := oracleVerdictArtifact{
+		SchemaVersion: 1,
+		CampaignID:    parsed.Spec.CampaignID,
+		FlowID:        flowID,
+		MissionID:     missionID,
+		AttemptID:     ar.AttemptID,
+		AttemptDir:    ar.AttemptDir,
+		OraclePath:    oraclePath,
+		EvaluatorKind: parsed.Spec.Evaluation.Evaluator.Kind,
+		EvaluatorCmd:  append([]string{}, parsed.Spec.Evaluation.Evaluator.Command...),
+		PromptMode:    parsed.Spec.PromptMode,
+		OK:            out.OK,
+		ReasonCodes:   dedupeSortedStrings(out.ReasonCodes),
+		Message:       trimText(strings.TrimSpace(out.Message), 1024),
+		ExecutedAt:    now.Format(time.RFC3339Nano),
+	}
+	path := filepath.Join(ar.AttemptDir, oracleVerdictFileName)
+	if err := store.WriteJSONAtomic(path, artifact); err != nil {
+		return path, err
+	}
+	return path, nil
 }
 
 func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment, sharedStderrMu *sync.Mutex) (campaign.FlowRunV1, *suiteRunSummary, error) {
@@ -1227,8 +1419,8 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	env["ZCL_CAMPAIGN_RUNNER_TYPE"] = strings.TrimSpace(flow.Runner.Type)
 	env["ZCL_FRESH_AGENT_PER_ATTEMPT"] = "1"
 	env["ZCL_TOOL_DRIVER_KIND"] = strings.TrimSpace(flow.Runner.ToolDriver.Kind)
-	if parsed.Spec.PromptMode == campaign.PromptModeMissionOnly {
-		env["ZCL_PROMPT_MODE"] = campaign.PromptModeMissionOnly
+	if strings.TrimSpace(parsed.Spec.PromptMode) != "" && parsed.Spec.PromptMode != campaign.PromptModeDefault {
+		env["ZCL_PROMPT_MODE"] = parsed.Spec.PromptMode
 	}
 	if flow.Runner.MCP.MaxToolCalls > 0 {
 		env["ZCL_MCP_MAX_TOOL_CALLS"] = strconv.FormatInt(flow.Runner.MCP.MaxToolCalls, 10)
@@ -1451,9 +1643,16 @@ func campaignPolicyErrorPayload(err error) (map[string]any, bool) {
 	}
 	var promptErr *campaign.PromptModeViolationError
 	if errors.As(err, &promptErr) {
+		code := strings.TrimSpace(promptErr.Code)
+		if code == "" {
+			code = campaign.ReasonPromptModePolicy
+			if promptErr.PromptMode == campaign.PromptModeExam {
+				code = campaign.ReasonExamPromptPolicy
+			}
+		}
 		return map[string]any{
 			"ok":         false,
-			"code":       campaign.ReasonPromptModePolicy,
+			"code":       code,
 			"promptMode": promptErr.PromptMode,
 			"violations": promptErr.Violations,
 			"error":      promptErr.Error(),
@@ -1466,6 +1665,15 @@ func campaignPolicyErrorPayload(err error) (map[string]any, bool) {
 			"code":      campaign.ReasonToolDriverShim,
 			"violation": shimErr.Violation,
 			"error":     shimErr.Error(),
+		}, true
+	}
+	var oracleErr *campaign.OraclePolicyViolationError
+	if errors.As(err, &oracleErr) {
+		return map[string]any{
+			"ok":        false,
+			"code":      oracleErr.Code,
+			"violation": oracleErr.Violation,
+			"error":     oracleErr.Error(),
 		}, true
 	}
 	return nil, false

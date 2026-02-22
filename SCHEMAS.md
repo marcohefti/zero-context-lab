@@ -400,6 +400,36 @@ Optional fields:
 - `tokenEstimates`: lightweight token estimates from `runner.metrics.json` (fallback: trace byte heuristic).
 - `expectations`: when `suite.json` exists and contains `expects` for the mission, `zcl report` evaluates them against `feedback.json`.
 
+## `oracle.verdict.json` (optional; v1)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/oracle.verdict.json`
+
+Written by:
+- first-class campaign gate evaluation when `promptMode: exam`
+
+Purpose:
+- records host-side oracle evaluator verdict and typed reason codes without leaking oracle text into agent prompt artifacts.
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-exam",
+  "flowId": "flow-a",
+  "missionId": "m1",
+  "attemptId": "001-m1-r1",
+  "attemptDir": "/abs/path/.zcl/runs/20260222-120000Z-a1b2c3/attempts/001-m1-r1",
+  "oraclePath": "/abs/path/to/host-oracles/m1.md",
+  "evaluatorKind": "script",
+  "evaluatorCommand": ["node", "./scripts/eval-mission.mjs"],
+  "promptMode": "exam",
+  "ok": false,
+  "reasonCodes": ["ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED"],
+  "message": "proof/title did not match oracle",
+  "executedAt": "2026-02-22T12:00:22.123456789Z"
+}
+```
+
 ## `run.report.json` (optional; v1)
 
 Path: `.zcl/runs/<runId>/run.report.json`
@@ -450,9 +480,16 @@ Parse/validation behavior:
 
 Core enforced fields:
 - `campaignId`, `flows[]`
-- `promptMode`: `default|mission_only`
-- `noContext.forbiddenPromptTerms`: mission-only contamination guard list
-- `missionSource.path` and `missionSource.selection` (`all|mission_id|index|range`)
+- `promptMode`: `default|mission_only|exam`
+- `noContext.forbiddenPromptTerms`: contamination guard list (`mission_only` defaults to harness-term leakage checks; `exam` defaults to oracle-leakage patterns)
+- mission sources:
+  - legacy minimal mode: `missionSource.path`
+  - split exam mode: `missionSource.promptSource.path`, `missionSource.oracleSource.path`, `missionSource.oracleSource.visibility` (`workspace|host_only`)
+  - `missionSource.selection` (`all|mission_id|index|range`)
+- `evaluation`:
+  - `mode`: `none|oracle`
+  - `evaluator.kind`: `script`
+  - `evaluator.command`: argv (required in exam mode)
 - `execution.flowMode` (`sequence|parallel`)
 - `pairGate` (`enabled`, `stopOnFirstMissionFailure`, `traceProfile`)
 - `semantic` (`enabled`, `rulesPath`)
@@ -476,6 +513,13 @@ Mission-only guardrails:
 - Prompt contamination against forbidden harness terms fails lint/parse/publish-check with `ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION`.
 - `promptMode: mission_only` with `flows[].runner.toolDriver.kind=cli_funnel` requires one of `runner.shims` or `runner.toolDriver.shims`; violations return `ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED`.
 - `flows[].runner.finalization.minResultTurn` can enforce 3-turn workflows by requiring mission result payload field `"turn"` to be >= configured value.
+
+Exam-mode guardrails:
+- `promptMode: exam` requires split mission architecture (`missionSource.promptSource.path` + `missionSource.oracleSource.path`) and rejects `missionSource.path`.
+- `promptMode: exam` requires `evaluation.mode=oracle`, `evaluation.evaluator.kind=script`, and non-empty `evaluation.evaluator.command`; missing/invalid config returns `ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED`.
+- `promptMode: exam` enforces prompt contamination checks against oracle-leak patterns; violations return `ZCL_E_CAMPAIGN_EXAM_PROMPT_VIOLATION`.
+- `promptMode: exam` with `missionSource.oracleSource.visibility=host_only` rejects oracle paths inside the detected agent-readable workspace root and returns `ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION`.
+- campaign gate writes `oracle.verdict.json` per attempt and merges oracle evaluator reason codes into mission gate validity.
 
 Contract discoverability:
 - `zcl contract --json` includes `campaignSchema` (campaign fields) and `runtimeSchema` (strategy IDs, capabilities, health metrics, defaults).

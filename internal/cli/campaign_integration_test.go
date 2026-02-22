@@ -1250,6 +1250,207 @@ flows:
 	}
 }
 
+func TestCampaignLint_ExamModeRequiresEvaluatorTyped(t *testing.T) {
+	specDir := t.TempDir()
+	promptDir := filepath.Join(specDir, "prompts")
+	oracleDir := filepath.Join(specDir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Do task and return result JSON."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("oracle content"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-lint
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign lint expected 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign lint output: %v stdout=%q", err, stdout.String())
+	}
+	if out.Code != "ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED" {
+		t.Fatalf("unexpected code: %+v", out)
+	}
+}
+
+func TestCampaignRun_ExamModeOracleEvaluatorFailureInvalidatesAttempt(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	promptDir := filepath.Join(specDir, "prompts")
+	oracleDir := filepath.Join(specDir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve the task and return proof JSON."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("expected title: hello"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-run
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+    visibility: workspace
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["`+os.Args[0]+`", "-test.run=TestHelperCampaignOracleEvaluator$", "--", "case=fail"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	t.Setenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 10, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign run expected 2 for oracle fail, got %d stderr=%q", code, stderr.String())
+	}
+	statePath := filepath.Join(outRoot, "campaigns", "cmp-exam-run", "campaign.run.state.json")
+	stateRaw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		Status       string `json:"status"`
+		MissionGates []struct {
+			Reasons []string `json:"reasons"`
+		} `json:"missionGates"`
+		FlowRuns []struct {
+			Attempts []struct {
+				AttemptDir string   `json:"attemptDir"`
+				Status     string   `json:"status"`
+				Errors     []string `json:"errors"`
+			} `json:"attempts"`
+		} `json:"flowRuns"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	if st.Status != "invalid" {
+		t.Fatalf("expected invalid campaign status, got %+v", st)
+	}
+	if len(st.MissionGates) != 1 || !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED") {
+		t.Fatalf("expected oracle evaluation failure reason, got %+v", st.MissionGates)
+	}
+	if len(st.FlowRuns) == 0 || len(st.FlowRuns[0].Attempts) == 0 {
+		t.Fatalf("expected flow attempt data in state: %+v", st)
+	}
+	attemptDir := st.FlowRuns[0].Attempts[0].AttemptDir
+	if attemptDir == "" {
+		t.Fatalf("expected attemptDir in run state: %+v", st.FlowRuns[0].Attempts[0])
+	}
+	verdictRaw, err := os.ReadFile(filepath.Join(attemptDir, "oracle.verdict.json"))
+	if err != nil {
+		t.Fatalf("read oracle verdict artifact: %v", err)
+	}
+	var verdict struct {
+		OK          bool     `json:"ok"`
+		ReasonCodes []string `json:"reasonCodes"`
+	}
+	if err := json.Unmarshal(verdictRaw, &verdict); err != nil {
+		t.Fatalf("unmarshal oracle verdict: %v", err)
+	}
+	if verdict.OK || !strings.Contains(strings.Join(verdict.ReasonCodes, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED") {
+		t.Fatalf("unexpected oracle verdict: %+v", verdict)
+	}
+}
+
+func TestHelperCampaignOracleEvaluator(t *testing.T) {
+	if os.Getenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL") != "1" {
+		return
+	}
+	args := os.Args
+	idx := 0
+	for i := range args {
+		if args[i] == "--" {
+			idx = i + 1
+			break
+		}
+	}
+	kind := "ok"
+	for _, a := range args[idx:] {
+		if strings.HasPrefix(a, "case=") {
+			kind = strings.TrimPrefix(a, "case=")
+		}
+	}
+	switch kind {
+	case "fail":
+		_, _ = os.Stdout.WriteString(`{"ok":false,"reasonCodes":["ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED"],"message":"oracle mismatch"}` + "\n")
+		os.Exit(0)
+	case "error":
+		os.Exit(9)
+	default:
+		_, _ = os.Stdout.WriteString(`{"ok":true}` + "\n")
+		os.Exit(0)
+	}
+}
+
 func countJSONLLines(t *testing.T, path string) int {
 	t.Helper()
 	f, err := os.Open(path)

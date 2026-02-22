@@ -64,6 +64,10 @@ type CampaignSchema struct {
 type CampaignSchemaDefaults struct {
 	PromptMode                  string   `json:"promptMode"`
 	ForbiddenPromptTerms        []string `json:"forbiddenPromptTerms"`
+	ExamForbiddenPromptTerms    []string `json:"examForbiddenPromptTerms,omitempty"`
+	OracleVisibility            string   `json:"oracleVisibility,omitempty"`
+	EvaluationMode              string   `json:"evaluationMode,omitempty"`
+	EvaluatorKind               string   `json:"evaluatorKind,omitempty"`
 	FlowMode                    string   `json:"flowMode"`
 	TraceProfile                string   `json:"traceProfile"`
 	ToolDriverKind              string   `json:"toolDriverKind"`
@@ -270,6 +274,14 @@ func Build(version string) Contract {
 				Required:       false,
 				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/attempt.report.json",
 				RequiredFields: []string{"schemaVersion", "runId", "suiteId", "missionId", "attemptId", "computedAt", "metrics", "artifacts"},
+			},
+			{
+				ID:             "oracle.verdict.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/runs/<runId>/attempts/<attemptId>/oracle.verdict.json",
+				RequiredFields: []string{"schemaVersion", "campaignId", "flowId", "missionId", "attemptId", "attemptDir", "oraclePath", "evaluatorKind", "evaluatorCommand", "promptMode", "ok", "executedAt"},
 			},
 			{
 				ID:             "runner.ref.json",
@@ -519,7 +531,12 @@ func Build(version string) Contract {
 			{Code: codes.CampaignGateFailed, Summary: "Campaign pair gate failed for one or more missions.", Retryable: false},
 			{Code: codes.CampaignFirstMissionGateFailed, Summary: "Campaign first mission canary/pair gate failed.", Retryable: false},
 			{Code: campaign.ReasonPromptModePolicy, Summary: "Campaign mission-only prompt policy violation (harness term leakage).", Retryable: false},
+			{Code: campaign.ReasonExamPromptPolicy, Summary: "Campaign exam prompt policy violation (oracle contamination leakage).", Retryable: false},
 			{Code: campaign.ReasonToolDriverShim, Summary: "Campaign flow with toolDriver.kind=cli_funnel is missing required shims.", Retryable: false},
+			{Code: campaign.ReasonOracleVisibility, Summary: "Campaign oracleSource host_only visibility policy violation.", Retryable: false},
+			{Code: campaign.ReasonOracleEvaluator, Summary: "Campaign oracle evaluator configuration is missing or invalid for exam mode.", Retryable: false},
+			{Code: campaign.ReasonOracleEvalFailed, Summary: "Campaign oracle evaluator returned a failing verdict for the attempt.", Retryable: false},
+			{Code: campaign.ReasonOracleEvalError, Summary: "Campaign oracle evaluator execution or verdict parsing failed.", Retryable: true},
 			{Code: codes.CampaignLockTimeout, Summary: "Campaign lock acquisition failed (another campaign run/resume likely owns the lock).", Retryable: true},
 		},
 		CampaignSchema: CampaignSchema{
@@ -533,6 +550,10 @@ func Build(version string) Contract {
 			Defaults: CampaignSchemaDefaults{
 				PromptMode:                  campaign.PromptModeDefault,
 				ForbiddenPromptTerms:        campaign.DefaultMissionOnlyForbiddenTerms(),
+				ExamForbiddenPromptTerms:    campaign.DefaultExamForbiddenTerms(),
+				OracleVisibility:            campaign.OracleVisibilityWorkspace,
+				EvaluationMode:              campaign.EvaluationModeNone,
+				EvaluatorKind:               campaign.EvaluatorKindScript,
 				FlowMode:                    campaign.FlowModeSequence,
 				TraceProfile:                campaign.TraceProfileNone,
 				ToolDriverKind:              campaign.ToolDriverShell,
@@ -547,6 +568,9 @@ func Build(version string) Contract {
 			},
 			PolicyErrorCodes: []string{
 				campaign.ReasonPromptModePolicy,
+				campaign.ReasonExamPromptPolicy,
+				campaign.ReasonOracleVisibility,
+				campaign.ReasonOracleEvaluator,
 				campaign.ReasonToolDriverShim,
 				campaign.ReasonGateFailed,
 				campaign.ReasonFirstMissionGate,
@@ -557,16 +581,58 @@ func Build(version string) Contract {
 					Path:        "promptMode",
 					Type:        "string",
 					Required:    false,
-					Enum:        []string{campaign.PromptModeDefault, campaign.PromptModeMissionOnly},
+					Enum:        []string{campaign.PromptModeDefault, campaign.PromptModeMissionOnly, campaign.PromptModeExam},
 					Default:     campaign.PromptModeDefault,
-					Description: "Campaign prompt policy: mission_only blocks harness-term leakage and requires auto result-channel finalization.",
+					Description: "Campaign prompt policy: mission_only blocks harness-term leakage; exam enforces split prompt/oracle architecture + host-side oracle evaluator.",
 				},
 				{
 					Path:        "noContext.forbiddenPromptTerms",
 					Type:        "string[]",
 					Required:    false,
 					Default:     campaign.DefaultMissionOnlyForbiddenTerms(),
-					Description: "Forbidden mission prompt substrings enforced when promptMode=mission_only.",
+					Description: "Forbidden mission prompt substrings enforced when promptMode=mission_only or exam (exam defaults target oracle leakage patterns).",
+				},
+				{
+					Path:        "missionSource.promptSource.path",
+					Type:        "string",
+					Required:    false,
+					Description: "Exam mode prompt source directory. Only this content is sent to the agent.",
+				},
+				{
+					Path:        "missionSource.oracleSource.path",
+					Type:        "string",
+					Required:    false,
+					Description: "Exam mode oracle source directory. Files are mapped to missions by basename and never sent to the agent prompt.",
+				},
+				{
+					Path:        "missionSource.oracleSource.visibility",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.OracleVisibilityWorkspace, campaign.OracleVisibilityHostOnly},
+					Default:     campaign.OracleVisibilityWorkspace,
+					Description: "Oracle visibility policy; host_only rejects oracle paths inside the agent-readable workspace root.",
+				},
+				{
+					Path:        "evaluation.mode",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.EvaluationModeNone, campaign.EvaluationModeOracle},
+					Default:     campaign.EvaluationModeNone,
+					Description: "Campaign evaluation mode; exam requires oracle.",
+				},
+				{
+					Path:        "evaluation.evaluator.kind",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.EvaluatorKindScript},
+					Default:     campaign.EvaluatorKindScript,
+					Description: "Host-side evaluator kind for oracle mode.",
+				},
+				{
+					Path:        "evaluation.evaluator.command",
+					Type:        "string[]",
+					Required:    false,
+					Description: "Host-side evaluator argv invoked per attempt in exam mode.",
 				},
 				{
 					Path:        "pairGate.traceProfile",
@@ -588,7 +654,7 @@ func Build(version string) Contract {
 					Path:        "flows[].runner.toolDriver.shims",
 					Type:        "string[]",
 					Required:    false,
-					Description: "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only with cli_funnel.",
+					Description: "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only or exam with cli_funnel.",
 				},
 				{
 					Path:        "flows[].runner.model",
@@ -617,7 +683,7 @@ func Build(version string) Contract {
 					Required:    false,
 					Enum:        []string{campaign.FinalizationModeStrict, campaign.FinalizationModeAutoFail, campaign.FinalizationModeAutoFromResultJSON},
 					Default:     campaign.FinalizationModeAutoFail,
-					Description: "Attempt finalization policy. mission_only requires auto_from_result_json.",
+					Description: "Attempt finalization policy. mission_only and exam require auto_from_result_json.",
 				},
 				{
 					Path:        "flows[].runner.finalization.resultChannel.kind",

@@ -8,7 +8,7 @@
     "schemaVersion": { "type": "integer", "enum": [1] },
     "campaignId": { "type": "string", "minLength": 1 },
     "outRoot": { "type": "string" },
-    "promptMode": { "type": "string", "enum": ["default", "mission_only"] },
+    "promptMode": { "type": "string", "enum": ["default", "mission_only", "exam"] },
     "totalMissions": { "type": "integer", "minimum": 0 },
     "canaryMissions": { "type": "integer", "minimum": 0 },
     "failFast": { "type": "boolean" },
@@ -16,6 +16,21 @@
       "type": "object",
       "properties": {
         "path": { "type": "string" },
+        "promptSource": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "oracleSource": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "visibility": { "type": "string", "enum": ["workspace", "host_only"] }
+          },
+          "additionalProperties": false
+        },
         "selection": {
           "type": "object",
           "properties": {
@@ -30,6 +45,21 @@
               },
               "additionalProperties": false
             }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "evaluation": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["none", "oracle"] },
+        "evaluator": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["script"] },
+            "command": { "type": "array", "minItems": 1, "items": { "type": "string" } }
           },
           "additionalProperties": false
         }

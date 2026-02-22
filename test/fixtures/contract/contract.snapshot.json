@@ -315,6 +315,29 @@
       ]
     },
     {
+      "id": "oracle.verdict.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/oracle.verdict.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "flowId",
+        "missionId",
+        "attemptId",
+        "attemptDir",
+        "oraclePath",
+        "evaluatorKind",
+        "evaluatorCommand",
+        "promptMode",
+        "ok",
+        "executedAt"
+      ]
+    },
+    {
       "id": "runner.ref.json",
       "kind": "json",
       "schemaVersions": [
@@ -773,9 +796,34 @@
       "retryable": false
     },
     {
+      "code": "ZCL_E_CAMPAIGN_EXAM_PROMPT_VIOLATION",
+      "summary": "Campaign exam prompt policy violation (oracle contamination leakage).",
+      "retryable": false
+    },
+    {
       "code": "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED",
       "summary": "Campaign flow with toolDriver.kind=cli_funnel is missing required shims.",
       "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION",
+      "summary": "Campaign oracleSource host_only visibility policy violation.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED",
+      "summary": "Campaign oracle evaluator configuration is missing or invalid for exam mode.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED",
+      "summary": "Campaign oracle evaluator returned a failing verdict for the attempt.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR",
+      "summary": "Campaign oracle evaluator execution or verdict parsing failed.",
+      "retryable": true
     },
     {
       "code": "ZCL_E_CAMPAIGN_LOCK_TIMEOUT",
@@ -825,6 +873,17 @@
         "tool.calls.jsonl",
         "feedback.json"
       ],
+      "examForbiddenPromptTerms": [
+        "success check",
+        "expected",
+        "oracle",
+        "answer key",
+        "validation logic",
+        "golden answer"
+      ],
+      "oracleVisibility": "workspace",
+      "evaluationMode": "none",
+      "evaluatorKind": "script",
       "flowMode": "sequence",
       "traceProfile": "none",
       "toolDriverKind": "shell",
@@ -843,6 +902,9 @@
     },
     "policyErrorCodes": [
       "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION",
+      "ZCL_E_CAMPAIGN_EXAM_PROMPT_VIOLATION",
+      "ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION",
+      "ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED",
       "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED",
       "ZCL_E_CAMPAIGN_GATE_FAILED",
       "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED",
@@ -855,10 +917,11 @@
         "required": false,
         "enum": [
           "default",
-          "mission_only"
+          "mission_only",
+          "exam"
         ],
         "default": "default",
-        "description": "Campaign prompt policy: mission_only blocks harness-term leakage and requires auto result-channel finalization."
+        "description": "Campaign prompt policy: mission_only blocks harness-term leakage; exam enforces split prompt/oracle architecture + host-side oracle evaluator."
       },
       {
         "path": "noContext.forbiddenPromptTerms",
@@ -873,7 +936,57 @@
           "tool.calls.jsonl",
           "feedback.json"
         ],
-        "description": "Forbidden mission prompt substrings enforced when promptMode=mission_only."
+        "description": "Forbidden mission prompt substrings enforced when promptMode=mission_only or exam (exam defaults target oracle leakage patterns)."
+      },
+      {
+        "path": "missionSource.promptSource.path",
+        "type": "string",
+        "required": false,
+        "description": "Exam mode prompt source directory. Only this content is sent to the agent."
+      },
+      {
+        "path": "missionSource.oracleSource.path",
+        "type": "string",
+        "required": false,
+        "description": "Exam mode oracle source directory. Files are mapped to missions by basename and never sent to the agent prompt."
+      },
+      {
+        "path": "missionSource.oracleSource.visibility",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "workspace",
+          "host_only"
+        ],
+        "default": "workspace",
+        "description": "Oracle visibility policy; host_only rejects oracle paths inside the agent-readable workspace root."
+      },
+      {
+        "path": "evaluation.mode",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "none",
+          "oracle"
+        ],
+        "default": "none",
+        "description": "Campaign evaluation mode; exam requires oracle."
+      },
+      {
+        "path": "evaluation.evaluator.kind",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "script"
+        ],
+        "default": "script",
+        "description": "Host-side evaluator kind for oracle mode."
+      },
+      {
+        "path": "evaluation.evaluator.command",
+        "type": "string[]",
+        "required": false,
+        "description": "Host-side evaluator argv invoked per attempt in exam mode."
       },
       {
         "path": "pairGate.traceProfile",
@@ -904,7 +1017,7 @@
         "path": "flows[].runner.toolDriver.shims",
         "type": "string[]",
         "required": false,
-        "description": "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only with cli_funnel."
+        "description": "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only or exam with cli_funnel."
       },
       {
         "path": "flows[].runner.model",
@@ -947,7 +1060,7 @@
           "auto_from_result_json"
         ],
         "default": "auto_fail",
-        "description": "Attempt finalization policy. mission_only requires auto_from_result_json."
+        "description": "Attempt finalization policy. mission_only and exam require auto_from_result_json."
       },
       {
         "path": "flows[].runner.finalization.resultChannel.kind",

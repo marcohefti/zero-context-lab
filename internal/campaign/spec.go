@@ -26,6 +26,7 @@ const (
 	RunnerTypeCodexAppSrv  = "codex_app_server"
 	PromptModeDefault      = "default"
 	PromptModeMissionOnly  = "mission_only"
+	PromptModeExam         = "exam"
 	RunStatusValid         = "valid"
 	RunStatusInvalid       = "invalid"
 	RunStatusAborted       = "aborted"
@@ -36,7 +37,12 @@ const (
 	ReasonAborted          = codes.CampaignAborted
 	ReasonSemanticFailed   = codes.CampaignSemanticFailed
 	ReasonPromptModePolicy = codes.CampaignPromptModeViolation
+	ReasonExamPromptPolicy = codes.CampaignExamPromptViolation
 	ReasonToolDriverShim   = codes.CampaignToolDriverShimRequired
+	ReasonOracleVisibility = codes.CampaignOracleVisibility
+	ReasonOracleEvaluator  = codes.CampaignOracleEvaluatorMissing
+	ReasonOracleEvalFailed = codes.CampaignOracleEvalFailed
+	ReasonOracleEvalError  = codes.CampaignOracleEvalError
 
 	SelectionModeAll       = "all"
 	SelectionModeMissionID = "mission_id"
@@ -73,6 +79,13 @@ const (
 	ResultChannelFileJSON   = "file_json"
 	ResultChannelStdoutJSON = "stdout_json"
 
+	OracleVisibilityWorkspace = "workspace"
+	OracleVisibilityHostOnly  = "host_only"
+
+	EvaluationModeNone   = "none"
+	EvaluationModeOracle = "oracle"
+	EvaluatorKindScript  = "script"
+
 	DefaultResultChannelPath   = "mission.result.json"
 	DefaultResultChannelMarker = "ZCL_RESULT_JSON:"
 	DefaultMinResultTurn       = 1
@@ -82,13 +95,14 @@ type SpecV1 struct {
 	SchemaVersion int    `json:"schemaVersion" yaml:"schemaVersion"`
 	CampaignID    string `json:"campaignId" yaml:"campaignId"`
 	OutRoot       string `json:"outRoot,omitempty" yaml:"outRoot,omitempty"`
-	PromptMode    string `json:"promptMode,omitempty" yaml:"promptMode,omitempty"` // default|mission_only
+	PromptMode    string `json:"promptMode,omitempty" yaml:"promptMode,omitempty"` // default|mission_only|exam
 
 	TotalMissions  int  `json:"totalMissions,omitempty" yaml:"totalMissions,omitempty"`
 	CanaryMissions int  `json:"canaryMissions,omitempty" yaml:"canaryMissions,omitempty"`
 	FailFast       bool `json:"failFast" yaml:"failFast"`
 
 	MissionSource MissionSourceSpec `json:"missionSource,omitempty" yaml:"missionSource,omitempty"`
+	Evaluation    EvaluationSpec    `json:"evaluation,omitempty" yaml:"evaluation,omitempty"`
 	Execution     ExecutionSpec     `json:"execution,omitempty" yaml:"execution,omitempty"`
 	PairGate      PairGateSpec      `json:"pairGate,omitempty" yaml:"pairGate,omitempty"`
 	Semantic      SemanticGateSpec  `json:"semantic,omitempty" yaml:"semantic,omitempty"`
@@ -105,8 +119,29 @@ type SpecV1 struct {
 }
 
 type MissionSourceSpec struct {
-	Path      string               `json:"path,omitempty" yaml:"path,omitempty"`
-	Selection MissionSelectionSpec `json:"selection,omitempty" yaml:"selection,omitempty"`
+	Path         string               `json:"path,omitempty" yaml:"path,omitempty"`
+	PromptSource PromptSourceSpec     `json:"promptSource,omitempty" yaml:"promptSource,omitempty"`
+	OracleSource OracleSourceSpec     `json:"oracleSource,omitempty" yaml:"oracleSource,omitempty"`
+	Selection    MissionSelectionSpec `json:"selection,omitempty" yaml:"selection,omitempty"`
+}
+
+type PromptSourceSpec struct {
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+}
+
+type OracleSourceSpec struct {
+	Path       string `json:"path,omitempty" yaml:"path,omitempty"`
+	Visibility string `json:"visibility,omitempty" yaml:"visibility,omitempty"` // workspace|host_only
+}
+
+type EvaluationSpec struct {
+	Mode      string        `json:"mode,omitempty" yaml:"mode,omitempty"` // none|oracle
+	Evaluator EvaluatorSpec `json:"evaluator,omitempty" yaml:"evaluator,omitempty"`
+}
+
+type EvaluatorSpec struct {
+	Kind    string   `json:"kind,omitempty" yaml:"kind,omitempty"` // script
+	Command []string `json:"command,omitempty" yaml:"command,omitempty"`
 }
 
 type MissionSelectionSpec struct {
@@ -246,6 +281,8 @@ type ParsedSpec struct {
 	FlowSuites map[string]suite.ParsedSuite
 	// MissionIndexes is the canonical campaign selection/order after missionSource.selection.
 	MissionIndexes []int
+	// OracleByMissionID maps mission ids to host-side oracle file paths in exam mode.
+	OracleByMissionID map[string]string
 }
 
 type PromptModeViolation struct {
@@ -261,16 +298,17 @@ type ExecutionModeSummary struct {
 }
 
 type PromptModeViolationError struct {
+	Code       string                `json:"code,omitempty"`
 	PromptMode string                `json:"promptMode"`
 	Violations []PromptModeViolation `json:"violations"`
 }
 
 func (e *PromptModeViolationError) Error() string {
 	if e == nil || len(e.Violations) == 0 {
-		return "promptMode mission_only violation"
+		return "prompt mode violation"
 	}
 	v := e.Violations[0]
-	return fmt.Sprintf("promptMode mission_only violation: flow=%s mission=%s index=%d term=%q", v.FlowID, v.MissionID, v.MissionIndex, v.Term)
+	return fmt.Sprintf("prompt mode violation: mode=%s flow=%s mission=%s index=%d term=%q", e.PromptMode, v.FlowID, v.MissionID, v.MissionIndex, v.Term)
 }
 
 type ToolDriverShimRequirement struct {
@@ -299,6 +337,32 @@ func (e *ToolDriverShimRequirementError) Error() string {
 		strings.Join(v.RequiredOneOf, " or "),
 		v.Snippet,
 	)
+}
+
+type OraclePolicyViolation struct {
+	Field       string `json:"field"`
+	PromptMode  string `json:"promptMode,omitempty"`
+	Visibility  string `json:"visibility,omitempty"`
+	OraclePath  string `json:"oraclePath,omitempty"`
+	AgentRoot   string `json:"agentRoot,omitempty"`
+	Description string `json:"description"`
+}
+
+type OraclePolicyViolationError struct {
+	Code      string                `json:"code"`
+	Violation OraclePolicyViolation `json:"violation"`
+}
+
+func (e *OraclePolicyViolationError) Error() string {
+	if e == nil {
+		return "oracle policy violation"
+	}
+	v := e.Violation
+	msg := strings.TrimSpace(v.Description)
+	if msg == "" {
+		msg = "oracle policy violation"
+	}
+	return msg
 }
 
 func ParseSpecFile(path string) (ParsedSpec, error) {
@@ -337,16 +401,49 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		spec.PromptMode = PromptModeDefault
 	}
 	if !isValidPromptMode(spec.PromptMode) {
-		return ParsedSpec{}, fmt.Errorf("invalid promptMode (expected %s|%s)", PromptModeDefault, PromptModeMissionOnly)
+		return ParsedSpec{}, fmt.Errorf("invalid promptMode (expected %s|%s|%s)", PromptModeDefault, PromptModeMissionOnly, PromptModeExam)
 	}
 	spec.NoContext.ForbiddenPromptTerms = normalizeTerms(spec.NoContext.ForbiddenPromptTerms)
 	if spec.PromptMode == PromptModeMissionOnly && len(spec.NoContext.ForbiddenPromptTerms) == 0 {
 		spec.NoContext.ForbiddenPromptTerms = defaultMissionOnlyForbiddenTerms()
 	}
+	if spec.PromptMode == PromptModeExam && len(spec.NoContext.ForbiddenPromptTerms) == 0 {
+		spec.NoContext.ForbiddenPromptTerms = defaultExamForbiddenTerms()
+	}
 	spec.MissionSource.Path = strings.TrimSpace(spec.MissionSource.Path)
 	if spec.MissionSource.Path != "" && !filepath.IsAbs(spec.MissionSource.Path) {
 		spec.MissionSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.Path))
 	}
+	spec.MissionSource.PromptSource.Path = strings.TrimSpace(spec.MissionSource.PromptSource.Path)
+	if spec.MissionSource.PromptSource.Path != "" && !filepath.IsAbs(spec.MissionSource.PromptSource.Path) {
+		spec.MissionSource.PromptSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.PromptSource.Path))
+	}
+	spec.MissionSource.OracleSource.Path = strings.TrimSpace(spec.MissionSource.OracleSource.Path)
+	if spec.MissionSource.OracleSource.Path != "" && !filepath.IsAbs(spec.MissionSource.OracleSource.Path) {
+		spec.MissionSource.OracleSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.OracleSource.Path))
+	}
+	spec.MissionSource.OracleSource.Visibility = strings.ToLower(strings.TrimSpace(spec.MissionSource.OracleSource.Visibility))
+	if spec.MissionSource.OracleSource.Visibility == "" {
+		spec.MissionSource.OracleSource.Visibility = OracleVisibilityWorkspace
+	}
+	if !isValidOracleVisibility(spec.MissionSource.OracleSource.Visibility) {
+		return ParsedSpec{}, fmt.Errorf("invalid missionSource.oracleSource.visibility (expected %s|%s)", OracleVisibilityWorkspace, OracleVisibilityHostOnly)
+	}
+	spec.Evaluation.Mode = strings.ToLower(strings.TrimSpace(spec.Evaluation.Mode))
+	if spec.Evaluation.Mode == "" {
+		spec.Evaluation.Mode = EvaluationModeNone
+	}
+	if !isValidEvaluationMode(spec.Evaluation.Mode) {
+		return ParsedSpec{}, fmt.Errorf("invalid evaluation.mode (expected %s|%s)", EvaluationModeNone, EvaluationModeOracle)
+	}
+	spec.Evaluation.Evaluator.Kind = strings.ToLower(strings.TrimSpace(spec.Evaluation.Evaluator.Kind))
+	if spec.Evaluation.Mode == EvaluationModeOracle && spec.Evaluation.Evaluator.Kind == "" {
+		spec.Evaluation.Evaluator.Kind = EvaluatorKindScript
+	}
+	if spec.Evaluation.Evaluator.Kind != "" && !isValidEvaluatorKind(spec.Evaluation.Evaluator.Kind) {
+		return ParsedSpec{}, fmt.Errorf("invalid evaluation.evaluator.kind (expected %s)", EvaluatorKindScript)
+	}
+	spec.Evaluation.Evaluator.Command = normalizeCommand(spec.Evaluation.Evaluator.Command)
 	spec.Semantic.RulesPath = strings.TrimSpace(spec.Semantic.RulesPath)
 	if spec.Semantic.RulesPath != "" && !filepath.IsAbs(spec.Semantic.RulesPath) {
 		spec.Semantic.RulesPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Semantic.RulesPath))
@@ -399,22 +496,118 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	}
 
 	needsMissionPack := false
+	allFlowsOmitSuiteFile := true
 	for i := range spec.Flows {
 		if strings.TrimSpace(spec.Flows[i].SuiteFile) == "" {
 			needsMissionPack = true
-			break
+			continue
 		}
+		allFlowsOmitSuiteFile = false
 	}
+	if spec.PromptMode == PromptModeExam {
+		if strings.TrimSpace(spec.MissionSource.Path) != "" {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonExamPromptPolicy,
+				Violation: OraclePolicyViolation{
+					Field:       "missionSource.path",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires missionSource.promptSource.path and forbids missionSource.path",
+				},
+			}
+		}
+		if strings.TrimSpace(spec.MissionSource.PromptSource.Path) == "" {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonExamPromptPolicy,
+				Violation: OraclePolicyViolation{
+					Field:       "missionSource.promptSource.path",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires missionSource.promptSource.path",
+				},
+			}
+		}
+		if strings.TrimSpace(spec.MissionSource.OracleSource.Path) == "" {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonOracleEvaluator,
+				Violation: OraclePolicyViolation{
+					Field:       "missionSource.oracleSource.path",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires missionSource.oracleSource.path",
+				},
+			}
+		}
+		if spec.Evaluation.Mode != EvaluationModeOracle {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonOracleEvaluator,
+				Violation: OraclePolicyViolation{
+					Field:       "evaluation.mode",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires evaluation.mode=oracle",
+				},
+			}
+		}
+		if spec.Evaluation.Evaluator.Kind != EvaluatorKindScript || len(spec.Evaluation.Evaluator.Command) == 0 {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonOracleEvaluator,
+				Violation: OraclePolicyViolation{
+					Field:       "evaluation.evaluator.command",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires evaluation.evaluator.kind=script and non-empty evaluation.evaluator.command",
+				},
+			}
+		}
+		if !allFlowsOmitSuiteFile {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonExamPromptPolicy,
+				Violation: OraclePolicyViolation{
+					Field:       "flows[].suiteFile",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires missionSource prompt/oracle split; remove flows[].suiteFile",
+				},
+			}
+		}
+		if spec.MissionSource.OracleSource.Visibility == OracleVisibilityHostOnly {
+			agentRoot := resolveAgentReadableRoot(absPath)
+			within, cerr := pathWithinRoot(agentRoot, spec.MissionSource.OracleSource.Path)
+			if cerr != nil {
+				return ParsedSpec{}, cerr
+			}
+			if within {
+				return ParsedSpec{}, &OraclePolicyViolationError{
+					Code: ReasonOracleVisibility,
+					Violation: OraclePolicyViolation{
+						Field:       "missionSource.oracleSource.path",
+						PromptMode:  spec.PromptMode,
+						Visibility:  spec.MissionSource.OracleSource.Visibility,
+						OraclePath:  spec.MissionSource.OracleSource.Path,
+						AgentRoot:   agentRoot,
+						Description: "oracleSource.visibility=host_only requires missionSource.oracleSource.path outside the agent-readable workspace root",
+					},
+				}
+			}
+		}
+		needsMissionPack = true
+	}
+
 	var missionPackSuite *suite.ParsedSuite
+	oracleByMissionID := map[string]string{}
 	if needsMissionPack {
-		if strings.TrimSpace(spec.MissionSource.Path) == "" {
-			return ParsedSpec{}, fmt.Errorf("missionSource.path is required when any flow omits suiteFile")
+		if spec.PromptMode == PromptModeExam {
+			loaded, err := LoadMissionPackSplit(spec.MissionSource.PromptSource.Path, spec.MissionSource.OracleSource.Path, spec.CampaignID)
+			if err != nil {
+				return ParsedSpec{}, err
+			}
+			missionPackSuite = &loaded.Parsed
+			oracleByMissionID = loaded.OracleByMissionID
+		} else {
+			if strings.TrimSpace(spec.MissionSource.Path) == "" {
+				return ParsedSpec{}, fmt.Errorf("missionSource.path is required when any flow omits suiteFile")
+			}
+			loaded, err := LoadMissionPack(spec.MissionSource.Path, spec.CampaignID)
+			if err != nil {
+				return ParsedSpec{}, err
+			}
+			missionPackSuite = &loaded
 		}
-		loaded, err := LoadMissionPack(spec.MissionSource.Path, spec.CampaignID)
-		if err != nil {
-			return ParsedSpec{}, err
-		}
-		missionPackSuite = &loaded
 	}
 
 	flowSuites := make(map[string]suite.ParsedSuite, len(spec.Flows))
@@ -558,9 +751,9 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON && f.Runner.Finalization.ResultChannel.Kind == ResultChannelNone {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.mode=%s requires runner.finalization.resultChannel.kind", f.FlowID, FinalizationModeAutoFromResultJSON)
 		}
-		if spec.PromptMode == PromptModeMissionOnly {
+		if spec.PromptMode == PromptModeMissionOnly || spec.PromptMode == PromptModeExam {
 			if f.Runner.Finalization.Mode != FinalizationModeAutoFromResultJSON {
-				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=mission_only requires runner.finalization.mode=%s", f.FlowID, FinalizationModeAutoFromResultJSON)
+				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=%s requires runner.finalization.mode=%s", f.FlowID, spec.PromptMode, FinalizationModeAutoFromResultJSON)
 			}
 			if f.Runner.ToolDriver.Kind == ToolDriverCLIFunnel && len(f.Runner.Shims) == 0 {
 				return ParsedSpec{}, &ToolDriverShimRequirementError{
@@ -644,16 +837,22 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		return ParsedSpec{}, fmt.Errorf("totalMissions must be >= 1 when set")
 	}
 	parsed := ParsedSpec{
-		SpecPath:       absPath,
-		Spec:           spec,
-		BaseSuite:      base,
-		FlowSuites:     flowSuites,
-		MissionIndexes: indexes,
+		SpecPath:          absPath,
+		Spec:              spec,
+		BaseSuite:         base,
+		FlowSuites:        flowSuites,
+		MissionIndexes:    indexes,
+		OracleByMissionID: oracleByMissionID,
 	}
-	if spec.PromptMode == PromptModeMissionOnly {
+	if spec.PromptMode == PromptModeMissionOnly || spec.PromptMode == PromptModeExam {
 		violations := EvaluatePromptModeViolations(parsed)
 		if len(violations) > 0 {
+			code := ReasonPromptModePolicy
+			if spec.PromptMode == PromptModeExam {
+				code = ReasonExamPromptPolicy
+			}
 			return ParsedSpec{}, &PromptModeViolationError{
+				Code:       code,
 				PromptMode: spec.PromptMode,
 				Violations: violations,
 			}
@@ -758,12 +957,16 @@ func WindowMissionIndexes(indexes []int, missionOffset int, totalMissions int) (
 }
 
 func EvaluatePromptModeViolations(parsed ParsedSpec) []PromptModeViolation {
-	if parsed.Spec.PromptMode != PromptModeMissionOnly {
+	if parsed.Spec.PromptMode != PromptModeMissionOnly && parsed.Spec.PromptMode != PromptModeExam {
 		return nil
 	}
 	terms := parsed.Spec.NoContext.ForbiddenPromptTerms
 	if len(terms) == 0 {
-		terms = defaultMissionOnlyForbiddenTerms()
+		if parsed.Spec.PromptMode == PromptModeExam {
+			terms = defaultExamForbiddenTerms()
+		} else {
+			terms = defaultMissionOnlyForbiddenTerms()
+		}
 	}
 	if len(terms) == 0 || len(parsed.MissionIndexes) == 0 || len(parsed.FlowSuites) == 0 {
 		return nil
@@ -831,9 +1034,20 @@ func defaultMissionOnlyForbiddenTerms() []string {
 	}
 }
 
+func defaultExamForbiddenTerms() []string {
+	return []string{
+		"success check",
+		"expected",
+		"oracle",
+		"answer key",
+		"validation logic",
+		"golden answer",
+	}
+}
+
 func ResolveExecutionMode(parsed ParsedSpec) ExecutionModeSummary {
 	out := ExecutionModeSummary{Mode: "config_driven"}
-	if parsed.Spec.PromptMode != PromptModeMissionOnly {
+	if parsed.Spec.PromptMode != PromptModeMissionOnly && parsed.Spec.PromptMode != PromptModeExam {
 		return out
 	}
 	for _, flow := range parsed.Spec.Flows {
@@ -852,6 +1066,13 @@ func ResolveExecutionMode(parsed ParsedSpec) ExecutionModeSummary {
 
 func DefaultMissionOnlyForbiddenTerms() []string {
 	terms := defaultMissionOnlyForbiddenTerms()
+	out := make([]string, len(terms))
+	copy(out, terms)
+	return out
+}
+
+func DefaultExamForbiddenTerms() []string {
+	terms := defaultExamForbiddenTerms()
 	out := make([]string, len(terms))
 	copy(out, terms)
 	return out
@@ -1057,7 +1278,34 @@ func isValidRunnerType(v string) bool {
 
 func isValidPromptMode(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
-	case PromptModeDefault, PromptModeMissionOnly:
+	case PromptModeDefault, PromptModeMissionOnly, PromptModeExam:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidOracleVisibility(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case OracleVisibilityWorkspace, OracleVisibilityHostOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidEvaluationMode(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case EvaluationModeNone, EvaluationModeOracle:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidEvaluatorKind(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case EvaluatorKindScript:
 		return true
 	default:
 		return false
@@ -1116,6 +1364,57 @@ func isValidTraceProfile(v string) bool {
 	default:
 		return false
 	}
+}
+
+func resolveAgentReadableRoot(specPath string) string {
+	root := filepath.Dir(strings.TrimSpace(specPath))
+	cur := root
+	for {
+		gitDir := filepath.Join(cur, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return root
+}
+
+func pathWithinRoot(root string, target string) (bool, error) {
+	root = strings.TrimSpace(root)
+	target = strings.TrimSpace(target)
+	if root == "" || target == "" {
+		return false, nil
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false, err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false, err
+	}
+	if evalRoot, err := filepath.EvalSymlinks(rootAbs); err == nil && strings.TrimSpace(evalRoot) != "" {
+		rootAbs = evalRoot
+	}
+	if evalTarget, err := filepath.EvalSymlinks(targetAbs); err == nil && strings.TrimSpace(evalTarget) != "" {
+		targetAbs = evalTarget
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return false, err
+	}
+	if rel == "." {
+		return true, nil
+	}
+	prefix := ".." + string(os.PathSeparator)
+	if rel == ".." || strings.HasPrefix(rel, prefix) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func FormatSelectionKey(index int, missionID string) string {

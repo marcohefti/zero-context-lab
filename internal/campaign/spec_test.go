@@ -657,3 +657,184 @@ flows:
 		t.Fatalf("expected runner.type validation error, got %v", err)
 	}
 }
+
+func TestParseSpecFile_ExamModeSplitSourcesAndEvaluator(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	oracleDir := filepath.Join(dir, "oracles-host")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Complete the task and return JSON proof."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("oracle content"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles-host
+    visibility: workspace
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["node", "./scripts/eval-mission.mjs"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if ps.Spec.PromptMode != PromptModeExam {
+		t.Fatalf("expected promptMode=%q got %q", PromptModeExam, ps.Spec.PromptMode)
+	}
+	if len(ps.FlowSuites["flow-a"].Suite.Missions) != 1 {
+		t.Fatalf("expected one mission, got %d", len(ps.FlowSuites["flow-a"].Suite.Missions))
+	}
+	if got := ps.OracleByMissionID["m1"]; got == "" {
+		t.Fatalf("expected oracle mapping for m1, got empty map: %+v", ps.OracleByMissionID)
+	}
+	if len(ps.Spec.NoContext.ForbiddenPromptTerms) == 0 {
+		t.Fatalf("expected exam default forbidden prompt terms")
+	}
+}
+
+func TestParseSpecFile_ExamModeRejectsPromptOracleLeak(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	oracleDir := filepath.Join(dir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve it.\n\nSuccess Check:\n- Return exact value."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("oracle content"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-leak
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["node", "./scripts/eval-mission.mjs"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	_, err := ParseSpecFile(specPath)
+	if err == nil {
+		t.Fatalf("expected exam prompt contamination violation")
+	}
+	var promptErr *PromptModeViolationError
+	if !errors.As(err, &promptErr) {
+		t.Fatalf("expected typed prompt violation error, got %v", err)
+	}
+	if promptErr.Code != ReasonExamPromptPolicy {
+		t.Fatalf("expected code %q, got %q", ReasonExamPromptPolicy, promptErr.Code)
+	}
+	if len(promptErr.Violations) == 0 || strings.ToLower(promptErr.Violations[0].Term) != "success check" {
+		t.Fatalf("unexpected violations: %+v", promptErr.Violations)
+	}
+}
+
+func TestParseSpecFile_ExamModeHostOnlyRejectsWorkspaceOraclePath(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	oracleDir := filepath.Join(dir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Do task."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("oracle content"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-host-only
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+    visibility: host_only
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["node", "./scripts/eval-mission.mjs"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	_, err := ParseSpecFile(specPath)
+	if err == nil {
+		t.Fatalf("expected host_only oracle visibility violation")
+	}
+	var policyErr *OraclePolicyViolationError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected typed oracle policy violation, got %v", err)
+	}
+	if policyErr.Code != ReasonOracleVisibility {
+		t.Fatalf("expected code %q, got %q", ReasonOracleVisibility, policyErr.Code)
+	}
+	if policyErr.Violation.Visibility != OracleVisibilityHostOnly {
+		t.Fatalf("expected visibility host_only, got %+v", policyErr.Violation)
+	}
+}
