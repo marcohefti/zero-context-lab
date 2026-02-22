@@ -144,6 +144,10 @@ func (s *stringListFlag) Set(v string) error {
 }
 
 func (r Runner) runSuiteRun(args []string) int {
+	return r.runSuiteRunWithEnv(args, nil)
+}
+
+func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]string) int {
 	fs := flag.NewFlagSet("suite run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -406,6 +410,7 @@ func (r Runner) runSuiteRun(args []string) int {
 		IsolationModel:   effectiveIsolation,
 		StderrWriter:     errWriter,
 		Progress:         progress,
+		ExtraEnv:         copyStringMap(extraAttemptEnv),
 	}
 	if progress != nil {
 		if err := progress.Emit(suiteRunProgressEvent{
@@ -608,6 +613,7 @@ type suiteRunExecOpts struct {
 	IsolationModel   string
 	StderrWriter     io.Writer
 	Progress         *suiteRunProgressEmitter
+	ExtraEnv         map[string]string
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
@@ -633,6 +639,13 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	env := map[string]string{}
 	for k, v := range pm.Env {
 		env[k] = v
+	}
+	for k, v := range opts.ExtraEnv {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		env[key] = v
 	}
 	if p := filepath.Join(pm.OutDirAbs, "prompt.txt"); fileExists(p) {
 		env["ZCL_PROMPT_PATH"] = p
@@ -800,6 +813,17 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		})
 	}
 	return ar, harnessErr
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {

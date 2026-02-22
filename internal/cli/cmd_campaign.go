@@ -108,6 +108,9 @@ func (r Runner) runCampaignLint(args []string) int {
 		"specPath":      parsed.SpecPath,
 		"outRoot":       resolvedOutRoot,
 		"flows":         len(parsed.Spec.Flows),
+		"execution": map[string]any{
+			"flowMode": parsed.Spec.Execution.FlowMode,
+		},
 		"missions": map[string]any{
 			"selectedTotal": len(parsed.MissionIndexes),
 			"selectionMode": parsed.Spec.MissionSource.Selection.Mode,
@@ -116,6 +119,7 @@ func (r Runner) runCampaignLint(args []string) int {
 		"pairGate": map[string]any{
 			"enabled":                   parsed.Spec.PairGateEnabled(),
 			"stopOnFirstMissionFailure": parsed.Spec.PairGate.StopOnFirstMissionFailure,
+			"traceProfile":              parsed.Spec.PairGate.TraceProfile,
 		},
 		"semantic": map[string]any{
 			"enabled":   parsed.Spec.Semantic.Enabled,
@@ -427,13 +431,8 @@ func (r Runner) runCampaignReport(args []string) int {
 		return 1
 	}
 	rep := campaign.BuildReport(st)
-	reportPath := campaign.ReportPath(m.OutRoot, cid)
-	if strings.TrimSpace(st.SpecPath) != "" {
-		if parsed, err := campaign.ParseSpecFile(st.SpecPath); err == nil && strings.TrimSpace(parsed.Spec.Output.ReportPath) != "" {
-			reportPath = parsed.Spec.Output.ReportPath
-		}
-	}
-	if err := store.WriteJSONAtomic(reportPath, rep); err != nil {
+	sum := campaign.BuildSummary(st)
+	if err := r.persistCampaignArtifacts(st); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -452,7 +451,7 @@ func (r Runner) runCampaignReport(args []string) int {
 	}
 	fmts := parseFormatList(*format)
 	if fmts["md"] {
-		fmt.Fprint(r.Stdout, formatCampaignReportMarkdown(rep))
+		fmt.Fprint(r.Stdout, formatCampaignResultsMarkdown(sum))
 		return 0
 	}
 	fmt.Fprintf(r.Stdout, "campaign report: status=%s gates=%d/%d\n", rep.Status, rep.GatesPassed, rep.GatesPassed+rep.GatesFailed)
@@ -611,16 +610,27 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return campaign.RunStateV1{}, 1
 	}
-	if err := r.persistCampaignReport(engineResult.State); err != nil {
+	if err := r.persistCampaignArtifacts(engineResult.State); err != nil {
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return engineResult.State, 1
 	}
 	return engineResult.State, engineResult.Exit
 }
 
-func (r Runner) persistCampaignReport(st campaign.RunStateV1) error {
+func (r Runner) persistCampaignArtifacts(st campaign.RunStateV1) error {
 	rep := campaign.BuildReport(st)
-	return store.WriteJSONAtomic(campaign.ReportPath(st.OutRoot, st.CampaignID), rep)
+	sum := campaign.BuildSummary(st)
+	reportPath, summaryPath, resultsMDPath := resolveCampaignOutputPaths(st)
+	if err := store.WriteJSONAtomic(reportPath, rep); err != nil {
+		return err
+	}
+	if err := store.WriteJSONAtomic(summaryPath, sum); err != nil {
+		return err
+	}
+	if err := store.WriteFileAtomic(resultsMDPath, []byte(formatCampaignResultsMarkdown(sum))); err != nil {
+		return err
+	}
+	return nil
 }
 
 func resolveCampaignInvalidRunPolicy(st campaign.RunStateV1) resolvedInvalidRunPolicy {
@@ -651,6 +661,29 @@ func resolveCampaignInvalidRunPolicy(st campaign.RunStateV1) resolvedInvalidRunP
 		pol.ForceFlag = strings.TrimSpace(src.ForceFlag)
 	}
 	return pol
+}
+
+func resolveCampaignOutputPaths(st campaign.RunStateV1) (reportPath string, summaryPath string, resultsMDPath string) {
+	reportPath = campaign.ReportPath(st.OutRoot, st.CampaignID)
+	summaryPath = campaign.SummaryPath(st.OutRoot, st.CampaignID)
+	resultsMDPath = campaign.ResultsMDPath(st.OutRoot, st.CampaignID)
+	if strings.TrimSpace(st.SpecPath) == "" {
+		return reportPath, summaryPath, resultsMDPath
+	}
+	parsed, err := campaign.ParseSpecFile(st.SpecPath)
+	if err != nil {
+		return reportPath, summaryPath, resultsMDPath
+	}
+	if strings.TrimSpace(parsed.Spec.Output.ReportPath) != "" {
+		reportPath = parsed.Spec.Output.ReportPath
+	}
+	if strings.TrimSpace(parsed.Spec.Output.SummaryPath) != "" {
+		summaryPath = parsed.Spec.Output.SummaryPath
+	}
+	if strings.TrimSpace(parsed.Spec.Output.ResultsMDPath) != "" {
+		resultsMDPath = parsed.Spec.Output.ResultsMDPath
+	}
+	return reportPath, summaryPath, resultsMDPath
 }
 
 func (r Runner) runCampaignHook(ctx context.Context, command string) error {
@@ -730,6 +763,13 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 					gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_TIMEOUT_GATE")
 				}
 			}
+			if parsed.Spec.PairGateEnabled() {
+				profileFindings, err := campaign.EvaluateTraceProfile(parsed.Spec.PairGate.TraceProfile, ar.AttemptDir)
+				if err != nil {
+					return mg, err
+				}
+				gateErrors = append(gateErrors, profileFindings...)
+			}
 		}
 		if parsed.Spec.Semantic.Enabled {
 			if strings.TrimSpace(ar.AttemptDir) == "" {
@@ -775,8 +815,12 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 }
 
 func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment) (campaign.FlowRunV1, *suiteRunSummary, error) {
+	suiteFile, err := materializeCampaignFlowSuite(parsed, outRoot, flow)
+	if err != nil {
+		return campaign.FlowRunV1{}, nil, err
+	}
 	args := []string{
-		"--file", flow.SuiteFile,
+		"--file", suiteFile,
 		"--out-root", outRoot,
 		"--campaign-id", parsed.Spec.CampaignID,
 		"--session-isolation", flow.Runner.SessionIsolation,
@@ -815,6 +859,8 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		}
 		env[k] = v
 	}
+	env["ZCL_CAMPAIGN_RUNNER_TYPE"] = strings.TrimSpace(flow.Runner.Type)
+	env["ZCL_FRESH_AGENT_PER_ATTEMPT"] = "1"
 	if flow.Runner.MCP.MaxToolCalls > 0 {
 		env["ZCL_MCP_MAX_TOOL_CALLS"] = strconv.FormatInt(flow.Runner.MCP.MaxToolCalls, 10)
 	}
@@ -833,14 +879,12 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		Stdout:  &stdout,
 		Stderr:  io.MultiWriter(r.Stderr, &stderr),
 	}
-	exit := withTempEnv(env, func() int {
-		return sub.runSuiteRun(args)
-	})
+	exit := sub.runSuiteRunWithEnv(args, env)
 
 	fr := campaign.FlowRunV1{
 		FlowID:      flow.FlowID,
 		RunnerType:  flow.Runner.Type,
-		SuiteFile:   flow.SuiteFile,
+		SuiteFile:   suiteFile,
 		ExitCode:    exit,
 		OK:          exit == 0,
 		ErrorOutput: trimText(stderr.String(), 4096),
@@ -909,6 +953,25 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	return fr, nil, nil
 }
 
+func materializeCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec) (string, error) {
+	if strings.TrimSpace(flow.SuiteFile) != "" {
+		return flow.SuiteFile, nil
+	}
+	ps, ok := parsed.FlowSuites[flow.FlowID]
+	if !ok {
+		return "", fmt.Errorf("flow %s: missing parsed suite", flow.FlowID)
+	}
+	base := filepath.Join(outRoot, "campaigns", parsed.Spec.CampaignID, "generated-suites")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(base, flow.FlowID+".suite.json")
+	if err := store.WriteJSONAtomic(path, ps.Suite); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func readAttemptReport(attemptDir string) (schema.AttemptReportJSONV1, error) {
 	path := filepath.Join(attemptDir, "attempt.report.json")
 	raw, err := os.ReadFile(path)
@@ -920,35 +983,6 @@ func readAttemptReport(attemptDir string) (schema.AttemptReportJSONV1, error) {
 		return schema.AttemptReportJSONV1{}, err
 	}
 	return rep, nil
-}
-
-func withTempEnv(env map[string]string, fn func() int) int {
-	if len(env) == 0 {
-		return fn()
-	}
-	type prev struct {
-		value string
-		set   bool
-	}
-	old := map[string]prev{}
-	for k, v := range env {
-		if cur, ok := os.LookupEnv(k); ok {
-			old[k] = prev{value: cur, set: true}
-		} else {
-			old[k] = prev{}
-		}
-		_ = os.Setenv(k, v)
-	}
-	defer func() {
-		for k, p := range old {
-			if p.set {
-				_ = os.Setenv(k, p.value)
-				continue
-			}
-			_ = os.Unsetenv(k)
-		}
-	}()
-	return fn()
 }
 
 func trimText(s string, max int) string {
@@ -985,23 +1019,52 @@ func parseFormatList(v string) map[string]bool {
 	return out
 }
 
-func formatCampaignReportMarkdown(rep campaign.ReportV1) string {
+func formatCampaignResultsMarkdown(sum campaign.SummaryV1) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Campaign Report\n\n")
-	fmt.Fprintf(&b, "- campaignId: `%s`\n", rep.CampaignID)
-	fmt.Fprintf(&b, "- runId: `%s`\n", rep.RunID)
-	fmt.Fprintf(&b, "- status: `%s`\n", rep.Status)
-	if len(rep.ReasonCodes) > 0 {
-		fmt.Fprintf(&b, "- reasonCodes: `%s`\n", strings.Join(rep.ReasonCodes, "`, `"))
+	fmt.Fprintf(&b, "# RESULTS\n\n")
+	fmt.Fprintf(&b, "- campaignId: `%s`\n", sum.CampaignID)
+	fmt.Fprintf(&b, "- runId: `%s`\n", sum.RunID)
+	fmt.Fprintf(&b, "- status: `%s`\n", sum.Status)
+	if len(sum.ReasonCodes) > 0 {
+		fmt.Fprintf(&b, "- reasonCodes: `%s`\n", strings.Join(sum.ReasonCodes, "`, `"))
 	}
-	fmt.Fprintf(&b, "- missionsCompleted: `%d/%d`\n", rep.MissionsCompleted, rep.TotalMissions)
-	fmt.Fprintf(&b, "- gatesPassed: `%d`\n", rep.GatesPassed)
-	fmt.Fprintf(&b, "- gatesFailed: `%d`\n\n", rep.GatesFailed)
-	if len(rep.Flows) > 0 {
+	fmt.Fprintf(&b, "- missionsCompleted: `%d/%d`\n", sum.MissionsCompleted, sum.TotalMissions)
+	fmt.Fprintf(&b, "- claimedMissionsOk: `%d`\n", sum.ClaimedMissionsOK)
+	fmt.Fprintf(&b, "- verifiedMissionsOk: `%d`\n", sum.VerifiedMissionsOK)
+	fmt.Fprintf(&b, "- mismatchCount: `%d`\n", sum.MismatchCount)
+	fmt.Fprintf(&b, "- gatesPassed: `%d`\n", sum.GatesPassed)
+	fmt.Fprintf(&b, "- gatesFailed: `%d`\n\n", sum.GatesFailed)
+	if len(sum.TopFailureCodes) > 0 {
+		fmt.Fprintf(&b, "## Top Failure Codes\n\n")
+		for _, f := range sum.TopFailureCodes {
+			fmt.Fprintf(&b, "- `%s`: %d\n", f.Code, f.Count)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	if len(sum.Missions) > 0 {
+		fmt.Fprintf(&b, "## Per-Mission A/B\n\n")
+		for _, m := range sum.Missions {
+			fmt.Fprintf(&b, "- `%d:%s` claimed=%v verified=%v mismatch=%v\n", m.MissionIndex, m.MissionID, m.ClaimedOK, m.VerifiedOK, m.Mismatch)
+			for _, f := range m.Flows {
+				fmt.Fprintf(&b, "  - `%s` status=%s attempt=%s\n", f.FlowID, f.Status, strings.TrimSpace(f.AttemptID))
+			}
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	if len(sum.Flows) > 0 {
 		fmt.Fprintf(&b, "## Flows\n\n")
-		for _, f := range rep.Flows {
+		for _, f := range sum.Flows {
 			fmt.Fprintf(&b, "- `%s` (%s): attempts=%d valid=%d invalid=%d skipped=%d infra_failed=%d\n", f.FlowID, f.RunnerType, f.AttemptsTotal, f.Valid, f.Invalid, f.Skipped, f.InfraFailed)
 		}
+		fmt.Fprintf(&b, "\n")
+	}
+	fmt.Fprintf(&b, "## Evidence Paths\n\n")
+	fmt.Fprintf(&b, "- runState: `%s`\n", sum.EvidencePaths.RunStatePath)
+	fmt.Fprintf(&b, "- report: `%s`\n", sum.EvidencePaths.ReportPath)
+	fmt.Fprintf(&b, "- summary: `%s`\n", sum.EvidencePaths.SummaryPath)
+	fmt.Fprintf(&b, "- resultsMd: `%s`\n", sum.EvidencePaths.ResultsMDPath)
+	for _, p := range sum.EvidencePaths.AttemptDirs {
+		fmt.Fprintf(&b, "- attemptDir: `%s`\n", p)
 	}
 	return b.String()
 }

@@ -552,6 +552,11 @@ Event example:
 }
 ```
 
+Status values include:
+- attempt statuses (`valid|invalid|skipped|infra_failed`)
+- gate checkpoints (`gate_pass|gate_fail`)
+- cleanup lifecycle checkpoints (`cleanup_before_mission_*`, `cleanup_after_mission_*`, `cleanup_on_failure_*`)
+
 ## `campaign.report.json` (optional; v1)
 
 Path: `.zcl/campaigns/<campaignId>/campaign.report.json`
@@ -575,6 +580,59 @@ Example:
 ```
 
 `zcl campaign report` refuses export when `status` is `invalid|aborted` unless `--force` is set.
+
+## `campaign.summary.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.summary.json`
+
+Written by:
+- `zcl campaign run|canary|resume`
+- `zcl campaign report`
+
+Purpose:
+- Operator-focused machine summary for comparison workflows.
+- Includes claimed vs verified counts, mismatch totals, per-mission A/B flow results, top failure codes, and evidence paths.
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "runId": "20260222-120000Z-a1b2c3",
+  "status": "invalid",
+  "reasonCodes": ["ZCL_E_CAMPAIGN_GATE_FAILED"],
+  "updatedAt": "2026-02-22T12:01:00.123456789Z",
+  "totalMissions": 3,
+  "missionsCompleted": 3,
+  "gatesPassed": 2,
+  "gatesFailed": 1,
+  "claimedMissionsOk": 3,
+  "verifiedMissionsOk": 2,
+  "mismatchCount": 1,
+  "topFailureCodes": [{ "code": "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED", "count": 1 }],
+  "missions": [],
+  "evidencePaths": {
+    "runStatePath": ".zcl/campaigns/cmp-main/campaign.run.state.json",
+    "reportPath": ".zcl/campaigns/cmp-main/campaign.report.json",
+    "summaryPath": ".zcl/campaigns/cmp-main/campaign.summary.json",
+    "resultsMdPath": ".zcl/campaigns/cmp-main/RESULTS.md",
+    "attemptDirs": []
+  },
+  "flows": []
+}
+```
+
+## `RESULTS.md` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/RESULTS.md`
+
+Written by:
+- `zcl campaign run|canary|resume`
+- `zcl campaign report`
+
+Purpose:
+- Human-facing operator summary generated from `campaign.summary.json`.
+- Includes status, claimed vs verified mismatch, per-mission A/B rollup, top failure codes, and evidence paths.
 
 ## `mission.prompts.json` (optional; v1)
 

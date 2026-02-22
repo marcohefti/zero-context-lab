@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/store"
@@ -140,6 +141,29 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 	if opts.GlobalTimeoutMs > 0 {
 		deadline = now.Add(time.Duration(opts.GlobalTimeoutMs) * time.Millisecond)
 	}
+	appendLifecycle := func(missionIndex int, missionID string, status string, reasonCodes []string) {
+		_ = AppendProgress(progressPath, ProgressEventV1{
+			SchemaVersion: 1,
+			CampaignID:    parsed.Spec.CampaignID,
+			RunID:         state.RunID,
+			MissionIndex:  missionIndex,
+			MissionID:     missionID,
+			Status:        status,
+			ReasonCodes:   normalizeReasonCodes(reasonCodes),
+			CreatedAt:     opts.Now().Format(time.RFC3339Nano),
+		})
+	}
+	runFailureHooks := func(missionIndex int, missionID string, reasons []string) {
+		if len(parsed.Spec.Cleanup.OnFailure) == 0 {
+			return
+		}
+		appendLifecycle(missionIndex, missionID, "cleanup_on_failure_start", reasons)
+		if err := runHookList(runHook, parsed.Spec.Cleanup.OnFailure, opts.CleanupHookTimeoutMs); err != nil {
+			appendLifecycle(missionIndex, missionID, "cleanup_on_failure_fail", append(reasons, ReasonHookFailed))
+			return
+		}
+		appendLifecycle(missionIndex, missionID, "cleanup_on_failure_ok", reasons)
+	}
 
 	for _, flow := range parsed.Spec.Flows {
 		if err := exec.Prepare(context.Background(), flow); err != nil {
@@ -163,6 +187,7 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			return EngineResult{State: state, Exit: 1}, nil
 		}
 		if !deadline.IsZero() && opts.Now().After(deadline) {
+			runFailureHooks(missionIndex, mission.MissionID, []string{ReasonGlobalTimeout, ReasonAborted})
 			state.Status = RunStatusAborted
 			state.ReasonCodes = normalizeReasonCodes(append(state.ReasonCodes, ReasonGlobalTimeout, ReasonAborted))
 			state.CompletedAt = opts.Now().Format(time.RFC3339Nano)
@@ -171,7 +196,12 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			return EngineResult{State: state, Exit: 2}, nil
 		}
 
-		if err := runHookList(runHook, parsed.Spec.Cleanup.PreMission, opts.CleanupHookTimeoutMs); err != nil {
+		if len(parsed.Spec.Cleanup.BeforeMission) > 0 {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_before_mission_start", nil)
+		}
+		if err := runHookList(runHook, parsed.Spec.Cleanup.BeforeMission, opts.CleanupHookTimeoutMs); err != nil {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_before_mission_fail", []string{ReasonHookFailed})
+			runFailureHooks(missionIndex, mission.MissionID, []string{ReasonHookFailed, ReasonAborted})
 			state.Status = RunStatusAborted
 			state.ReasonCodes = normalizeReasonCodes(append(state.ReasonCodes, ReasonHookFailed, ReasonAborted))
 			state.CompletedAt = opts.Now().Format(time.RFC3339Nano)
@@ -179,9 +209,11 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			_ = SaveRunState(statePath, state)
 			return EngineResult{State: state, Exit: 1}, nil
 		}
+		if len(parsed.Spec.Cleanup.BeforeMission) > 0 {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_before_mission_ok", nil)
+		}
 
-		missionRuns := make([]FlowRunV1, 0, len(parsed.Spec.Flows))
-		for _, flow := range parsed.Spec.Flows {
+		runFlow := func(flow FlowSpec) FlowRunV1 {
 			result, runErr := exec.RunMission(context.Background(), flow, missionIndex, mission.MissionID)
 			if runErr != nil {
 				result.FlowID = flow.FlowID
@@ -192,38 +224,61 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 					result.Errors = []string{ReasonFlowFailed}
 				}
 			}
-			if len(result.Attempts) > 0 {
-				for i := range result.Attempts {
-					idempotency := progressKey(parsed.Spec.CampaignID, flow.FlowID, missionIndex)
-					if seenKeys[idempotency] {
-						result.Attempts[i].Errors = normalizeReasonCodes(append(result.Attempts[i].Errors, "ZCL_E_CAMPAIGN_DUPLICATE_ATTEMPT"))
-						if result.Attempts[i].Status == AttemptStatusValid {
-							result.Attempts[i].Status = AttemptStatusInvalid
-						}
-					} else {
-						seenKeys[idempotency] = true
-					}
-					_ = AppendProgress(progressPath, ProgressEventV1{
-						SchemaVersion:  1,
-						CampaignID:     parsed.Spec.CampaignID,
-						RunID:          state.RunID,
-						MissionIndex:   missionIndex,
-						MissionID:      mission.MissionID,
-						FlowID:         flow.FlowID,
-						AttemptID:      result.Attempts[i].AttemptID,
-						AttemptDir:     result.Attempts[i].AttemptDir,
-						Status:         result.Attempts[i].Status,
-						ReasonCodes:    result.Attempts[i].Errors,
-						IdempotencyKey: idempotency,
-						CreatedAt:      opts.Now().Format(time.RFC3339Nano),
-					})
-				}
+			return result
+		}
+		missionRuns := make([]FlowRunV1, len(parsed.Spec.Flows))
+		if parsed.Spec.Execution.FlowMode == FlowModeParallel {
+			var wg sync.WaitGroup
+			for i := range parsed.Spec.Flows {
+				i := i
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					missionRuns[i] = runFlow(parsed.Spec.Flows[i])
+				}()
 			}
-			missionRuns = append(missionRuns, result)
+			wg.Wait()
+		} else {
+			for i := range parsed.Spec.Flows {
+				missionRuns[i] = runFlow(parsed.Spec.Flows[i])
+			}
+		}
+		for i := range missionRuns {
+			flow := parsed.Spec.Flows[i]
+			result := &missionRuns[i]
+			if len(result.Attempts) == 0 {
+				continue
+			}
+			for j := range result.Attempts {
+				idempotency := progressKey(parsed.Spec.CampaignID, flow.FlowID, missionIndex)
+				if seenKeys[idempotency] {
+					result.Attempts[j].Errors = normalizeReasonCodes(append(result.Attempts[j].Errors, "ZCL_E_CAMPAIGN_DUPLICATE_ATTEMPT"))
+					if result.Attempts[j].Status == AttemptStatusValid {
+						result.Attempts[j].Status = AttemptStatusInvalid
+					}
+				} else {
+					seenKeys[idempotency] = true
+				}
+				_ = AppendProgress(progressPath, ProgressEventV1{
+					SchemaVersion:  1,
+					CampaignID:     parsed.Spec.CampaignID,
+					RunID:          state.RunID,
+					MissionIndex:   missionIndex,
+					MissionID:      mission.MissionID,
+					FlowID:         flow.FlowID,
+					AttemptID:      result.Attempts[j].AttemptID,
+					AttemptDir:     result.Attempts[j].AttemptDir,
+					Status:         result.Attempts[j].Status,
+					ReasonCodes:    result.Attempts[j].Errors,
+					IdempotencyKey: idempotency,
+					CreatedAt:      opts.Now().Format(time.RFC3339Nano),
+				})
+			}
 		}
 
 		gate, err := evalGate(parsed, missionIndex, mission.MissionID, missionRuns)
 		if err != nil {
+			runFailureHooks(missionIndex, mission.MissionID, []string{ReasonFlowFailed, ReasonAborted})
 			state.Status = RunStatusAborted
 			state.ReasonCodes = normalizeReasonCodes(append(state.ReasonCodes, ReasonFlowFailed, ReasonAborted))
 			state.CompletedAt = opts.Now().Format(time.RFC3339Nano)
@@ -246,14 +301,25 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			IdempotencyKey: gateProgressKey(parsed.Spec.CampaignID, missionIndex),
 			CreatedAt:      opts.Now().Format(time.RFC3339Nano),
 		})
+		if !gate.OK {
+			runFailureHooks(missionIndex, mission.MissionID, append([]string{ReasonGateFailed}, gate.Reasons...))
+		}
 
-		if err := runHookList(runHook, parsed.Spec.Cleanup.PostMission, opts.CleanupHookTimeoutMs); err != nil {
+		if len(parsed.Spec.Cleanup.AfterMission) > 0 {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_after_mission_start", nil)
+		}
+		if err := runHookList(runHook, parsed.Spec.Cleanup.AfterMission, opts.CleanupHookTimeoutMs); err != nil {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_after_mission_fail", []string{ReasonHookFailed})
+			runFailureHooks(missionIndex, mission.MissionID, []string{ReasonHookFailed, ReasonAborted})
 			state.Status = RunStatusAborted
 			state.ReasonCodes = normalizeReasonCodes(append(state.ReasonCodes, ReasonHookFailed, ReasonAborted))
 			state.CompletedAt = opts.Now().Format(time.RFC3339Nano)
 			state.UpdatedAt = state.CompletedAt
 			_ = SaveRunState(statePath, state)
 			return EngineResult{State: state, Exit: 1}, nil
+		}
+		if len(parsed.Spec.Cleanup.AfterMission) > 0 {
+			appendLifecycle(missionIndex, mission.MissionID, "cleanup_after_mission_ok", nil)
 		}
 
 		if err := SaveRunState(statePath, state); err != nil {

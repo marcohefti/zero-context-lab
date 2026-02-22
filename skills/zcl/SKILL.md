@@ -20,7 +20,11 @@ Run a mission through ZCL with funnel-first evidence and deterministic artifacts
 | Runner adapter contract (`process_cmd`, `codex_exec`, `codex_subagent`, `claude_subagent`) | yes | yes | Normalized attempt contract requires `attemptDir`, `status`, `errors`. |
 | Semantic gating (`validate --semantic`, campaign semantic gate) | yes | yes | Semantic-enabled campaigns fail gate when semantic rules are unevaluated or failing. |
 | MCP lifecycle controls (`max-tool-calls`, `idle-timeout-ms`, `shutdown-on-complete`) | yes | yes | Flow runner env injects MCP lifecycle knobs deterministically. |
-| Cleanup hooks (`cleanup.preMission/postMission`) + campaign global timeout | yes | yes | Hook/global timeout failures produce aborted campaign with typed reason codes. |
+| Cleanup hooks (`cleanup.beforeMission/afterMission/onFailure`) + campaign global timeout | yes | yes | Hook/global timeout failures produce aborted campaign with typed reason codes + cleanup lifecycle progress events. |
+| Minimal campaign mode (`missionSource.path` + flows without `suiteFile`) | yes | yes | One `campaign.yaml` + missions directory is enough for routine runs. |
+| Flow execution mode (`execution.flowMode`: sequence/parallel) | yes | yes | Campaign mission engine can run flow pairs sequentially or in parallel per mission. |
+| Built-in traceability gate profiles (`pairGate.traceProfile`) | yes | yes | Includes `strict_browser_comparison` and `mcp_required` without external validators. |
+| Campaign summary outputs (`campaign.summary.json`, `RESULTS.md`) | yes | yes | Auto-written on campaign run/report for claimed-vs-verified review. |
 | Prompt materialization (`mission prompts build`) with deterministic IDs | yes | yes | Uses mission selection and stable hash IDs for reproducible prompt artifacts. |
 | Runner-native subagent lifecycle management inside ZCL | partial | no | Accepted design direction; currently adapters normalize through suite-run orchestration. |
 
@@ -59,6 +63,9 @@ When an operator says "run this through ZCL: <mission>", do this:
    - `zcl campaign status --campaign-id <id> --json`
    - `zcl campaign report --campaign-id <id> --json`
    - `zcl campaign publish-check --campaign-id <id> --json`
+   - Minimal mode pattern: `missionSource.path: ./missions` + `flows[].runner` blocks (no `suiteFile` required).
+   - Fresh-session policy: keep `runner.freshAgentPerAttempt=true` (default/enforced).
+   - Traceability profile: set `pairGate.traceProfile` (`strict_browser_comparison` or `mcp_required`) for baseline gate families.
 7. Require the agent to finish by running:
    - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
 8. Optionally ask for self-report feedback and persist it as secondary evidence:

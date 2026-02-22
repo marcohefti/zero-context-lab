@@ -23,8 +23,9 @@ Canonical operator templates:
 - `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
 
 Campaign capability status (operator truth source):
-- `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks, campaign lock.
-- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving).
+- `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks (`beforeMission/afterMission/onFailure`), campaign lock, traceability profiles, campaign summary outputs (`campaign.summary.json`, `RESULTS.md`).
+- `implemented+enforced`: minimal campaign mode (`missionSource.path` + flows without `suiteFile`) for mission-pack ingestion.
+- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving), but hidden session reuse is blocked (`freshAgentPerAttempt` defaults/enforced true).
 
 ## Non-Negotiables (Keep This Boring)
 
@@ -59,6 +60,9 @@ Campaign capability status (operator truth source):
      - `zcl campaign run --spec <campaign.(yaml|yml|json)> --json`
      - `zcl campaign resume --campaign-id <id> --json`
      - `zcl campaign status --campaign-id <id> --json`
+   - Minimal mode for routine multi-mission comparison:
+     - one `campaign.yaml` with `missionSource.path: ./missions` and flow runner blocks
+     - no per-flow `suiteFile` required
    - Env handoff: source `<attemptDir>/attempt.env.sh` (auto-written), or run `zcl attempt env --format sh <attemptDir>`
 4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
@@ -93,6 +97,8 @@ Root: `.zcl/`
     campaign.plan.json          (optional; canonical mission plan for deterministic resume)
     campaign.progress.jsonl     (optional; append-only mission/flow checkpoint ledger)
     campaign.report.json        (optional; first-class campaign aggregate report)
+    campaign.summary.json       (optional; operator-facing machine summary)
+    RESULTS.md                  (optional; operator-facing markdown summary)
     mission.prompts.json        (optional; deterministic prompt materialization artifact)
   runs/<runId>/
     run.json

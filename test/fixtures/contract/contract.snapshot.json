@@ -151,6 +151,39 @@
       ]
     },
     {
+      "id": "campaign.summary.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.summary.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "runId",
+        "status",
+        "totalMissions",
+        "missionsCompleted",
+        "gatesPassed",
+        "gatesFailed",
+        "claimedMissionsOk",
+        "verifiedMissionsOk",
+        "mismatchCount",
+        "evidencePaths"
+      ]
+    },
+    {
+      "id": "RESULTS.md",
+      "kind": "text",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/RESULTS.md",
+      "requiredFields": []
+    },
+    {
       "id": "mission.prompts.json",
       "kind": "json",
       "schemaVersions": [

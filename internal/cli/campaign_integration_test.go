@@ -77,6 +77,12 @@ flows:
 	if run.CampaignID != "cmp-int" || run.RunID == "" || run.Status != "valid" {
 		t.Fatalf("unexpected campaign run summary: %+v", run)
 	}
+	if _, err := os.Stat(filepath.Join(outRoot, "campaigns", "cmp-int", "campaign.summary.json")); err != nil {
+		t.Fatalf("expected campaign.summary.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outRoot, "campaigns", "cmp-int", "RESULTS.md")); err != nil {
+		t.Fatalf("expected RESULTS.md: %v", err)
+	}
 
 	stdout.Reset()
 	stderr.Reset()
@@ -430,6 +436,127 @@ flows:
 	}
 	if run.Status != "aborted" {
 		t.Fatalf("expected aborted status on lock contention, got %+v", run)
+	}
+}
+
+func TestCampaignRun_MinimalMissionPackMode(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	missionDir := filepath.Join(specDir, "missions")
+	if err := os.MkdirAll(missionDir, 0o755); err != nil {
+		t.Fatalf("mkdir mission dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(missionDir, "01-a.md"), []byte("mission a"), 0o644); err != nil {
+		t.Fatalf("write mission a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(missionDir, "02-b.md"), []byte("mission b"), 0o644); err != nil {
+		t.Fatalf("write mission b: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-pack
+missionSource:
+  path: missions
+execution:
+  flowMode: parallel
+pairGate:
+  traceProfile: strict_browser_comparison
+flows:
+  - flowId: flow-a
+    runner:
+      type: codex_exec
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+  - flowId: flow-b
+    runner:
+      type: claude_subagent
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 15, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	var run struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
+		t.Fatalf("unmarshal campaign run output: %v", err)
+	}
+	if run.Status != "valid" {
+		t.Fatalf("expected valid run, got %+v", run)
+	}
+}
+
+func TestCampaignRun_TraceProfileMCPRequiredFails(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-mcp-profile",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-profile
+pairGate:
+  traceProfile: mcp_required
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 16, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("expected invalid campaign exit 2, got %d stderr=%q", code, stderr.String())
+	}
+	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-profile", "campaign.run.state.json"))
+	if err != nil {
+		t.Fatalf("read campaign state: %v", err)
+	}
+	var st struct {
+		Status       string `json:"status"`
+		MissionGates []struct {
+			Reasons []string `json:"reasons"`
+		} `json:"missionGates"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal campaign state: %v", err)
+	}
+	if st.Status != "invalid" || len(st.MissionGates) == 0 {
+		t.Fatalf("unexpected campaign state: %+v", st)
+	}
+	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED") {
+		t.Fatalf("expected mcp trace profile gate reason, got %+v", st.MissionGates[0].Reasons)
 	}
 }
 

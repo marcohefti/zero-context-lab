@@ -285,3 +285,85 @@ flows:
 		t.Fatalf("expected pairGate enabled=false to be honored")
 	}
 }
+
+func TestParseSpecFile_MissionPackWithoutSuiteFile(t *testing.T) {
+	dir := t.TempDir()
+	missionDir := filepath.Join(dir, "missions")
+	if err := os.MkdirAll(missionDir, 0o755); err != nil {
+		t.Fatalf("mkdir missions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(missionDir, "01-login.md"), []byte("log in"), 0o644); err != nil {
+		t.Fatalf("write mission 1: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(missionDir, "02-search.md"), []byte("search"), 0o644); err != nil {
+		t.Fatalf("write mission 2: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-pack
+missionSource:
+  path: missions
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if len(ps.FlowSuites["flow-a"].Suite.Missions) != 2 {
+		t.Fatalf("expected mission-pack suite with 2 missions, got %d", len(ps.FlowSuites["flow-a"].Suite.Missions))
+	}
+	if ps.FlowSuites["flow-a"].Suite.Missions[0].MissionID != "01-login" {
+		t.Fatalf("unexpected mission ordering: %+v", ps.FlowSuites["flow-a"].Suite.Missions)
+	}
+	if !reflect.DeepEqual(ps.MissionIndexes, []int{0, 1}) {
+		t.Fatalf("unexpected mission indexes: %+v", ps.MissionIndexes)
+	}
+}
+
+func TestParseSpecFile_TraceProfileAndFlowMode(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-mode
+execution:
+  flowMode: parallel
+pairGate:
+  traceProfile: mcp_required
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if ps.Spec.Execution.FlowMode != FlowModeParallel {
+		t.Fatalf("expected parallel flow mode, got %q", ps.Spec.Execution.FlowMode)
+	}
+	if ps.Spec.PairGate.TraceProfile != TraceProfileMCPRequired {
+		t.Fatalf("expected trace profile mcp_required, got %q", ps.Spec.PairGate.TraceProfile)
+	}
+}

@@ -26,7 +26,7 @@ Read order:
 - Runner performs actions only through ZCL funnels (writes `tool.calls.jsonl`).
 - Runner writes authoritative outcome via `zcl feedback` (writes `feedback.json`).
 - ZCL computes + validates derived artifacts (`attempt.report.json`, `zcl validate`, `zcl expect`).
-- First-class campaigns execute mission-by-mission across flows with lock-protected checkpoints (`campaign.plan.json`, `campaign.progress.jsonl`, `campaign.run.state.json`).
+- First-class campaigns execute mission-by-mission across flows with lock-protected checkpoints (`campaign.plan.json`, `campaign.progress.jsonl`, `campaign.run.state.json`) and operator outputs (`campaign.summary.json`, `RESULTS.md`).
 
 Primary evidence:
 - `tool.calls.jsonl` (trace)
@@ -100,6 +100,7 @@ Safety knobs:
 - `internal/planner`: suite planning (suite file -> planned attempts + env).
 - `internal/suite`: suite parsing + expectations (runner-agnostic).
 - `internal/campaign`: first-class campaign specs, run-state persistence, campaign report materialization.
+- Campaign specs support minimal mission-pack mode (`missionSource.path` + flow runner blocks without `suiteFile`) and per-mission flow execution mode (`sequence|parallel`).
 - `internal/semantic`: semantic validity gates and rule-pack evaluation.
 - `internal/runners`: runner adapters used by campaign mission engine.
 - `internal/funnel`: protocol funnels (CLI/MCP/HTTP).

@@ -60,6 +60,19 @@ func TestRunState_SaveLoadAndReport(t *testing.T) {
 	if len(rep.Flows) != 1 || rep.Flows[0].Valid != 1 || rep.Flows[0].Invalid != 1 {
 		t.Fatalf("unexpected flow summary: %+v", rep.Flows)
 	}
+	sum := BuildSummary(got)
+	if sum.GatesPassed != 1 || sum.GatesFailed != 1 {
+		t.Fatalf("unexpected summary gates: %+v", sum)
+	}
+	if len(sum.Missions) != 2 {
+		t.Fatalf("expected mission summaries, got %+v", sum.Missions)
+	}
+	if sum.ClaimedMissionsOK != 1 || sum.VerifiedMissionsOK != 1 || sum.MismatchCount != 0 {
+		t.Fatalf("unexpected summary claimed/verified counts: %+v", sum)
+	}
+	if sum.EvidencePaths.RunStatePath == "" || sum.EvidencePaths.ResultsMDPath == "" {
+		t.Fatalf("expected evidence paths in summary, got %+v", sum.EvidencePaths)
+	}
 }
 
 func TestPlanAndProgress_SaveLoad(t *testing.T) {

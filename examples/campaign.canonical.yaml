@@ -3,14 +3,15 @@
 # Supported by current ZCL parser/executor:
 # - schemaVersion, campaignId, outRoot
 # - totalMissions, canaryMissions, failFast
-# - missionSource.selection (all|mission_id|index|range)
-# - pairGate.enabled, pairGate.stopOnFirstMissionFailure
+# - missionSource.path + missionSource.selection (all|mission_id|index|range)
+# - execution.flowMode (sequence|parallel)
+# - pairGate.enabled, pairGate.stopOnFirstMissionFailure, pairGate.traceProfile
 # - semantic.enabled, semantic.rulesPath
-# - cleanup.preMission/postMission (executed with bounded timeout)
+# - cleanup.beforeMission/afterMission/onFailure (executed with bounded timeout)
 # - timeouts.campaignGlobalTimeoutMs/defaultAttemptTimeoutMs/cleanupHookTimeoutMs/timeoutStart
-# - output.reportPath/publishCheck/progressJsonl
+# - output.reportPath/summaryPath/resultsMdPath/publishCheck/progressJsonl
 # - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
-# - flows[].flowId, flows[].suiteFile, flows[].runner.*
+# - flows[].flowId, flows[].runner.* (suiteFile optional when missionSource.path is set)
 # - flows[].adapterContract.requiredOutputFields (must include attemptDir/status/errors)
 schemaVersion: 1
 campaignId: tool-comparison
@@ -21,7 +22,7 @@ canaryMissions: 3
 failFast: true
 
 missionSource:
-  path: /path/to/versioned/missions
+  path: ./missions
   selection:
     mode: range
     missionIds: []
@@ -30,19 +31,25 @@ missionSource:
       start: 5
       end: 8
 
+execution:
+  flowMode: sequence
+
 pairGate:
   enabled: true
   stopOnFirstMissionFailure: true
+  traceProfile: strict_browser_comparison
 
 semantic:
   enabled: true
   rulesPath: ./examples/semantic.rulepack.yaml
 
 cleanup:
-  preMission:
+  beforeMission:
     - "pkill -f 'zcl mcp proxy' || true"
     - "rm -rf ./.zcl/tmp/* || true"
-  postMission:
+  afterMission:
+    - "pkill -f 'zcl mcp proxy' || true"
+  onFailure:
     - "pkill -f 'zcl mcp proxy' || true"
 
 timeouts:
@@ -53,6 +60,8 @@ timeouts:
 
 output:
   reportPath: .zcl/campaigns/tool-comparison/campaign.report.json
+  summaryPath: .zcl/campaigns/tool-comparison/campaign.summary.json
+  resultsMdPath: .zcl/campaigns/tool-comparison/RESULTS.md
   publishCheck: required
   progressJsonl: .zcl/campaigns/tool-comparison/campaign.progress.jsonl
 
@@ -63,7 +72,6 @@ invalidRunPolicy:
 
 flows:
   - flowId: flow-a
-    suiteFile: ./suites/flow-a.yaml
     runner:
       type: codex_exec
       command: ["codex", "exec", "--", "./scripts/run_flow_a.sh"]
@@ -74,6 +82,7 @@ flows:
       timeoutStart: first_tool_call
       strict: true
       strictExpect: true
+      freshAgentPerAttempt: true
       mcp:
         maxToolCalls: 60
         idleTimeoutMs: 30000
@@ -84,10 +93,9 @@ flows:
       requiredOutputFields: ["attemptDir", "status", "errors"]
 
   - flowId: flow-b
-    suiteFile: ./suites/flow-b.yaml
     runner:
-      type: codex_exec
-      command: ["codex", "exec", "--", "./scripts/run_flow_b.sh"]
+      type: claude_subagent
+      command: ["claude", "--", "./scripts/run_flow_b.sh"]
       sessionIsolation: process
       feedbackPolicy: auto_fail
       mode: discovery
@@ -95,6 +103,7 @@ flows:
       timeoutStart: first_tool_call
       strict: true
       strictExpect: true
+      freshAgentPerAttempt: true
       mcp:
         maxToolCalls: 60
         idleTimeoutMs: 30000

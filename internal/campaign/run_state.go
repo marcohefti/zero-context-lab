@@ -108,6 +108,60 @@ type ReportV1 struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type SummaryV1 struct {
+	SchemaVersion int      `json:"schemaVersion"`
+	CampaignID    string   `json:"campaignId"`
+	RunID         string   `json:"runId"`
+	Status        string   `json:"status"`
+	ReasonCodes   []string `json:"reasonCodes,omitempty"`
+	UpdatedAt     string   `json:"updatedAt"`
+
+	TotalMissions     int `json:"totalMissions"`
+	MissionsCompleted int `json:"missionsCompleted"`
+	GatesPassed       int `json:"gatesPassed"`
+	GatesFailed       int `json:"gatesFailed"`
+
+	ClaimedMissionsOK  int `json:"claimedMissionsOk"`
+	VerifiedMissionsOK int `json:"verifiedMissionsOk"`
+	MismatchCount      int `json:"mismatchCount"`
+
+	TopFailureCodes []CodeCountV1      `json:"topFailureCodes,omitempty"`
+	Missions        []MissionSummaryV1 `json:"missions,omitempty"`
+	EvidencePaths   SummaryEvidenceV1  `json:"evidencePaths"`
+	Flows           []FlowReportV1     `json:"flows,omitempty"`
+}
+
+type CodeCountV1 struct {
+	Code  string `json:"code"`
+	Count int    `json:"count"`
+}
+
+type MissionSummaryV1 struct {
+	MissionIndex int                    `json:"missionIndex"`
+	MissionID    string                 `json:"missionId"`
+	ClaimedOK    bool                   `json:"claimedOk"`
+	VerifiedOK   bool                   `json:"verifiedOk"`
+	Mismatch     bool                   `json:"mismatch"`
+	Reasons      []string               `json:"reasons,omitempty"`
+	Flows        []MissionFlowSummaryV1 `json:"flows,omitempty"`
+}
+
+type MissionFlowSummaryV1 struct {
+	FlowID     string   `json:"flowId"`
+	Status     string   `json:"status"`
+	AttemptID  string   `json:"attemptId,omitempty"`
+	AttemptDir string   `json:"attemptDir,omitempty"`
+	Errors     []string `json:"errors,omitempty"`
+}
+
+type SummaryEvidenceV1 struct {
+	RunStatePath  string   `json:"runStatePath"`
+	ReportPath    string   `json:"reportPath"`
+	SummaryPath   string   `json:"summaryPath"`
+	ResultsMDPath string   `json:"resultsMdPath"`
+	AttemptDirs   []string `json:"attemptDirs,omitempty"`
+}
+
 type FlowReportV1 struct {
 	FlowID        string `json:"flowId"`
 	RunnerType    string `json:"runnerType"`
@@ -157,6 +211,14 @@ func RunStatePath(outRoot string, campaignID string) string {
 
 func ReportPath(outRoot string, campaignID string) string {
 	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.report.json")
+}
+
+func SummaryPath(outRoot string, campaignID string) string {
+	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.summary.json")
+}
+
+func ResultsMDPath(outRoot string, campaignID string) string {
+	return filepath.Join(CampaignDir(outRoot, campaignID), "RESULTS.md")
 }
 
 func PlanPath(outRoot string, campaignID string) string {
@@ -295,6 +357,127 @@ func BuildReport(st RunStateV1) ReportV1 {
 		}
 	}
 	return rep
+}
+
+func BuildSummary(st RunStateV1) SummaryV1 {
+	rep := BuildReport(st)
+	out := SummaryV1{
+		SchemaVersion:     1,
+		CampaignID:        st.CampaignID,
+		RunID:             st.RunID,
+		Status:            st.Status,
+		ReasonCodes:       normalizeReasonCodes(st.ReasonCodes),
+		UpdatedAt:         st.UpdatedAt,
+		TotalMissions:     rep.TotalMissions,
+		MissionsCompleted: rep.MissionsCompleted,
+		GatesPassed:       rep.GatesPassed,
+		GatesFailed:       rep.GatesFailed,
+		Flows:             rep.Flows,
+		EvidencePaths: SummaryEvidenceV1{
+			RunStatePath:  RunStatePath(st.OutRoot, st.CampaignID),
+			ReportPath:    ReportPath(st.OutRoot, st.CampaignID),
+			SummaryPath:   SummaryPath(st.OutRoot, st.CampaignID),
+			ResultsMDPath: ResultsMDPath(st.OutRoot, st.CampaignID),
+		},
+	}
+	attemptByFlowMission := map[string]map[int]AttemptStatusV1{}
+	attemptDirs := map[string]bool{}
+	for _, fr := range st.FlowRuns {
+		if _, ok := attemptByFlowMission[fr.FlowID]; !ok {
+			attemptByFlowMission[fr.FlowID] = map[int]AttemptStatusV1{}
+		}
+		for _, a := range fr.Attempts {
+			attemptByFlowMission[fr.FlowID][a.MissionIndex] = a
+			if strings.TrimSpace(a.AttemptDir) != "" {
+				attemptDirs[a.AttemptDir] = true
+			}
+		}
+	}
+	failures := map[string]int{}
+	for _, mg := range st.MissionGates {
+		ms := MissionSummaryV1{
+			MissionIndex: mg.MissionIndex,
+			MissionID:    mg.MissionID,
+			VerifiedOK:   mg.OK,
+			Reasons:      normalizeReasonCodes(mg.Reasons),
+		}
+		if ms.VerifiedOK {
+			out.VerifiedMissionsOK++
+		}
+		claimedAll := len(st.FlowRuns) > 0
+		for _, fr := range st.FlowRuns {
+			a, ok := attemptByFlowMission[fr.FlowID][mg.MissionIndex]
+			if !ok {
+				claimedAll = false
+				ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
+					FlowID: fr.FlowID,
+					Status: AttemptStatusInvalid,
+					Errors: []string{"ZCL_E_CAMPAIGN_MISSING_ATTEMPT"},
+				})
+				failures["ZCL_E_CAMPAIGN_MISSING_ATTEMPT"]++
+				continue
+			}
+			if a.Status != AttemptStatusValid {
+				claimedAll = false
+			}
+			ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
+				FlowID:     fr.FlowID,
+				Status:     a.Status,
+				AttemptID:  a.AttemptID,
+				AttemptDir: a.AttemptDir,
+				Errors:     normalizeReasonCodes(a.Errors),
+			})
+			for _, code := range a.Errors {
+				failures[strings.TrimSpace(code)]++
+			}
+		}
+		ms.ClaimedOK = claimedAll
+		if ms.ClaimedOK {
+			out.ClaimedMissionsOK++
+		}
+		ms.Mismatch = ms.ClaimedOK != ms.VerifiedOK
+		if ms.Mismatch {
+			out.MismatchCount++
+		}
+		for _, code := range ms.Reasons {
+			failures[strings.TrimSpace(code)]++
+		}
+		sort.Slice(ms.Flows, func(i, j int) bool { return ms.Flows[i].FlowID < ms.Flows[j].FlowID })
+		out.Missions = append(out.Missions, ms)
+	}
+	sort.Slice(out.Missions, func(i, j int) bool {
+		if out.Missions[i].MissionIndex != out.Missions[j].MissionIndex {
+			return out.Missions[i].MissionIndex < out.Missions[j].MissionIndex
+		}
+		return out.Missions[i].MissionID < out.Missions[j].MissionID
+	})
+	out.TopFailureCodes = sortCodeCounts(failures)
+	for dir := range attemptDirs {
+		out.EvidencePaths.AttemptDirs = append(out.EvidencePaths.AttemptDirs, dir)
+	}
+	sort.Strings(out.EvidencePaths.AttemptDirs)
+	return out
+}
+
+func sortCodeCounts(in map[string]int) []CodeCountV1 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CodeCountV1, 0, len(in))
+	for code, count := range in {
+		code = strings.TrimSpace(code)
+		if code == "" || count <= 0 {
+			continue
+		}
+		out = append(out, CodeCountV1{Code: code, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Code < out[j].Code
+	})
+	return out
 }
 
 func normalizeReasonCodes(in []string) []string {

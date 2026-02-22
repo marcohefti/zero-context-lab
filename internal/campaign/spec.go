@@ -36,6 +36,13 @@ const (
 	SelectionModeMissionID = "mission_id"
 	SelectionModeIndex     = "index"
 	SelectionModeRange     = "range"
+
+	FlowModeSequence = "sequence"
+	FlowModeParallel = "parallel"
+
+	TraceProfileNone              = "none"
+	TraceProfileStrictBrowserComp = "strict_browser_comparison"
+	TraceProfileMCPRequired       = "mcp_required"
 )
 
 type SpecV1 struct {
@@ -48,6 +55,7 @@ type SpecV1 struct {
 	FailFast       bool `json:"failFast" yaml:"failFast"`
 
 	MissionSource MissionSourceSpec `json:"missionSource,omitempty" yaml:"missionSource,omitempty"`
+	Execution     ExecutionSpec     `json:"execution,omitempty" yaml:"execution,omitempty"`
 	PairGate      PairGateSpec      `json:"pairGate,omitempty" yaml:"pairGate,omitempty"`
 	Semantic      SemanticGateSpec  `json:"semantic,omitempty" yaml:"semantic,omitempty"`
 	Cleanup       CleanupSpec       `json:"cleanup,omitempty" yaml:"cleanup,omitempty"`
@@ -79,8 +87,13 @@ type MissionRangeWindow struct {
 }
 
 type PairGateSpec struct {
-	Enabled                   *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	StopOnFirstMissionFailure bool  `json:"stopOnFirstMissionFailure" yaml:"stopOnFirstMissionFailure"`
+	Enabled                   *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	StopOnFirstMissionFailure bool   `json:"stopOnFirstMissionFailure" yaml:"stopOnFirstMissionFailure"`
+	TraceProfile              string `json:"traceProfile,omitempty" yaml:"traceProfile,omitempty"`
+}
+
+type ExecutionSpec struct {
+	FlowMode string `json:"flowMode,omitempty" yaml:"flowMode,omitempty"` // sequence|parallel
 }
 
 type SemanticGateSpec struct {
@@ -89,6 +102,11 @@ type SemanticGateSpec struct {
 }
 
 type CleanupSpec struct {
+	BeforeMission []string `json:"beforeMission,omitempty" yaml:"beforeMission,omitempty"`
+	AfterMission  []string `json:"afterMission,omitempty" yaml:"afterMission,omitempty"`
+	OnFailure     []string `json:"onFailure,omitempty" yaml:"onFailure,omitempty"`
+
+	// Backward-compatible aliases.
 	PreMission  []string `json:"preMission,omitempty" yaml:"preMission,omitempty"`
 	PostMission []string `json:"postMission,omitempty" yaml:"postMission,omitempty"`
 }
@@ -102,6 +120,8 @@ type TimeoutsSpec struct {
 
 type OutputPolicySpec struct {
 	ReportPath    string `json:"reportPath,omitempty" yaml:"reportPath,omitempty"`
+	SummaryPath   string `json:"summaryPath,omitempty" yaml:"summaryPath,omitempty"`
+	ResultsMDPath string `json:"resultsMdPath,omitempty" yaml:"resultsMdPath,omitempty"`
 	PublishCheck  string `json:"publishCheck,omitempty" yaml:"publishCheck,omitempty"`
 	ProgressJSONL string `json:"progressJsonl,omitempty" yaml:"progressJsonl,omitempty"`
 }
@@ -114,7 +134,7 @@ type InvalidRunPolicySpec struct {
 
 type FlowSpec struct {
 	FlowID           string              `json:"flowId" yaml:"flowId"`
-	SuiteFile        string              `json:"suiteFile" yaml:"suiteFile"`
+	SuiteFile        string              `json:"suiteFile,omitempty" yaml:"suiteFile,omitempty"`
 	Runner           RunnerAdapterSpec   `json:"runner" yaml:"runner"`
 	AdapterContract  AdapterContractSpec `json:"adapterContract,omitempty" yaml:"adapterContract,omitempty"`
 	RunnerExtensions map[string]any      `json:"-" yaml:"-"`
@@ -140,6 +160,9 @@ type RunnerAdapterSpec struct {
 	StrictExpect     *bool  `json:"strictExpect,omitempty" yaml:"strictExpect,omitempty"`
 
 	MCP MCPLifecycleSpec `json:"mcp,omitempty" yaml:"mcp,omitempty"`
+
+	// FreshAgentPerAttempt defaults to true. Hidden session reuse is never implicit.
+	FreshAgentPerAttempt *bool `json:"freshAgentPerAttempt,omitempty" yaml:"freshAgentPerAttempt,omitempty"`
 }
 
 type MCPLifecycleSpec struct {
@@ -202,6 +225,14 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	if spec.Output.ReportPath != "" && !filepath.IsAbs(spec.Output.ReportPath) {
 		spec.Output.ReportPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ReportPath))
 	}
+	spec.Output.SummaryPath = strings.TrimSpace(spec.Output.SummaryPath)
+	if spec.Output.SummaryPath != "" && !filepath.IsAbs(spec.Output.SummaryPath) {
+		spec.Output.SummaryPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.SummaryPath))
+	}
+	spec.Output.ResultsMDPath = strings.TrimSpace(spec.Output.ResultsMDPath)
+	if spec.Output.ResultsMDPath != "" && !filepath.IsAbs(spec.Output.ResultsMDPath) {
+		spec.Output.ResultsMDPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ResultsMDPath))
+	}
 	spec.Output.ProgressJSONL = strings.TrimSpace(spec.Output.ProgressJSONL)
 	if spec.Output.ProgressJSONL != "" && spec.Output.ProgressJSONL != "-" && !filepath.IsAbs(spec.Output.ProgressJSONL) {
 		spec.Output.ProgressJSONL = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ProgressJSONL))
@@ -212,8 +243,48 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	if strings.TrimSpace(spec.Timeouts.TimeoutStart) != "" && !schema.IsValidTimeoutStartV1(spec.Timeouts.TimeoutStart) {
 		return ParsedSpec{}, fmt.Errorf("invalid timeouts.timeoutStart")
 	}
+	spec.Execution.FlowMode = strings.ToLower(strings.TrimSpace(spec.Execution.FlowMode))
+	if spec.Execution.FlowMode == "" {
+		spec.Execution.FlowMode = FlowModeSequence
+	}
+	switch spec.Execution.FlowMode {
+	case FlowModeSequence, FlowModeParallel:
+	default:
+		return ParsedSpec{}, fmt.Errorf("invalid execution.flowMode (expected %s|%s)", FlowModeSequence, FlowModeParallel)
+	}
+	spec.PairGate.TraceProfile = strings.ToLower(strings.TrimSpace(spec.PairGate.TraceProfile))
+	if spec.PairGate.TraceProfile == "" {
+		spec.PairGate.TraceProfile = TraceProfileNone
+	}
+	if !isValidTraceProfile(spec.PairGate.TraceProfile) {
+		return ParsedSpec{}, fmt.Errorf("invalid pairGate.traceProfile (expected %s|%s|%s)", TraceProfileNone, TraceProfileStrictBrowserComp, TraceProfileMCPRequired)
+	}
+	spec.Cleanup.BeforeMission = normalizeCommand(append(append([]string{}, spec.Cleanup.BeforeMission...), spec.Cleanup.PreMission...))
+	spec.Cleanup.AfterMission = normalizeCommand(append(append([]string{}, spec.Cleanup.AfterMission...), spec.Cleanup.PostMission...))
+	spec.Cleanup.OnFailure = normalizeCommand(spec.Cleanup.OnFailure)
+	spec.Cleanup.PreMission = nil
+	spec.Cleanup.PostMission = nil
 	if len(spec.Flows) == 0 {
 		return ParsedSpec{}, fmt.Errorf("campaign requires at least one flow")
+	}
+
+	needsMissionPack := false
+	for i := range spec.Flows {
+		if strings.TrimSpace(spec.Flows[i].SuiteFile) == "" {
+			needsMissionPack = true
+			break
+		}
+	}
+	var missionPackSuite *suite.ParsedSuite
+	if needsMissionPack {
+		if strings.TrimSpace(spec.MissionSource.Path) == "" {
+			return ParsedSpec{}, fmt.Errorf("missionSource.path is required when any flow omits suiteFile")
+		}
+		loaded, err := LoadMissionPack(spec.MissionSource.Path, spec.CampaignID)
+		if err != nil {
+			return ParsedSpec{}, err
+		}
+		missionPackSuite = &loaded
 	}
 
 	flowSuites := make(map[string]suite.ParsedSuite, len(spec.Flows))
@@ -228,10 +299,13 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 			return ParsedSpec{}, fmt.Errorf("duplicate flowId %q", f.FlowID)
 		}
 		f.SuiteFile = strings.TrimSpace(f.SuiteFile)
+		hasInlineMissionPack := false
 		if f.SuiteFile == "" {
-			return ParsedSpec{}, fmt.Errorf("flow %q: missing suiteFile", f.FlowID)
-		}
-		if !filepath.IsAbs(f.SuiteFile) {
+			if missionPackSuite == nil {
+				return ParsedSpec{}, fmt.Errorf("flow %q: missing suiteFile (set flows[].suiteFile or missionSource.path for mission-pack mode)", f.FlowID)
+			}
+			hasInlineMissionPack = true
+		} else if !filepath.IsAbs(f.SuiteFile) {
 			f.SuiteFile = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.SuiteFile))
 		}
 		f.Runner.Type = strings.TrimSpace(strings.ToLower(f.Runner.Type))
@@ -267,6 +341,13 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.mcp fields must be >= 0", f.FlowID)
 		}
 		f.Runner.Shims = normalizeCommand(f.Runner.Shims)
+		if f.Runner.FreshAgentPerAttempt == nil {
+			def := true
+			f.Runner.FreshAgentPerAttempt = &def
+		}
+		if !*f.Runner.FreshAgentPerAttempt {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.freshAgentPerAttempt=false is not supported (fresh sessions are required)", f.FlowID)
+		}
 		f.AdapterContract.RequiredOutputFields = normalizeCommand(f.AdapterContract.RequiredOutputFields)
 		if len(f.AdapterContract.RequiredOutputFields) == 0 {
 			f.AdapterContract.RequiredOutputFields = []string{"attemptDir", "status", "errors"}
@@ -275,9 +356,15 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 			return ParsedSpec{}, fmt.Errorf("flow %q: adapterContract.requiredOutputFields must include attemptDir,status,errors", f.FlowID)
 		}
 
-		ps, err := suite.ParseFile(f.SuiteFile)
-		if err != nil {
-			return ParsedSpec{}, fmt.Errorf("flow %q: parse suite: %w", f.FlowID, err)
+		var ps suite.ParsedSuite
+		if hasInlineMissionPack {
+			ps = *missionPackSuite
+		} else {
+			var err error
+			ps, err = suite.ParseFile(f.SuiteFile)
+			if err != nil {
+				return ParsedSpec{}, fmt.Errorf("flow %q: parse suite: %w", f.FlowID, err)
+			}
 		}
 		flowSuites[f.FlowID] = ps
 		flowIDs = append(flowIDs, f.FlowID)
@@ -575,6 +662,15 @@ func normalizeCommand(in []string) []string {
 func isValidRunnerType(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidTraceProfile(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case TraceProfileNone, TraceProfileStrictBrowserComp, TraceProfileMCPRequired:
 		return true
 	default:
 		return false

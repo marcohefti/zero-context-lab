@@ -121,6 +121,22 @@ func Build(version string) Contract {
 				RequiredFields: []string{"schemaVersion", "campaignId", "runId", "status", "totalMissions", "missionsCompleted", "gatesPassed", "gatesFailed"},
 			},
 			{
+				ID:             "campaign.summary.json",
+				Kind:           "json",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/campaigns/<campaignId>/campaign.summary.json",
+				RequiredFields: []string{"schemaVersion", "campaignId", "runId", "status", "totalMissions", "missionsCompleted", "gatesPassed", "gatesFailed", "claimedMissionsOk", "verifiedMissionsOk", "mismatchCount", "evidencePaths"},
+			},
+			{
+				ID:             "RESULTS.md",
+				Kind:           "text",
+				SchemaVersions: []int{1},
+				Required:       false,
+				PathPattern:    ".zcl/campaigns/<campaignId>/RESULTS.md",
+				RequiredFields: []string{},
+			},
+			{
 				ID:             "mission.prompts.json",
 				Kind:           "json",
 				SchemaVersions: []int{1},
