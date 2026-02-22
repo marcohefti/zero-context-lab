@@ -10,7 +10,12 @@ targets=(
   internal/contract
 )
 
-violations="$(rg -n --glob '!**/*_test.go' '"ZCL_E_[A-Z0-9_]+"' "${targets[@]}" || true)"
+if command -v rg >/dev/null 2>&1; then
+  violations="$(rg -n --glob '!**/*_test.go' '"ZCL_E_[A-Z0-9_]+"' "${targets[@]}" || true)"
+else
+  # macOS CI images may not include ripgrep; fallback keeps the check enforceable.
+  violations="$(grep -RIn --exclude='*_test.go' -E '"ZCL_E_[A-Z0-9_]+"' "${targets[@]}" || true)"
+fi
 if [[ -n "${violations}" ]]; then
   echo "error-codes-check: FAIL raw ZCL_E code literals found in runtime paths:" >&2
   printf '%s\n' "${violations}" >&2
