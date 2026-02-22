@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,9 +32,10 @@ func TestCampaignRun_Status_Report_PublishCheck(t *testing.T) {
   ]
 }`)
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(`
+	if err := os.WriteFile(specPath, []byte(fmt.Sprintf(`
 schemaVersion: 1
 campaignId: cmp-int
+outRoot: %q
 totalMissions: 1
 semantic:
   enabled: false
@@ -48,7 +50,7 @@ flows:
     runner:
       type: process_cmd
       command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
-`), 0o644); err != nil {
+`, outRoot)), 0o644); err != nil {
 		t.Fatalf("write campaign spec: %v", err)
 	}
 
@@ -123,6 +125,20 @@ flows:
 	code = r.Run([]string{"campaign", "publish-check", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"})
 	if code != 0 {
 		t.Fatalf("campaign publish-check expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = r.Run([]string{"campaign", "report", "--spec", specPath, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign report --spec expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = r.Run([]string{"campaign", "publish-check", "--spec", specPath, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign publish-check --spec expected 0, got %d stderr=%q", code, stderr.String())
 	}
 }
 
@@ -451,6 +467,67 @@ flows:
 	}
 }
 
+func TestCampaignLint_ExecutionModeAdapterScript(t *testing.T) {
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-lint-execution-mode",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+	scriptPath := filepath.Join(specDir, "runner.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\necho ok\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-lint-execution-mode
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["bash", "-lc", "./runner.sh"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 18, 8, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign lint expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		ExecutionMode struct {
+			Mode               string   `json:"mode"`
+			AdapterScriptFlows []string `json:"adapterScriptFlows"`
+		} `json:"executionMode"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign lint execution mode output: %v stdout=%q", err, stdout.String())
+	}
+	if out.ExecutionMode.Mode != "adapter_script" {
+		t.Fatalf("expected executionMode=adapter_script, got %+v", out.ExecutionMode)
+	}
+	if len(out.ExecutionMode.AdapterScriptFlows) != 1 || out.ExecutionMode.AdapterScriptFlows[0] != "flow-a" {
+		t.Fatalf("unexpected adapter script flows: %+v", out.ExecutionMode.AdapterScriptFlows)
+	}
+}
+
 func TestCampaignRun_MissionOnlyViolationReturnsTypedCode(t *testing.T) {
 	specDir := t.TempDir()
 	suitePath := filepath.Join(specDir, "suite.json")
@@ -499,6 +576,76 @@ flows:
 	}
 	if out.Code != "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION" {
 		t.Fatalf("expected prompt mode policy code, got %+v", out)
+	}
+}
+
+func TestCampaignDoctor_DetectsLockAndReportsPreflight(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "campaign-suite-doctor",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(fmt.Sprintf(`
+schemaVersion: 1
+campaignId: cmp-doctor
+outRoot: %q
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["%s", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`, outRoot, os.Args[0])), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	lockDir := filepath.Join(outRoot, "campaigns", "cmp-doctor", "campaign.lock")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "owner.json"), []byte(`{"v":1,"pid":12345}`), 0o644); err != nil {
+		t.Fatalf("write lock owner: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 19, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "doctor", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign doctor expected 2 with lock present, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			ID string `json:"id"`
+			OK bool   `json:"ok"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign doctor output: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK {
+		t.Fatalf("expected campaign doctor ok=false when lock exists")
+	}
+	foundLockFail := false
+	for _, c := range out.Checks {
+		if c.ID == "campaign_lock" && !c.OK {
+			foundLockFail = true
+			break
+		}
+	}
+	if !foundLockFail {
+		t.Fatalf("expected campaign_lock check failure, got %+v", out.Checks)
 	}
 }
 

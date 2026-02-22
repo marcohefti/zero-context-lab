@@ -339,7 +339,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "mcp proxy",
-				Usage:   "zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]",
+				Usage:   "zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] [--sequential] -- <server-cmd> [args...]",
 				Summary: "MCP stdio proxy funnel with lifecycle controls (records initialize/tools/list/tools/call).",
 			},
 			{
@@ -429,13 +429,18 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "campaign report",
-				Usage:   "zcl campaign report --campaign-id <id> [--out-root .zcl] [--format json,md] [--force] [--json]",
+				Usage:   "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]",
 				Summary: "Export campaign aggregate reports with invalid-run publication guards.",
 			},
 			{
 				ID:      "campaign publish-check",
-				Usage:   "zcl campaign publish-check --campaign-id <id> [--out-root .zcl] [--force] [--json]",
+				Usage:   "zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--force] [--json]",
 				Summary: "Refuse publish-ready benchmark output unless campaign status is valid (unless forced).",
+			},
+			{
+				ID:      "campaign doctor",
+				Usage:   "zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--json]",
+				Summary: "Preflight campaign execution prerequisites (runner commands, script binaries, outRoot write access, lock state).",
 			},
 			{
 				ID:      "mission prompts build",

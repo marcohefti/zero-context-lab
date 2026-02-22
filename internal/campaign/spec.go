@@ -236,6 +236,11 @@ type PromptModeViolation struct {
 	Term         string `json:"term"`
 }
 
+type ExecutionModeSummary struct {
+	Mode               string   `json:"mode"`
+	AdapterScriptFlows []string `json:"adapterScriptFlows,omitempty"`
+}
+
 type PromptModeViolationError struct {
 	PromptMode string                `json:"promptMode"`
 	Violations []PromptModeViolation `json:"violations"`
@@ -778,6 +783,25 @@ func defaultMissionOnlyForbiddenTerms() []string {
 		"tool.calls.jsonl",
 		"feedback.json",
 	}
+}
+
+func ResolveExecutionMode(parsed ParsedSpec) ExecutionModeSummary {
+	out := ExecutionModeSummary{Mode: "config_driven"}
+	if parsed.Spec.PromptMode != PromptModeMissionOnly {
+		return out
+	}
+	for _, flow := range parsed.Spec.Flows {
+		if len(flow.Runner.Command) == 0 {
+			continue
+		}
+		if flow.Runner.ToolDriver.Kind == ToolDriverShell {
+			out.AdapterScriptFlows = append(out.AdapterScriptFlows, flow.FlowID)
+		}
+	}
+	if len(out.AdapterScriptFlows) > 0 {
+		out.Mode = "adapter_script"
+	}
+	return out
 }
 
 func DefaultMissionOnlyForbiddenTerms() []string {

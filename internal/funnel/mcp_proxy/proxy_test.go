@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,10 +232,72 @@ func TestProxyWithOptions_IdleTimeoutStopsProxy(t *testing.T) {
 	}
 }
 
+func TestProxyWithOptions_SequentialRequestsPreserveResponseOrder(t *testing.T) {
+	outDir := t.TempDir()
+	env := trace.Env{
+		RunID:     "20260215-180012Z-09c5a6",
+		SuiteID:   "heftiweb-smoke",
+		MissionID: "latest-blog-title",
+		AttemptID: "001-latest-blog-title-r1",
+		OutDirAbs: outDir,
+	}
+
+	reqs := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"slow","delayMs":120}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"fast","delayMs":0}}}`,
+	}, "\n") + "\n"
+
+	t.Setenv("GO_WANT_MCP_SERVER_HELPER", "1")
+	t.Setenv("GO_WANT_MCP_SERVER_HELPER_ASYNC", "1")
+
+	var clientOut bytes.Buffer
+	serverArgv := []string{os.Args[0], "-test.run=TestMCPServerHelper"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ProxyWithOptions(ctx, env, serverArgv, bytes.NewBufferString(reqs), &clientOut, Options{
+		MaxPreviewBytes:    16 * 1024,
+		SequentialRequests: true,
+	}); err != nil {
+		t.Fatalf("ProxyWithOptions: %v", err)
+	}
+
+	var ids []int
+	sc := bufio.NewScanner(strings.NewReader(clientOut.String()))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var msg struct {
+			ID int `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		ids = append(ids, msg.ID)
+	}
+	if len(ids) < 3 {
+		t.Fatalf("expected at least 3 responses, got ids=%v output=%q", ids, clientOut.String())
+	}
+	if ids[0] != 1 || ids[1] != 2 || ids[2] != 3 {
+		t.Fatalf("expected ordered responses [1,2,3], got %v output=%q", ids, clientOut.String())
+	}
+}
+
 func TestMCPServerHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_MCP_SERVER_HELPER") != "1" {
 		return
 	}
+	async := os.Getenv("GO_WANT_MCP_SERVER_HELPER_ASYNC") == "1"
+	var outMu sync.Mutex
+	writeLine := func(line string) {
+		outMu.Lock()
+		defer outMu.Unlock()
+		_, _ = os.Stdout.WriteString(line + "\n")
+	}
+	var wg sync.WaitGroup
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
@@ -249,25 +312,45 @@ func TestMCPServerHelper(t *testing.T) {
 		method, _ := msg["method"].(string)
 		switch method {
 		case "initialize":
-			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"capabilities":{}}}` + "\n")
+			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"capabilities":{}}}`)
 		case "tools/list":
-			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"tools":[{"name":"echo"}]}}` + "\n")
+			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"tools":[{"name":"echo"}]}}`)
 		case "tools/call":
 			// Echo the requested text so tests can assert redaction behavior in the proxy trace.
 			text := "ok"
+			delayMs := int64(0)
 			if params, ok := msg["params"].(map[string]any); ok {
 				if args, ok := params["arguments"].(map[string]any); ok {
 					if t, ok := args["text"].(string); ok && t != "" {
 						text = t
 					}
+					if d, ok := args["delayMs"].(float64); ok && d > 0 {
+						delayMs = int64(d)
+					}
 				}
 			}
 			b, _ := json.Marshal(text)
-			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"content":[{"type":"text","text":` + string(b) + `}]}}` + "\n")
+			resp := `{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"content":[{"type":"text","text":` + string(b) + `}]}}`
+			if async {
+				wg.Add(1)
+				go func(delay int64, line string) {
+					defer wg.Done()
+					if delay > 0 {
+						time.Sleep(time.Duration(delay) * time.Millisecond)
+					}
+					writeLine(line)
+				}(delayMs, resp)
+			} else {
+				if delayMs > 0 {
+					time.Sleep(time.Duration(delayMs) * time.Millisecond)
+				}
+				writeLine(resp)
+			}
 		default:
-			_, _ = os.Stdout.WriteString(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"error":{"code":-32601,"message":"method not found"}}` + "\n")
+			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"error":{"code":-32601,"message":"method not found"}}`)
 		}
 	}
+	wg.Wait()
 	os.Exit(0)
 }
 

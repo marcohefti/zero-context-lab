@@ -71,6 +71,8 @@ func (r Runner) runCampaign(args []string) int {
 		return r.runCampaignReport(args[1:])
 	case "publish-check":
 		return r.runCampaignPublishCheck(args[1:])
+	case "doctor":
+		return r.runCampaignDoctor(args[1:])
 	default:
 		fmt.Fprintf(r.Stderr, codeUsage+": unknown campaign subcommand %q\n", args[0])
 		printCampaignHelp(r.Stderr)
@@ -117,6 +119,7 @@ func (r Runner) runCampaignLint(args []string) int {
 		"execution": map[string]any{
 			"flowMode": parsed.Spec.Execution.FlowMode,
 		},
+		"executionMode": campaign.ResolveExecutionMode(parsed),
 		"missions": map[string]any{
 			"selectedTotal": len(parsed.MissionIndexes),
 			"selectionMode": parsed.Spec.MissionSource.Selection.Mode,
@@ -410,7 +413,8 @@ func (r Runner) runCampaignReport(args []string) int {
 	fs := flag.NewFlagSet("campaign report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	campaignID := fs.String("campaign-id", "", "campaign id (required)")
+	campaignID := fs.String("campaign-id", "", "campaign id (required unless --spec is provided)")
+	spec := fs.String("spec", "", "campaign spec file (.json|.yaml|.yml) (optional alternative to --campaign-id)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	format := fs.String("format", "json", "output format list: json,md")
 	force := fs.Bool("force", false, "allow report export when campaign status is invalid|aborted")
@@ -424,21 +428,9 @@ func (r Runner) runCampaignReport(args []string) int {
 		printCampaignReportHelp(r.Stdout)
 		return 0
 	}
-	cid := ids.SanitizeComponent(strings.TrimSpace(*campaignID))
-	if cid == "" {
-		printCampaignReportHelp(r.Stderr)
-		return r.failUsage("campaign report: missing/invalid --campaign-id")
-	}
-
-	m, err := config.LoadMerged(*outRoot)
-	if err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-	st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
-	if err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+	st, exit, ok := r.resolveCampaignRunState(*campaignID, *spec, *outRoot, *jsonOut, "campaign report", printCampaignReportHelp)
+	if !ok {
+		return exit
 	}
 	rep := campaign.BuildReport(st)
 	sum := campaign.BuildSummary(st)
@@ -472,7 +464,8 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 	fs := flag.NewFlagSet("campaign publish-check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	campaignID := fs.String("campaign-id", "", "campaign id (required)")
+	campaignID := fs.String("campaign-id", "", "campaign id (required unless --spec is provided)")
+	spec := fs.String("spec", "", "campaign spec file (.json|.yaml|.yml) (optional alternative to --campaign-id)")
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	force := fs.Bool("force", false, "allow publish-check to pass even when campaign is invalid|aborted")
 	jsonOut := fs.Bool("json", false, "print JSON output")
@@ -485,29 +478,17 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		printCampaignPublishCheckHelp(r.Stdout)
 		return 0
 	}
-	cid := ids.SanitizeComponent(strings.TrimSpace(*campaignID))
-	if cid == "" {
-		printCampaignPublishCheckHelp(r.Stderr)
-		return r.failUsage("campaign publish-check: missing/invalid --campaign-id")
-	}
-
-	m, err := config.LoadMerged(*outRoot)
-	if err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-	st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
-	if err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+	st, exit, resolved := r.resolveCampaignRunState(*campaignID, *spec, *outRoot, *jsonOut, "campaign publish-check", printCampaignPublishCheckHelp)
+	if !resolved {
+		return exit
 	}
 	policy := resolveCampaignInvalidRunPolicy(st)
-	ok := st.Status == campaign.RunStatusValid
+	publishOK := st.Status == campaign.RunStatusValid
 	if !policy.PublishRequiresValid {
-		ok = st.Status != campaign.RunStatusAborted
+		publishOK = st.Status != campaign.RunStatusAborted
 	}
 	if len(policy.Statuses) > 0 && !containsString(policy.Statuses, st.Status) {
-		ok = false
+		publishOK = false
 	}
 	promptModeCompliance := map[string]any{
 		"ok":         true,
@@ -522,7 +503,7 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		parsed, perr := campaign.ParseSpecFile(st.SpecPath)
 		if perr != nil {
 			if policyPayload, policyErr := campaignPolicyErrorPayload(perr); policyErr {
-				ok = false
+				publishOK = false
 				code, _ := policyPayload["code"].(string)
 				if code != "" {
 					st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
@@ -549,7 +530,7 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 			violations := campaign.EvaluatePromptModeViolations(parsed)
 			promptModeCompliance["promptMode"] = parsed.Spec.PromptMode
 			if len(violations) > 0 {
-				ok = false
+				publishOK = false
 				promptModeCompliance["ok"] = false
 				promptModeCompliance["code"] = campaign.ReasonPromptModePolicy
 				promptModeCompliance["violations"] = violations
@@ -561,11 +542,11 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 			}
 		}
 	}
-	if *force && !ok {
-		ok = true
+	if *force && !publishOK {
+		publishOK = true
 	}
 	out := map[string]any{
-		"ok":                   ok,
+		"ok":                   publishOK,
 		"campaignId":           st.CampaignID,
 		"runId":                st.RunID,
 		"status":               st.Status,
@@ -578,7 +559,7 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		if writeExit != 0 {
 			return writeExit
 		}
-	} else if ok {
+	} else if publishOK {
 		fmt.Fprintf(r.Stdout, "publish-check: OK campaign=%s run=%s\n", st.CampaignID, st.RunID)
 	} else {
 		for _, code := range st.ReasonCodes {
@@ -586,10 +567,287 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		}
 		fmt.Fprintf(r.Stderr, "publish-check: FAIL campaign=%s run=%s status=%s\n", st.CampaignID, st.RunID, st.Status)
 	}
-	if ok {
+	if publishOK {
 		return 0
 	}
 	return 2
+}
+
+type campaignDoctorCheck struct {
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
+}
+
+type campaignDoctorResult struct {
+	OK            bool                          `json:"ok"`
+	CampaignID    string                        `json:"campaignId"`
+	SpecPath      string                        `json:"specPath"`
+	OutRoot       string                        `json:"outRoot"`
+	ExecutionMode campaign.ExecutionModeSummary `json:"executionMode"`
+	Checks        []campaignDoctorCheck         `json:"checks"`
+}
+
+func (r Runner) runCampaignDoctor(args []string) int {
+	fs := flag.NewFlagSet("campaign doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	spec := fs.String("spec", "", "campaign spec file (.json|.yaml|.yml) (required)")
+	outRoot := fs.String("out-root", "", "project output root (default from config/env, else spec.outRoot, else .zcl)")
+	jsonOut := fs.Bool("json", false, "print JSON output")
+	help := fs.Bool("help", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		return r.failUsage("campaign doctor: invalid flags")
+	}
+	if *help {
+		printCampaignDoctorHelp(r.Stdout)
+		return 0
+	}
+	if strings.TrimSpace(*spec) == "" {
+		printCampaignDoctorHelp(r.Stderr)
+		return r.failUsage("campaign doctor: missing --spec")
+	}
+
+	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
+	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+			return exit
+		}
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return 1
+	}
+
+	res := campaignDoctorResult{
+		OK:            true,
+		CampaignID:    parsed.Spec.CampaignID,
+		SpecPath:      parsed.SpecPath,
+		OutRoot:       resolvedOutRoot,
+		ExecutionMode: campaign.ResolveExecutionMode(parsed),
+		Checks:        make([]campaignDoctorCheck, 0, 16),
+	}
+	addCheck := func(id string, ok bool, message string) {
+		res.Checks = append(res.Checks, campaignDoctorCheck{
+			ID:      id,
+			OK:      ok,
+			Message: strings.TrimSpace(message),
+		})
+		if !ok {
+			res.OK = false
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(resolvedOutRoot, "runs"), 0o755); err != nil {
+		addCheck("out_root_write_access", false, err.Error())
+	} else {
+		tmp := filepath.Join(resolvedOutRoot, ".campaign-doctor.tmp")
+		if err := os.WriteFile(tmp, []byte("ok\n"), 0o644); err != nil {
+			addCheck("out_root_write_access", false, err.Error())
+		} else {
+			_ = os.Remove(tmp)
+			addCheck("out_root_write_access", true, "")
+		}
+	}
+
+	requiredBins := map[string]bool{}
+	for _, flow := range parsed.Spec.Flows {
+		if len(flow.Runner.Command) == 0 {
+			addCheck("runner_command_"+flow.FlowID, false, "runner.command is empty")
+			continue
+		}
+		cmd0 := strings.TrimSpace(flow.Runner.Command[0])
+		if cmd0 == "" {
+			addCheck("runner_command_"+flow.FlowID, false, "runner.command[0] is empty")
+			continue
+		}
+		requiredBins[cmd0] = true
+		if _, err := exec.LookPath(cmd0); err != nil {
+			addCheck("runner_command_"+flow.FlowID, false, fmt.Sprintf("command not found on PATH: %s", cmd0))
+		} else {
+			addCheck("runner_command_"+flow.FlowID, true, "")
+		}
+
+		scriptPath := campaignRunnerScriptPath(flow.Runner.Command)
+		if strings.TrimSpace(scriptPath) == "" {
+			continue
+		}
+		resolvedScript := scriptPath
+		if !filepath.IsAbs(resolvedScript) {
+			resolvedScript = filepath.Clean(filepath.Join(filepath.Dir(parsed.SpecPath), resolvedScript))
+		}
+		info, err := os.Stat(resolvedScript)
+		if err != nil {
+			addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not found: %s", resolvedScript))
+			continue
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
+			addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not executable: %s", resolvedScript))
+		} else {
+			addCheck("runner_script_"+flow.FlowID, true, "")
+		}
+		if scriptRaw, err := os.ReadFile(resolvedScript); err == nil {
+			for _, bin := range detectCampaignScriptRequiredBinaries(string(scriptRaw)) {
+				requiredBins[bin] = true
+			}
+		}
+	}
+
+	required := make([]string, 0, len(requiredBins))
+	for bin := range requiredBins {
+		bin = strings.TrimSpace(bin)
+		if bin == "" || strings.Contains(bin, string(os.PathSeparator)) {
+			continue
+		}
+		required = append(required, bin)
+	}
+	sort.Strings(required)
+	for _, bin := range required {
+		if _, err := exec.LookPath(bin); err != nil {
+			addCheck("required_binary_"+bin, false, fmt.Sprintf("binary not found on PATH: %s", bin))
+		} else {
+			addCheck("required_binary_"+bin, true, "")
+		}
+	}
+
+	lockPath := campaign.LockPath(resolvedOutRoot, parsed.Spec.CampaignID)
+	lockInfo, err := os.Stat(lockPath)
+	switch {
+	case err == nil:
+		age := r.Now().Sub(lockInfo.ModTime()).Round(time.Second)
+		msg := fmt.Sprintf("campaign lock is present at %s (age=%s)", lockPath, age)
+		if age > 2*time.Minute {
+			msg += "; stale_candidate=true"
+		}
+		ownerPath := filepath.Join(lockPath, "owner.json")
+		if ownerRaw, readErr := os.ReadFile(ownerPath); readErr == nil {
+			var owner struct {
+				PID       int    `json:"pid"`
+				StartedAt string `json:"startedAt"`
+			}
+			if json.Unmarshal(ownerRaw, &owner) == nil && owner.PID > 0 {
+				msg += fmt.Sprintf("; owner.pid=%d", owner.PID)
+				if strings.TrimSpace(owner.StartedAt) != "" {
+					msg += fmt.Sprintf("; owner.startedAt=%s", owner.StartedAt)
+				}
+			}
+		}
+		addCheck("campaign_lock", false, msg)
+	case os.IsNotExist(err):
+		addCheck("campaign_lock", true, "")
+	default:
+		addCheck("campaign_lock", false, err.Error())
+	}
+
+	if *jsonOut {
+		writeExit := r.writeJSON(res)
+		if writeExit != 0 {
+			return writeExit
+		}
+	} else if res.OK {
+		fmt.Fprintf(r.Stdout, "campaign doctor: OK campaign=%s\n", parsed.Spec.CampaignID)
+	} else {
+		for _, c := range res.Checks {
+			if c.OK {
+				continue
+			}
+			fmt.Fprintf(r.Stderr, "campaign doctor: %s: %s\n", c.ID, c.Message)
+		}
+		fmt.Fprintf(r.Stderr, "campaign doctor: FAIL campaign=%s\n", parsed.Spec.CampaignID)
+	}
+	if res.OK {
+		return 0
+	}
+	return 2
+}
+
+func (r Runner) resolveCampaignRunState(campaignID string, specPath string, outRoot string, jsonOut bool, cmdName string, printHelp func(io.Writer)) (campaign.RunStateV1, int, bool) {
+	rawSpec := strings.TrimSpace(specPath)
+	rawCampaignID := strings.TrimSpace(campaignID)
+	switch {
+	case rawSpec != "":
+		parsed, resolvedOutRoot, err := r.loadCampaignSpec(rawSpec, outRoot)
+		if err != nil {
+			if exit, handled := r.writeCampaignSpecPolicyError(err, jsonOut); handled {
+				return campaign.RunStateV1{}, exit, false
+			}
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+			return campaign.RunStateV1{}, 1, false
+		}
+		cid := parsed.Spec.CampaignID
+		if rawCampaignID != "" {
+			requested := ids.SanitizeComponent(rawCampaignID)
+			if requested == "" || requested != cid {
+				if printHelp != nil {
+					printHelp(r.Stderr)
+				}
+				return campaign.RunStateV1{}, r.failUsage(cmdName + ": --campaign-id does not match --spec campaignId"), false
+			}
+		}
+		st, err := campaign.LoadRunState(campaign.RunStatePath(resolvedOutRoot, cid))
+		if err != nil {
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+			return campaign.RunStateV1{}, 1, false
+		}
+		return st, 0, true
+	default:
+		cid := ids.SanitizeComponent(rawCampaignID)
+		if cid == "" {
+			if printHelp != nil {
+				printHelp(r.Stderr)
+			}
+			return campaign.RunStateV1{}, r.failUsage(cmdName + ": missing/invalid --campaign-id (or pass --spec)"), false
+		}
+		m, err := config.LoadMerged(outRoot)
+		if err != nil {
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+			return campaign.RunStateV1{}, 1, false
+		}
+		st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
+		if err != nil {
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+			return campaign.RunStateV1{}, 1, false
+		}
+		return st, 0, true
+	}
+}
+
+func campaignRunnerScriptPath(command []string) string {
+	if len(command) == 0 {
+		return ""
+	}
+	cmd0 := strings.TrimSpace(command[0])
+	if cmd0 == "" {
+		return ""
+	}
+	base := strings.ToLower(filepath.Base(cmd0))
+	if (base == "bash" || base == "sh" || base == "zsh") && len(command) >= 3 {
+		switch strings.TrimSpace(command[1]) {
+		case "-lc", "-c":
+			expr := strings.TrimSpace(command[2])
+			if expr == "" {
+				return ""
+			}
+			fields := strings.Fields(expr)
+			if len(fields) == 0 {
+				return ""
+			}
+			return strings.Trim(fields[0], `"'`)
+		}
+	}
+	if strings.HasPrefix(cmd0, ".") || strings.Contains(cmd0, string(os.PathSeparator)) || strings.HasSuffix(strings.ToLower(cmd0), ".sh") {
+		return cmd0
+	}
+	return ""
+}
+
+func detectCampaignScriptRequiredBinaries(script string) []string {
+	candidates := []string{"jq", "npx", "zcl", "pkill", "sed"}
+	out := make([]string, 0, len(candidates))
+	for _, bin := range candidates {
+		if strings.Contains(script, bin) {
+			out = append(out, bin)
+		}
+	}
+	return out
 }
 
 type campaignExecutionInput struct {
@@ -1415,8 +1673,9 @@ func printCampaignHelp(w io.Writer) {
   zcl campaign canary --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]
   zcl campaign resume --campaign-id <id> [--json]
   zcl campaign status --campaign-id <id> [--json]
-  zcl campaign report --campaign-id <id> [--format json,md] [--force] [--json]
-  zcl campaign publish-check --campaign-id <id> [--force] [--json]
+  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--format json,md] [--force] [--json]
+  zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--force] [--json]
+  zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--json]
 `)
 }
 
@@ -1452,13 +1711,19 @@ func printCampaignStatusHelp(w io.Writer) {
 
 func printCampaignReportHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl campaign report --campaign-id <id> [--out-root .zcl] [--format json,md] [--force] [--json]
+  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]
 `)
 }
 
 func printCampaignPublishCheckHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl campaign publish-check --campaign-id <id> [--out-root .zcl] [--force] [--json]
+  zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--force] [--json]
+`)
+}
+
+func printCampaignDoctorHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--json]
 `)
 }
 

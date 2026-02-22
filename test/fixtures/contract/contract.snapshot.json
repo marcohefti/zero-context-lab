@@ -447,7 +447,7 @@
     },
     {
       "id": "mcp proxy",
-      "usage": "zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]",
+      "usage": "zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] [--sequential] -- <server-cmd> [args...]",
       "summary": "MCP stdio proxy funnel with lifecycle controls (records initialize/tools/list/tools/call)."
     },
     {
@@ -537,13 +537,18 @@
     },
     {
       "id": "campaign report",
-      "usage": "zcl campaign report --campaign-id <id> [--out-root .zcl] [--format json,md] [--force] [--json]",
+      "usage": "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]",
       "summary": "Export campaign aggregate reports with invalid-run publication guards."
     },
     {
       "id": "campaign publish-check",
-      "usage": "zcl campaign publish-check --campaign-id <id> [--out-root .zcl] [--force] [--json]",
+      "usage": "zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--force] [--json]",
       "summary": "Refuse publish-ready benchmark output unless campaign status is valid (unless forced)."
+    },
+    {
+      "id": "campaign doctor",
+      "usage": "zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--json]",
+      "summary": "Preflight campaign execution prerequisites (runner commands, script binaries, outRoot write access, lock state)."
     },
     {
       "id": "mission prompts build",

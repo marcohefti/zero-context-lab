@@ -25,6 +25,7 @@ type reqInfo struct {
 	method         string
 	input          json.RawMessage
 	inputTruncated bool
+	wait           chan struct{}
 }
 
 type boundedCapture struct {
@@ -71,6 +72,7 @@ type Options struct {
 	MaxToolCalls       int64
 	IdleTimeoutMs      int64
 	ShutdownOnComplete bool
+	SequentialRequests bool
 }
 
 func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, opts Options) error {
@@ -214,28 +216,41 @@ func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, c
 				continue
 			}
 			touch()
-			// Forward as-is.
-			_, _ = serverIn.Write(append(line, '\n'))
-
 			var msg map[string]any
 			if err := json.Unmarshal(line, &msg); err != nil {
+				// Forward raw non-JSON lines unchanged.
+				_, _ = serverIn.Write(append(line, '\n'))
 				continue
 			}
 			method, _ := msg["method"].(string)
 			id := jsonRPCID(msg["id"])
-			if id == "" {
-				continue
-			}
 			inputRaw, truncated := boundedJSONRPCInput(msg, schema.ToolInputMaxBytesV1)
 
-			mu.Lock()
-			inflight[id] = reqInfo{
-				start:          time.Now(),
-				method:         method,
-				input:          inputRaw,
-				inputTruncated: truncated,
+			var wait chan struct{}
+			if id != "" && opts.SequentialRequests {
+				wait = make(chan struct{})
 			}
-			mu.Unlock()
+			if id != "" {
+				mu.Lock()
+				inflight[id] = reqInfo{
+					start:          time.Now(),
+					method:         method,
+					input:          inputRaw,
+					inputTruncated: truncated,
+					wait:           wait,
+				}
+				mu.Unlock()
+			}
+
+			_, _ = serverIn.Write(append(line, '\n'))
+			if wait == nil {
+				continue
+			}
+			select {
+			case <-wait:
+			case <-proxyCtx.Done():
+				return
+			}
 		}
 		_ = serverIn.Close()
 	}()
@@ -268,6 +283,9 @@ func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, c
 		mu.Unlock()
 		if !ok {
 			continue
+		}
+		if info.wait != nil {
+			close(info.wait)
 		}
 
 		op := normalizeMCPMethod(info.method)

@@ -981,6 +981,7 @@ func (r Runner) runMCPProxy(args []string) int {
 	maxToolCalls := fs.Int64("max-tool-calls", 0, "max tools/call responses before proxy stops (0 disables)")
 	idleTimeoutMs := fs.Int64("idle-timeout-ms", 0, "idle timeout in ms with no MCP traffic (0 disables)")
 	shutdownOnComplete := fs.Bool("shutdown-on-complete", false, "terminate MCP server when request stream is complete and in-flight calls drain")
+	sequential := fs.Bool("sequential", false, "forward MCP requests sequentially (wait for each id response before sending the next request)")
 	help := fs.Bool("help", false, "show help")
 	if err := fs.Parse(args); err != nil {
 		return r.failUsage("mcp proxy: invalid flags")
@@ -1057,6 +1058,7 @@ func (r Runner) runMCPProxy(args []string) int {
 		MaxToolCalls:       *maxToolCalls,
 		IdleTimeoutMs:      *idleTimeoutMs,
 		ShutdownOnComplete: *shutdownOnComplete,
+		SequentialRequests: *sequential,
 	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
@@ -1309,8 +1311,9 @@ Usage:
   zcl campaign canary --spec <campaign.(yaml|yml|json)> [--json]
   zcl campaign resume --campaign-id <id> [--json]
   zcl campaign status --campaign-id <id> [--json]
-  zcl campaign report --campaign-id <id> [--json]
-  zcl campaign publish-check --campaign-id <id> [--json]
+  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--json]
+  zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--json]
+  zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--json]
   zcl runs list --json
   zcl attempt list [filters...] --json
   zcl attempt latest [filters...] --json
@@ -1340,7 +1343,7 @@ Commands:
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   suite run       Run a suite end-to-end with capability-aware isolation selection.
-  campaign        First-class campaign orchestration (lint/run/canary/resume/status/report/publish-check).
+  campaign        First-class campaign orchestration (lint/run/canary/resume/status/report/publish-check/doctor).
   runs list       List run index rows for automation (use --json).
   attempt list    List attempts with filters (suite/mission/status/tags) as JSON index rows.
   attempt latest  Return latest attempt matching filters as one JSON row.
@@ -1355,7 +1358,7 @@ Commands:
   gc               Retention cleanup under .zcl/runs (supports pinning).
   pin              Pin/unpin a run so gc will keep it.
   enrich           Optional runner enrichment (does not affect scoring).
-  mcp proxy        MCP stdio proxy funnel (records initialize/tools/list/tools/call).
+  mcp proxy        MCP stdio proxy funnel (records initialize/tools/list/tools/call; optional sequential request mode).
   http proxy       HTTP reverse proxy funnel (records method/url/status/latency/bytes).
   run             Run a command through the ZCL CLI funnel.
   version         Print version.
@@ -1510,12 +1513,12 @@ func enrichUsage() string {
 
 func printMCPHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl mcp proxy --max-tool-calls N --idle-timeout-ms N --shutdown-on-complete -- <server-cmd> [args...]
+  zcl mcp proxy --max-tool-calls N --idle-timeout-ms N --shutdown-on-complete --sequential -- <server-cmd> [args...]
 `)
 }
 
 func printMCPProxyHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]
+  zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] [--sequential] -- <server-cmd> [args...]
 `)
 }
