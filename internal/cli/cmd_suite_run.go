@@ -1916,20 +1916,6 @@ func (c *nativeResultCollector) PhaseAware() bool {
 	return c.phaseAware
 }
 
-func extractNativeEventDelta(raw json.RawMessage) string {
-	payload := nativePayloadObject(raw)
-	if len(payload) == 0 {
-		return ""
-	}
-	if delta := extractNativeEventDeltaFromPayload(payload); delta != "" {
-		return delta
-	}
-	if msg := nativeFirstMap(payload, "msg"); len(msg) > 0 {
-		return extractNativeEventDeltaFromPayload(msg)
-	}
-	return ""
-}
-
 func extractNativeEventDeltaFromPayload(payload map[string]any) string {
 	if len(payload) == 0 {
 		return ""
