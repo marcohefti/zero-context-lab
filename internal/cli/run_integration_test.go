@@ -56,6 +56,10 @@ func TestRun_BoundsEnforcedAndTruncationRecorded(t *testing.T) {
 
 	// Write slightly more than the 16KiB preview cap.
 	payload := strings.Repeat("a", 16*1024+123)
+	payloadPath := filepath.Join(outDir, "payload.txt")
+	if err := os.WriteFile(payloadPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -66,12 +70,15 @@ func TestRun_BoundsEnforcedAndTruncationRecorded(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=" + payload, "exit=0"})
+	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout-file=" + payloadPath, "exit=0"})
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
 
 	ev := readSingleTraceEvent(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	if ev.IO.OutBytes != int64(len(payload)) {
+		t.Fatalf("expected outBytes=%d, got %d", len(payload), ev.IO.OutBytes)
+	}
 	if ev.Integrity == nil || !ev.Integrity.Truncated {
 		t.Fatalf("expected truncation integrity flag, got: %+v", ev.Integrity)
 	}
@@ -377,6 +384,7 @@ func TestHelperProcess(t *testing.T) {
 	}
 	out := ""
 	errOut := ""
+	outFile := ""
 	helper := false
 	exit := 0
 	for _, a := range args[idx:] {
@@ -384,12 +392,22 @@ func TestHelperProcess(t *testing.T) {
 			helper = true
 		} else if strings.HasPrefix(a, "stdout=") {
 			out = strings.TrimPrefix(a, "stdout=")
+		} else if strings.HasPrefix(a, "stdout-file=") {
+			outFile = strings.TrimPrefix(a, "stdout-file=")
 		} else if strings.HasPrefix(a, "stderr=") {
 			errOut = strings.TrimPrefix(a, "stderr=")
 		} else if strings.HasPrefix(a, "exit=") {
 			n, _ := strconv.Atoi(strings.TrimPrefix(a, "exit="))
 			exit = n
 		}
+	}
+	if outFile != "" {
+		b, err := os.ReadFile(outFile)
+		if err != nil {
+			_, _ = os.Stderr.WriteString("helper read stdout-file: " + err.Error())
+			os.Exit(2)
+		}
+		out = string(b)
 	}
 	if !helper && os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
