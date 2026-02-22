@@ -1665,7 +1665,7 @@ func shimWrapperScript(bin string) string {
 set -eu
 
 if [ -z "${ZCL_SHIM_BIN_DIR:-}" ]; then
-  echo "ZCL_E_SHIM: missing ZCL_SHIM_BIN_DIR" >&2
+  echo "%s: missing ZCL_SHIM_BIN_DIR" >&2
   exit 127
 fi
 
@@ -1679,7 +1679,7 @@ esac
 export PATH
 
 exec "$ZCL" run --capture -- "%s" "$@"
-`, bin)
+`, codeShim, bin)
 }
 
 func writeRunnerCommandFile(attemptDir string, runnerCmd string, runnerArgs []string, env map[string]string, shimBinDir string) error {
