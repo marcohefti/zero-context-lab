@@ -57,3 +57,17 @@ func TestShouldBreakStaleLock_WithAliveOwner(t *testing.T) {
 		t.Fatalf("expected stale lock with alive owner to not be breakable")
 	}
 }
+
+func TestWithDirLock_TimeoutReturnsTypedError(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "x.lock")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	err := WithDirLock(lockDir, 20*time.Millisecond, func() error { return nil })
+	if err == nil {
+		t.Fatalf("expected lock timeout error")
+	}
+	if !IsLockTimeout(err) {
+		t.Fatalf("expected typed lock timeout error, got %v", err)
+	}
+}

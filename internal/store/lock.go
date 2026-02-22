@@ -2,12 +2,26 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
 )
+
+type LockTimeoutError struct {
+	LockDir string
+}
+
+func (e LockTimeoutError) Error() string {
+	return fmt.Sprintf("timeout acquiring lock: %s", e.LockDir)
+}
+
+func IsLockTimeout(err error) bool {
+	var target LockTimeoutError
+	return errors.As(err, &target)
+}
 
 func WithDirLock(lockDir string, wait time.Duration, fn func() error) error {
 	release, err := acquireDirLock(lockDir, wait)
@@ -77,7 +91,7 @@ func acquireDirLock(lockDir string, wait time.Duration) (func() error, error) {
 		}
 
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timeout acquiring lock: %s", lockDir)
+			return nil, LockTimeoutError{LockDir: lockDir}
 		}
 		// Avoid thundering herd in concurrent writers.
 		if runtime.GOOS == "windows" {

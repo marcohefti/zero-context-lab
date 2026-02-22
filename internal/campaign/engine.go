@@ -37,7 +37,6 @@ type EngineOptions struct {
 	ResumedFromRunID     string
 	MissionIndexes       []int
 	MissionOffset        int
-	TotalMissions        int
 	GlobalTimeoutMs      int64
 	CleanupHookTimeoutMs int64
 	LockWait             time.Duration
@@ -75,6 +74,9 @@ func ExecuteMissionEngine(parsed ParsedSpec, exec MissionExecutor, evalGate Gate
 		return err
 	})
 	if lockErr != nil {
+		if !store.IsLockTimeout(lockErr) {
+			return EngineResult{}, lockErr
+		}
 		st := RunStateV1{
 			SchemaVersion: 1,
 			CampaignID:    parsed.Spec.CampaignID,
@@ -121,12 +123,6 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 	}
 
 	selected := normalizeMissionIndexes(opts.MissionIndexes, parsed)
-	if opts.MissionOffset > 0 || opts.TotalMissions > 0 {
-		selected, err = WindowMissionIndexes(selected, opts.MissionOffset, opts.TotalMissions)
-		if err != nil {
-			return EngineResult{}, err
-		}
-	}
 	pending := make([]int, 0, len(selected))
 	for _, idx := range selected {
 		if !completed[idx] {

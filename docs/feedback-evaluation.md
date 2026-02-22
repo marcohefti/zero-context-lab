@@ -61,7 +61,8 @@ Every recommendation should include:
 - evidence pointer (`attemptDir`/`runDir` + key artifact signal)
 - impacted audience (who benefits beyond one user)
 - scope statement (in-scope vs out-of-scope and why)
-- minimal change shape (what to change, where)
+- optimal solution shape (best operator outcome and system coherence, not smallest patch)
+  - include rejected alternatives and why they lose on reliability/UX/invariants
 - measurable validation plan (how we prove it helped)
 
 Recommendations that fail this bar should not be implemented.

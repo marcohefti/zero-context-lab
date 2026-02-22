@@ -197,7 +197,6 @@ func (r Runner) runCampaignRun(args []string) int {
 	}
 
 	st, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
-		TotalMissions:  total,
 		MissionOffset:  *missionOffset,
 		MissionIndexes: indexes,
 		Canary:         false,
@@ -273,7 +272,6 @@ func (r Runner) runCampaignCanary(args []string) int {
 	}
 
 	st, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
-		TotalMissions:  total,
 		MissionOffset:  *missionOffset,
 		MissionIndexes: indexes,
 		Canary:         true,
@@ -351,14 +349,7 @@ func (r Runner) runCampaignResume(args []string) int {
 	if missionCount == 0 {
 		return r.failUsage("campaign resume: spec has no missions")
 	}
-	remaining := st.TotalMissions - st.MissionsCompleted
-	if remaining <= 0 {
-		// There may still be pending missions not reflected by counters; engine will reconcile against progress ledger.
-		remaining = 0
-	}
-
 	next, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
-		TotalMissions:    remaining,
 		MissionOffset:    0,
 		MissionIndexes:   parsed.MissionIndexes,
 		Canary:           false,
@@ -602,7 +593,6 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 }
 
 type campaignExecutionInput struct {
-	TotalMissions    int
 	MissionOffset    int
 	MissionIndexes   []int
 	Canary           bool
@@ -633,12 +623,6 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 	missionIndexes := in.MissionIndexes
 	if len(missionIndexes) == 0 {
 		missionIndexes = parsed.MissionIndexes
-	}
-	if in.TotalMissions > 0 && len(missionIndexes) > in.TotalMissions {
-		missionIndexes = missionIndexes[:in.TotalMissions]
-	}
-	if in.TotalMissions <= 0 {
-		in.TotalMissions = len(missionIndexes)
 	}
 	stderrMu := &sync.Mutex{}
 	execAdapter, err := runners.NewCampaignExecutor(func(_ context.Context, flow campaign.FlowSpec, missionIndex int, missionID string) (campaign.FlowRunV1, error) {
@@ -676,7 +660,6 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 			ResumedFromRunID:     strings.TrimSpace(in.ResumedFromRunID),
 			MissionIndexes:       missionIndexes,
 			MissionOffset:        in.MissionOffset,
-			TotalMissions:        in.TotalMissions,
 			GlobalTimeoutMs:      parsed.Spec.Timeouts.CampaignGlobalTimeoutMs,
 			CleanupHookTimeoutMs: parsed.Spec.Timeouts.CleanupHookTimeoutMs,
 			LockWait:             750 * time.Millisecond,

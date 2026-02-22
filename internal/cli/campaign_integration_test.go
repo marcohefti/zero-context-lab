@@ -609,6 +609,100 @@ flows:
 	}
 }
 
+func TestCampaignRun_MissionWindowAppliedOnce(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "campaign-suite-window",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } },
+    { "missionId": "m2", "prompt": "p2", "expects": { "ok": true } },
+    { "missionId": "m3", "prompt": "p3", "expects": { "ok": true } },
+    { "missionId": "m4", "prompt": "p4", "expects": { "ok": true } },
+    { "missionId": "m5", "prompt": "p5", "expects": { "ok": true } },
+    { "missionId": "m6", "prompt": "p6", "expects": { "ok": true } },
+    { "missionId": "m7", "prompt": "p7", "expects": { "ok": true } },
+    { "missionId": "m8", "prompt": "p8", "expects": { "ok": true } },
+    { "missionId": "m9", "prompt": "p9", "expects": { "ok": true } },
+    { "missionId": "m10", "prompt": "p10", "expects": { "ok": true } }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-window
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 14, 30, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{
+		"campaign", "run",
+		"--spec", specPath,
+		"--out-root", outRoot,
+		"--mission-offset", "6",
+		"--missions", "3",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	var run struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
+		t.Fatalf("unmarshal campaign run window json: %v stdout=%q", err, stdout.String())
+	}
+	if run.Status != "valid" {
+		t.Fatalf("expected valid status, got %+v", run)
+	}
+
+	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-window", "campaign.run.state.json"))
+	if err != nil {
+		t.Fatalf("read campaign run state: %v", err)
+	}
+	var st struct {
+		TotalMissions int `json:"totalMissions"`
+		MissionGates  []struct {
+			MissionIndex int `json:"missionIndex"`
+		} `json:"missionGates"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal campaign run state: %v", err)
+	}
+	if st.TotalMissions != 3 {
+		t.Fatalf("expected totalMissions=3, got %d", st.TotalMissions)
+	}
+	if len(st.MissionGates) != 3 {
+		t.Fatalf("expected 3 mission gates, got %d", len(st.MissionGates))
+	}
+	got := []int{st.MissionGates[0].MissionIndex, st.MissionGates[1].MissionIndex, st.MissionGates[2].MissionIndex}
+	want := []int{6, 7, 8}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("mission gate indexes mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestCampaignRun_MinimalMissionPackMode(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()
