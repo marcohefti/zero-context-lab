@@ -23,6 +23,7 @@ echo "gofmt-check: PASS"
 go test ./...
 go vet ./...
 ./scripts/campaign-e2e.sh
+./scripts/no-context-examples-check.sh
 
 ./scripts/contract-snapshot.sh --check
 ./scripts/docs-contract-check.sh

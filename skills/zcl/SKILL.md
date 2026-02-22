@@ -29,6 +29,7 @@ Run a mission through ZCL with funnel-first evidence and deterministic artifacts
 | Mission-only prompt mode (`promptMode: mission_only`) | yes | yes | Parse/lint/publish-check enforce no harness-term leakage in mission prompts. |
 | Flow driver contract (`runner.toolDriver.kind`) | yes | yes | Supported kinds: `shell`, `cli_funnel`, `mcp_proxy`, `http_proxy`; shims are merged deterministically. |
 | Auto finalization from mission result channel | yes | yes | `runner.finalization.mode=auto_from_result_json` + `resultChannel` auto-writes `feedback.json` and typed failures. |
+| 3-turn mission-only finalization gating | yes | yes | `runner.finalization.minResultTurn` blocks early/intermediate result payloads until final turn. |
 | Prompt materialization (`mission prompts build`) with deterministic IDs | yes | yes | Uses mission selection and stable hash IDs for reproducible prompt artifacts. |
 | Runner-native subagent lifecycle management inside ZCL | partial | no | Accepted design direction; currently adapters normalize through suite-run orchestration. |
 
@@ -55,7 +56,7 @@ When an operator says "run this through ZCL: <mission>", do this:
    - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
 5. Use process-runner orchestration only as an explicit fallback (Mode B):
-   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --campaign-id <campaignId> --progress-jsonl <path|-> --shim tool-cli --json -- <runner-cmd> [args...]`
+   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --result-min-turn 3 --campaign-id <campaignId> --progress-jsonl <path|-> --shim tool-cli --json -- <runner-cmd> [args...]`
    - `--shim tool-cli` lets the agent type a tool command directly while ZCL still records invocations to `tool.calls.jsonl`.
    - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
    - `--feedback-policy strict` + `--finalization-mode strict` expects explicit `zcl feedback`.
@@ -74,7 +75,8 @@ When an operator says "run this through ZCL: <mission>", do this:
    - No-context campaign mode:
      - set `promptMode: mission_only`
      - set `flows[].runner.finalization.mode: auto_from_result_json`
-     - set `flows[].runner.finalization.resultChannel.kind: file_json|stdout_json`
+     - set `flows[].runner.finalization.resultChannel.kind: file_json|stdout_json` (prefer `file_json` for multi-turn feedback loops)
+     - set `flows[].runner.finalization.minResultTurn: 3` for 3-turn feedback campaigns
      - run `zcl campaign lint --spec ... --json` and fail on prompt contamination before campaign execution.
 7. Finalize attempts:
    - Harness-aware mode (`promptMode: default`): agent must run `zcl feedback --ok|--fail --result ...` or `--result-json ...`.
@@ -109,21 +111,42 @@ Choose exactly one mode:
 - `promptMode: mission_only` (preferred for zero-context):
   - Give mission intent + output contract only.
   - Do **not** mention harness commands (`zcl run`, `zcl mcp proxy`, `zcl feedback`, artifact filenames).
-  - Ensure campaign finalization uses `auto_from_result_json`.
+  - Ensure campaign finalization uses `auto_from_result_json` and prefer `resultChannel.kind=file_json`.
 - `promptMode: default` (harness-aware fallback):
   - Include finish rule (`zcl feedback ...`) and funnel execution requirements.
   - If running under `zcl suite run --shim <tool>`, the agent can invoke the tool directly.
   - If no shim is installed, actions must go through ZCL funnels (for example `zcl run -- ...`).
 
-## Turn 2 (Default)
+## Mission-Only 3-Turn Recipe (Recommended)
 
-One sentence mission prompt. Example:
+Campaign config requirements:
+- `promptMode: mission_only`
+- `runner.finalization.mode: auto_from_result_json`
+- `runner.finalization.resultChannel.kind: file_json`
+- `runner.finalization.minResultTurn: 3`
 
+Turn contract:
+1. Mission prompt turn:
+   - mission intent + output contract only.
+   - no harness terms.
+2. Candid feedback turn:
+   - unstructured/free-text critique is allowed.
+   - this turn is non-finalizable by policy (`minResultTurn: 3`).
+3. Structured extraction turn:
+   - runner emits mission result JSON with `"turn": 3` on the configured result channel.
+   - ZCL finalizes attempt automatically.
+
+Example mission-only final payload (`file_json`):
+```json
+{"ok":true,"turn":3,"resultJson":{"proof":"...","claims":[],"verified":[]}}
+```
+
+## Harness-Aware Prompting (Fallback)
+
+Use this only when mission-only is not feasible.
+
+Example turn:
 "Use a CLI/browser tool to navigate to https://example.com and record TITLE=<...> via `zcl feedback --ok --result ...`."
-
-## Turn 3 (Optional)
-
-Only if needed: request structured formatting or classification, but do not lead the agent during discovery.
 
 ## Expectations (Suite Guardrails)
 

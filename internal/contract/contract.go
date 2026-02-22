@@ -1,16 +1,20 @@
 package contract
 
-import "github.com/marcohefti/zero-context-lab/internal/runners"
+import (
+	"github.com/marcohefti/zero-context-lab/internal/campaign"
+	"github.com/marcohefti/zero-context-lab/internal/runners"
+)
 
 type Contract struct {
-	Name                  string     `json:"name"`
-	Version               string     `json:"version"`
-	ArtifactLayoutVersion int        `json:"artifactLayoutVersion"`
-	TraceSchemaVersion    int        `json:"traceSchemaVersion"`
-	Artifacts             []Artifact `json:"artifacts"`
-	Events                []Event    `json:"events"`
-	Commands              []Command  `json:"commands"`
-	Errors                []Error    `json:"errors"`
+	Name                  string         `json:"name"`
+	Version               string         `json:"version"`
+	ArtifactLayoutVersion int            `json:"artifactLayoutVersion"`
+	TraceSchemaVersion    int            `json:"traceSchemaVersion"`
+	Artifacts             []Artifact     `json:"artifacts"`
+	Events                []Event        `json:"events"`
+	Commands              []Command      `json:"commands"`
+	Errors                []Error        `json:"errors"`
+	CampaignSchema        CampaignSchema `json:"campaignSchema,omitempty"`
 }
 
 type Artifact struct {
@@ -39,6 +43,43 @@ type Error struct {
 	Code      string `json:"code"`
 	Summary   string `json:"summary"`
 	Retryable bool   `json:"retryable"`
+}
+
+type CampaignSchema struct {
+	SchemaVersion      int                    `json:"schemaVersion"`
+	SpecSchemaPath     string                 `json:"specSchemaPath"`
+	TraceProfiles      []string               `json:"traceProfiles"`
+	RunnerTypes        []string               `json:"runnerTypes"`
+	ToolDriverKinds    []string               `json:"toolDriverKinds"`
+	FinalizationModes  []string               `json:"finalizationModes"`
+	ResultChannelKinds []string               `json:"resultChannelKinds"`
+	Defaults           CampaignSchemaDefaults `json:"defaults"`
+	PolicyErrorCodes   []string               `json:"policyErrorCodes"`
+	Fields             []CampaignSchemaField  `json:"fields"`
+}
+
+type CampaignSchemaDefaults struct {
+	PromptMode                  string   `json:"promptMode"`
+	ForbiddenPromptTerms        []string `json:"forbiddenPromptTerms"`
+	FlowMode                    string   `json:"flowMode"`
+	TraceProfile                string   `json:"traceProfile"`
+	ToolDriverKind              string   `json:"toolDriverKind"`
+	FinalizationMode            string   `json:"finalizationMode"`
+	ResultChannelKind           string   `json:"resultChannelKind"`
+	ResultChannelPath           string   `json:"resultChannelPath"`
+	ResultChannelMarker         string   `json:"resultChannelMarker"`
+	ResultMinTurn               int      `json:"resultMinTurn"`
+	FreshAgentPerAttempt        bool     `json:"freshAgentPerAttempt"`
+	AdapterRequiredOutputFields []string `json:"adapterRequiredOutputFields"`
+}
+
+type CampaignSchemaField struct {
+	Path        string   `json:"path"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Enum        []string `json:"enum,omitempty"`
+	Default     any      `json:"default,omitempty"`
+	Description string   `json:"description"`
 }
 
 func Build(version string) Contract {
@@ -357,7 +398,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
 				Summary: "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt.",
 			},
 			{
@@ -433,9 +474,120 @@ func Build(version string) Contract {
 			{Code: "ZCL_E_FUNNEL_BYPASS", Summary: "Primary evidence missing/empty despite a final outcome being recorded (funnel bypass suspected).", Retryable: false},
 			{Code: "ZCL_E_EXPECTATION_FAILED", Summary: "Suite expectations did not match feedback.json.", Retryable: false},
 			{Code: "ZCL_E_SEMANTIC", Summary: "Semantic mission validation failed.", Retryable: false},
+			{Code: "ZCL_E_MISSION_RESULT_MISSING", Summary: "Auto finalization could not find mission result payload on the configured result channel.", Retryable: true},
+			{Code: "ZCL_E_MISSION_RESULT_INVALID", Summary: "Mission result payload is malformed or does not satisfy required fields.", Retryable: false},
+			{Code: "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY", Summary: "Mission result payload turn is below configured minimum finalizable turn.", Retryable: true},
 			{Code: "ZCL_E_CAMPAIGN_GATE_FAILED", Summary: "Campaign pair gate failed for one or more missions.", Retryable: false},
 			{Code: "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED", Summary: "Campaign first mission canary/pair gate failed.", Retryable: false},
+			{Code: campaign.ReasonPromptModePolicy, Summary: "Campaign mission-only prompt policy violation (harness term leakage).", Retryable: false},
+			{Code: campaign.ReasonToolDriverShim, Summary: "Campaign flow with toolDriver.kind=cli_funnel is missing required shims.", Retryable: false},
 			{Code: "ZCL_E_CAMPAIGN_LOCK_TIMEOUT", Summary: "Campaign lock acquisition failed (another campaign run/resume likely owns the lock).", Retryable: true},
+		},
+		CampaignSchema: CampaignSchema{
+			SchemaVersion:      1,
+			SpecSchemaPath:     "internal/campaign/campaign.spec.schema.json",
+			TraceProfiles:      []string{campaign.TraceProfileNone, campaign.TraceProfileStrictBrowserComp, campaign.TraceProfileMCPRequired},
+			RunnerTypes:        []string{campaign.RunnerTypeProcessCmd, campaign.RunnerTypeCodexExec, campaign.RunnerTypeCodexSub, campaign.RunnerTypeClaudeSub},
+			ToolDriverKinds:    []string{campaign.ToolDriverShell, campaign.ToolDriverCLIFunnel, campaign.ToolDriverMCPProxy, campaign.ToolDriverHTTPProxy},
+			FinalizationModes:  []string{campaign.FinalizationModeStrict, campaign.FinalizationModeAutoFail, campaign.FinalizationModeAutoFromResultJSON},
+			ResultChannelKinds: []string{campaign.ResultChannelNone, campaign.ResultChannelFileJSON, campaign.ResultChannelStdoutJSON},
+			Defaults: CampaignSchemaDefaults{
+				PromptMode:                  campaign.PromptModeDefault,
+				ForbiddenPromptTerms:        campaign.DefaultMissionOnlyForbiddenTerms(),
+				FlowMode:                    campaign.FlowModeSequence,
+				TraceProfile:                campaign.TraceProfileNone,
+				ToolDriverKind:              campaign.ToolDriverShell,
+				FinalizationMode:            campaign.FinalizationModeAutoFail,
+				ResultChannelKind:           campaign.ResultChannelNone,
+				ResultChannelPath:           campaign.DefaultResultChannelPath,
+				ResultChannelMarker:         campaign.DefaultResultChannelMarker,
+				ResultMinTurn:               campaign.DefaultMinResultTurn,
+				FreshAgentPerAttempt:        true,
+				AdapterRequiredOutputFields: []string{"attemptDir", "status", "errors"},
+			},
+			PolicyErrorCodes: []string{
+				campaign.ReasonPromptModePolicy,
+				campaign.ReasonToolDriverShim,
+				campaign.ReasonGateFailed,
+				campaign.ReasonFirstMissionGate,
+				campaign.ReasonSemanticFailed,
+			},
+			Fields: []CampaignSchemaField{
+				{
+					Path:        "promptMode",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.PromptModeDefault, campaign.PromptModeMissionOnly},
+					Default:     campaign.PromptModeDefault,
+					Description: "Campaign prompt policy: mission_only blocks harness-term leakage and requires auto result-channel finalization.",
+				},
+				{
+					Path:        "noContext.forbiddenPromptTerms",
+					Type:        "string[]",
+					Required:    false,
+					Default:     campaign.DefaultMissionOnlyForbiddenTerms(),
+					Description: "Forbidden mission prompt substrings enforced when promptMode=mission_only.",
+				},
+				{
+					Path:        "pairGate.traceProfile",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.TraceProfileNone, campaign.TraceProfileStrictBrowserComp, campaign.TraceProfileMCPRequired},
+					Default:     campaign.TraceProfileNone,
+					Description: "Built-in traceability gate profile applied per attempt in pair-gate evaluation.",
+				},
+				{
+					Path:        "flows[].runner.toolDriver.kind",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.ToolDriverShell, campaign.ToolDriverCLIFunnel, campaign.ToolDriverMCPProxy, campaign.ToolDriverHTTPProxy},
+					Default:     campaign.ToolDriverShell,
+					Description: "Flow tool routing contract enforced at campaign parse/lint time.",
+				},
+				{
+					Path:        "flows[].runner.toolDriver.shims",
+					Type:        "string[]",
+					Required:    false,
+					Description: "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only with cli_funnel.",
+				},
+				{
+					Path:        "flows[].runner.finalization.mode",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.FinalizationModeStrict, campaign.FinalizationModeAutoFail, campaign.FinalizationModeAutoFromResultJSON},
+					Default:     campaign.FinalizationModeAutoFail,
+					Description: "Attempt finalization policy. mission_only requires auto_from_result_json.",
+				},
+				{
+					Path:        "flows[].runner.finalization.resultChannel.kind",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.ResultChannelNone, campaign.ResultChannelFileJSON, campaign.ResultChannelStdoutJSON},
+					Default:     campaign.ResultChannelNone,
+					Description: "Mission result source used by auto_from_result_json finalization.",
+				},
+				{
+					Path:        "flows[].runner.finalization.resultChannel.path",
+					Type:        "string",
+					Required:    false,
+					Default:     campaign.DefaultResultChannelPath,
+					Description: "Attempt-relative file path used when resultChannel.kind=file_json.",
+				},
+				{
+					Path:        "flows[].runner.finalization.resultChannel.marker",
+					Type:        "string",
+					Required:    false,
+					Default:     campaign.DefaultResultChannelMarker,
+					Description: "Stdout marker prefix used when resultChannel.kind=stdout_json.",
+				},
+				{
+					Path:        "flows[].runner.finalization.minResultTurn",
+					Type:        "integer",
+					Required:    false,
+					Default:     campaign.DefaultMinResultTurn,
+					Description: "Minimum mission result payload turn accepted for finalization (supports 3-turn feedback loops).",
+				},
+			},
 		},
 	}
 }

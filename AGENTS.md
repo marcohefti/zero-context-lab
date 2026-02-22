@@ -25,12 +25,13 @@ Canonical operator templates:
 - `examples/campaign.no-context.claude-subagent.yaml`
 - `examples/semantic.rulepack.yaml`
 - `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
+- `zcl contract --json` now includes `campaignSchema` for promptMode/toolDriver/finalization field discovery.
 
 Campaign capability status (operator truth source):
 - `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks (`beforeMission/afterMission/onFailure`), campaign lock, traceability profiles, campaign summary outputs (`campaign.summary.json`, `RESULTS.md`).
 - `implemented+enforced`: minimal campaign mode (`missionSource.path` + flows without `suiteFile`) for mission-pack ingestion.
 - `implemented+enforced`: mission-only campaign mode (`promptMode: mission_only`) with lint/publish-check prompt-leak guardrails.
-- `implemented+enforced`: flow-level driver and finalization contracts (`runner.toolDriver`, `runner.finalization.mode`, `runner.finalization.resultChannel`), including auto finalization from mission result JSON channels.
+- `implemented+enforced`: flow-level driver and finalization contracts (`runner.toolDriver`, `runner.finalization.mode`, `runner.finalization.resultChannel`, `runner.finalization.minResultTurn`), including auto finalization from mission result JSON channels and 3-turn no-context loops.
 - `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving), with conformance coverage for campaign-level parity and hidden session reuse blocked (`freshAgentPerAttempt` defaults/enforced true).
 
 ## Non-Negotiables (Keep This Boring)
@@ -72,7 +73,8 @@ Campaign capability status (operator truth source):
    - Mission-only no-context mode:
      - set `promptMode: mission_only`
      - set `runner.finalization.mode: auto_from_result_json`
-     - set `runner.finalization.resultChannel` (`file_json` or `stdout_json`)
+     - set `runner.finalization.resultChannel` (prefer `file_json`; `stdout_json` also supported)
+     - set `runner.finalization.minResultTurn: 3` for mission prompt -> candid feedback -> structured extraction workflows
      - set `runner.toolDriver` so ZCL owns tool funnel policy instead of prompt ceremony
    - Env handoff: source `<attemptDir>/attempt.env.sh` (auto-written), or run `zcl attempt env --format sh <attemptDir>`
 4. Run actions through the funnel:
@@ -181,6 +183,7 @@ What it runs:
 - `scripts/docs-check.sh` (doc cross-links exist)
 - gofmt check
 - `go test ./...`, `go vet ./...`
+- `scripts/no-context-examples-check.sh` (campaign no-context examples lint from repo root)
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
 - `scripts/docs-contract-check.sh` (docs mention commands + SCHEMAS matches contract artifacts)
 

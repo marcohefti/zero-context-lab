@@ -21,7 +21,7 @@ pairGate:
 
 semantic:
   enabled: true
-  rulesPath: ./examples/semantic.rulepack.yaml
+  rulesPath: ./semantic.rulepack.yaml
 
 flows:
   - flowId: flow-a
@@ -36,6 +36,7 @@ flows:
         shims: ["tool-a"]
       finalization:
         mode: auto_from_result_json
+        minResultTurn: 3
         resultChannel:
           kind: file_json
           path: mission.result.json
@@ -52,6 +53,7 @@ flows:
         shims: ["tool-b"]
       finalization:
         mode: auto_from_result_json
+        minResultTurn: 3
         resultChannel:
           kind: file_json
           path: mission.result.json

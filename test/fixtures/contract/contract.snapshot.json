@@ -507,7 +507,7 @@
     },
     {
       "id": "suite run",
-      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
       "summary": "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt."
     },
     {
@@ -668,6 +668,21 @@
       "retryable": false
     },
     {
+      "code": "ZCL_E_MISSION_RESULT_MISSING",
+      "summary": "Auto finalization could not find mission result payload on the configured result channel.",
+      "retryable": true
+    },
+    {
+      "code": "ZCL_E_MISSION_RESULT_INVALID",
+      "summary": "Mission result payload is malformed or does not satisfy required fields.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY",
+      "summary": "Mission result payload turn is below configured minimum finalizable turn.",
+      "retryable": true
+    },
+    {
       "code": "ZCL_E_CAMPAIGN_GATE_FAILED",
       "summary": "Campaign pair gate failed for one or more missions.",
       "retryable": false
@@ -678,9 +693,187 @@
       "retryable": false
     },
     {
+      "code": "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION",
+      "summary": "Campaign mission-only prompt policy violation (harness term leakage).",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED",
+      "summary": "Campaign flow with toolDriver.kind=cli_funnel is missing required shims.",
+      "retryable": false
+    },
+    {
       "code": "ZCL_E_CAMPAIGN_LOCK_TIMEOUT",
       "summary": "Campaign lock acquisition failed (another campaign run/resume likely owns the lock).",
       "retryable": true
     }
-  ]
+  ],
+  "campaignSchema": {
+    "schemaVersion": 1,
+    "specSchemaPath": "internal/campaign/campaign.spec.schema.json",
+    "traceProfiles": [
+      "none",
+      "strict_browser_comparison",
+      "mcp_required"
+    ],
+    "runnerTypes": [
+      "process_cmd",
+      "codex_exec",
+      "codex_subagent",
+      "claude_subagent"
+    ],
+    "toolDriverKinds": [
+      "shell",
+      "cli_funnel",
+      "mcp_proxy",
+      "http_proxy"
+    ],
+    "finalizationModes": [
+      "strict",
+      "auto_fail",
+      "auto_from_result_json"
+    ],
+    "resultChannelKinds": [
+      "none",
+      "file_json",
+      "stdout_json"
+    ],
+    "defaults": {
+      "promptMode": "default",
+      "forbiddenPromptTerms": [
+        "zcl run",
+        "zcl mcp proxy",
+        "zcl http proxy",
+        "zcl feedback",
+        "zcl attempt finish",
+        "tool.calls.jsonl",
+        "feedback.json"
+      ],
+      "flowMode": "sequence",
+      "traceProfile": "none",
+      "toolDriverKind": "shell",
+      "finalizationMode": "auto_fail",
+      "resultChannelKind": "none",
+      "resultChannelPath": "mission.result.json",
+      "resultChannelMarker": "ZCL_RESULT_JSON:",
+      "resultMinTurn": 1,
+      "freshAgentPerAttempt": true,
+      "adapterRequiredOutputFields": [
+        "attemptDir",
+        "status",
+        "errors"
+      ]
+    },
+    "policyErrorCodes": [
+      "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION",
+      "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED",
+      "ZCL_E_CAMPAIGN_GATE_FAILED",
+      "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED",
+      "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
+    ],
+    "fields": [
+      {
+        "path": "promptMode",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "default",
+          "mission_only"
+        ],
+        "default": "default",
+        "description": "Campaign prompt policy: mission_only blocks harness-term leakage and requires auto result-channel finalization."
+      },
+      {
+        "path": "noContext.forbiddenPromptTerms",
+        "type": "string[]",
+        "required": false,
+        "default": [
+          "zcl run",
+          "zcl mcp proxy",
+          "zcl http proxy",
+          "zcl feedback",
+          "zcl attempt finish",
+          "tool.calls.jsonl",
+          "feedback.json"
+        ],
+        "description": "Forbidden mission prompt substrings enforced when promptMode=mission_only."
+      },
+      {
+        "path": "pairGate.traceProfile",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "none",
+          "strict_browser_comparison",
+          "mcp_required"
+        ],
+        "default": "none",
+        "description": "Built-in traceability gate profile applied per attempt in pair-gate evaluation."
+      },
+      {
+        "path": "flows[].runner.toolDriver.kind",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "shell",
+          "cli_funnel",
+          "mcp_proxy",
+          "http_proxy"
+        ],
+        "default": "shell",
+        "description": "Flow tool routing contract enforced at campaign parse/lint time."
+      },
+      {
+        "path": "flows[].runner.toolDriver.shims",
+        "type": "string[]",
+        "required": false,
+        "description": "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only with cli_funnel."
+      },
+      {
+        "path": "flows[].runner.finalization.mode",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "strict",
+          "auto_fail",
+          "auto_from_result_json"
+        ],
+        "default": "auto_fail",
+        "description": "Attempt finalization policy. mission_only requires auto_from_result_json."
+      },
+      {
+        "path": "flows[].runner.finalization.resultChannel.kind",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "none",
+          "file_json",
+          "stdout_json"
+        ],
+        "default": "none",
+        "description": "Mission result source used by auto_from_result_json finalization."
+      },
+      {
+        "path": "flows[].runner.finalization.resultChannel.path",
+        "type": "string",
+        "required": false,
+        "default": "mission.result.json",
+        "description": "Attempt-relative file path used when resultChannel.kind=file_json."
+      },
+      {
+        "path": "flows[].runner.finalization.resultChannel.marker",
+        "type": "string",
+        "required": false,
+        "default": "ZCL_RESULT_JSON:",
+        "description": "Stdout marker prefix used when resultChannel.kind=stdout_json."
+      },
+      {
+        "path": "flows[].runner.finalization.minResultTurn",
+        "type": "integer",
+        "required": false,
+        "default": 1,
+        "description": "Minimum mission result payload turn accepted for finalization (supports 3-turn feedback loops)."
+      }
+    ]
+  }
 }

@@ -127,6 +127,7 @@ Example:
     "feedbackPolicy": "auto_fail",
     "finalization": "auto_from_result_json",
     "resultChannel": "file_json",
+    "resultMinTurn": 3,
     "parallel": 1,
     "total": 2,
     "failFast": true,
@@ -143,6 +144,7 @@ Example:
 Notes:
 - `campaignProfile.finalization` records attempt finalization policy (`strict|auto_fail|auto_from_result_json`).
 - `campaignProfile.resultChannel` records mission result channel (`none|file_json|stdout_json`).
+- `campaignProfile.resultMinTurn` records minimum mission result payload turn accepted for auto finalization.
 - In no-context mode (`promptMode: mission_only`), `auto_from_result_json` is required and ZCL writes `feedback.json` from the configured result channel.
 
 ## `attempt.json` (v1)
@@ -454,11 +456,17 @@ Core enforced fields:
   - `command`, `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
   - `toolDriver.kind`: `shell|cli_funnel|mcp_proxy|http_proxy`
   - `finalization.mode`: `strict|auto_fail|auto_from_result_json`
+  - `finalization.minResultTurn`: integer >= 1 (supports non-finalizable intermediate turns)
   - `finalization.resultChannel.kind`: `none|file_json|stdout_json`
 
 Mission-only guardrails:
 - `promptMode: mission_only` requires `flows[].runner.finalization.mode=auto_from_result_json`.
 - Prompt contamination against forbidden harness terms fails lint/parse/publish-check with `ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION`.
+- `promptMode: mission_only` with `flows[].runner.toolDriver.kind=cli_funnel` requires one of `runner.shims` or `runner.toolDriver.shims`; violations return `ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED`.
+- `flows[].runner.finalization.minResultTurn` can enforce 3-turn workflows by requiring mission result payload field `"turn"` to be >= configured value.
+
+Contract discoverability:
+- `zcl contract --json` includes `campaignSchema` with campaign field paths, enums, defaults, trace profiles, and policy error codes.
 
 ## `campaign.state.json` (optional; v1)
 

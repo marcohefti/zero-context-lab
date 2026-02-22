@@ -450,6 +450,57 @@ flows:
 	}
 }
 
+func TestParseSpecFile_MissionOnlyCLIFunnelRequiresShimsTyped(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and return proof." }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-mission-only
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      toolDriver:
+        kind: cli_funnel
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil {
+		t.Fatalf("expected cli_funnel shim requirement error")
+	} else {
+		var shimErr *ToolDriverShimRequirementError
+		if !errors.As(err, &shimErr) {
+			t.Fatalf("expected typed shim requirement error, got %v", err)
+		}
+		if shimErr.Code != ReasonToolDriverShim {
+			t.Fatalf("expected code %q, got %q", ReasonToolDriverShim, shimErr.Code)
+		}
+		if shimErr.Violation.FlowID != "flow-a" {
+			t.Fatalf("expected flow-a, got %+v", shimErr.Violation)
+		}
+		if !strings.Contains(shimErr.Violation.Snippet, "runner.toolDriver.shims") {
+			t.Fatalf("expected actionable snippet, got %+v", shimErr.Violation)
+		}
+	}
+}
+
 func TestParseSpecFile_FinalizationAndToolDriverNormalization(t *testing.T) {
 	dir := t.TempDir()
 	suitePath := filepath.Join(dir, "suite.json")
@@ -499,5 +550,8 @@ flows:
 	}
 	if ps.Spec.Flows[0].Runner.Finalization.ResultChannel.Marker != DefaultResultChannelMarker {
 		t.Fatalf("expected default stdout marker, got %q", ps.Spec.Flows[0].Runner.Finalization.ResultChannel.Marker)
+	}
+	if ps.Spec.Flows[0].Runner.Finalization.MinResultTurn != DefaultMinResultTurn {
+		t.Fatalf("expected default min result turn %d, got %d", DefaultMinResultTurn, ps.Spec.Flows[0].Runner.Finalization.MinResultTurn)
 	}
 }

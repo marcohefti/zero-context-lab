@@ -14,7 +14,7 @@
 # - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
 # - flows[].flowId, flows[].runner.* (suiteFile optional when missionSource.path is set)
 # - flows[].runner.toolDriver.kind/shims
-# - flows[].runner.finalization.mode/resultChannel
+# - flows[].runner.finalization.mode/minResultTurn/resultChannel
 # - flows[].adapterContract.requiredOutputFields (must include attemptDir/status/errors)
 schemaVersion: 1
 campaignId: tool-comparison
@@ -45,7 +45,7 @@ pairGate:
 
 semantic:
   enabled: true
-  rulesPath: ./examples/semantic.rulepack.yaml
+  rulesPath: ./semantic.rulepack.yaml
 
 noContext:
   forbiddenPromptTerms:

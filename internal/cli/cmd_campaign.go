@@ -100,6 +100,9 @@ func (r Runner) runCampaignLint(args []string) int {
 
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
 	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+			return exit
+		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -172,6 +175,9 @@ func (r Runner) runCampaignRun(args []string) int {
 
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
 	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+			return exit
+		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -239,6 +245,9 @@ func (r Runner) runCampaignCanary(args []string) int {
 
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
 	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+			return exit
+		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -329,6 +338,9 @@ func (r Runner) runCampaignResume(args []string) int {
 	}
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(st.SpecPath, resolvedOutRoot)
 	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+			return exit
+		}
 		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
 		return 1
 	}
@@ -508,19 +520,36 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 	}
 	promptModeCompliance := map[string]any{
 		"ok":         true,
+		"code":       campaign.ReasonPromptModePolicy,
 		"promptMode": "",
+	}
+	toolDriverCompliance := map[string]any{
+		"ok":   true,
+		"code": campaign.ReasonToolDriverShim,
 	}
 	if strings.TrimSpace(st.SpecPath) != "" {
 		parsed, perr := campaign.ParseSpecFile(st.SpecPath)
 		if perr != nil {
-			var promptErr *campaign.PromptModeViolationError
-			if errors.As(perr, &promptErr) {
+			if policyPayload, policyErr := campaignPolicyErrorPayload(perr); policyErr {
 				ok = false
-				promptModeCompliance["ok"] = false
-				promptModeCompliance["promptMode"] = promptErr.PromptMode
-				promptModeCompliance["violations"] = promptErr.Violations
-				promptModeCompliance["error"] = promptErr.Error()
-				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, campaign.ReasonPromptModePolicy))
+				code, _ := policyPayload["code"].(string)
+				if code != "" {
+					st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
+				}
+				switch code {
+				case campaign.ReasonPromptModePolicy:
+					promptModeCompliance["ok"] = false
+					promptModeCompliance["error"] = policyPayload["error"]
+					promptModeCompliance["promptMode"] = policyPayload["promptMode"]
+					promptModeCompliance["violations"] = policyPayload["violations"]
+				case campaign.ReasonToolDriverShim:
+					toolDriverCompliance["ok"] = false
+					toolDriverCompliance["error"] = policyPayload["error"]
+					toolDriverCompliance["violation"] = policyPayload["violation"]
+				default:
+					toolDriverCompliance["ok"] = false
+					toolDriverCompliance["error"] = policyPayload["error"]
+				}
 			} else {
 				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", perr.Error())
 				return 1
@@ -531,7 +560,12 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 			if len(violations) > 0 {
 				ok = false
 				promptModeCompliance["ok"] = false
+				promptModeCompliance["code"] = campaign.ReasonPromptModePolicy
 				promptModeCompliance["violations"] = violations
+				promptModeCompliance["error"] = (&campaign.PromptModeViolationError{
+					PromptMode: parsed.Spec.PromptMode,
+					Violations: violations,
+				}).Error()
 				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, campaign.ReasonPromptModePolicy))
 			}
 		}
@@ -546,6 +580,7 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 		"status":               st.Status,
 		"reasonCodes":          st.ReasonCodes,
 		"promptModeCompliance": promptModeCompliance,
+		"toolDriverCompliance": toolDriverCompliance,
 	}
 	if *jsonOut {
 		writeExit := r.writeJSON(out)
@@ -555,6 +590,9 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 	} else if ok {
 		fmt.Fprintf(r.Stdout, "publish-check: OK campaign=%s run=%s\n", st.CampaignID, st.RunID)
 	} else {
+		for _, code := range st.ReasonCodes {
+			fmt.Fprintf(r.Stderr, "%s\n", code)
+		}
 		fmt.Fprintf(r.Stderr, "publish-check: FAIL campaign=%s run=%s status=%s\n", st.CampaignID, st.RunID, st.Status)
 	}
 	if ok {
@@ -866,6 +904,7 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		"--feedback-policy", flow.Runner.FeedbackPolicy,
 		"--finalization-mode", flow.Runner.Finalization.Mode,
 		"--result-channel", flow.Runner.Finalization.ResultChannel.Kind,
+		"--result-min-turn", strconv.Itoa(flow.Runner.Finalization.MinResultTurn),
 		"--parallel", "1",
 		"--total", strconv.Itoa(seg.TotalMissions),
 		"--mission-offset", strconv.Itoa(seg.MissionOffset),
@@ -1129,6 +1168,49 @@ func formatCampaignResultsMarkdown(sum campaign.SummaryV1) string {
 		fmt.Fprintf(&b, "- attemptDir: `%s`\n", p)
 	}
 	return b.String()
+}
+
+func campaignPolicyErrorPayload(err error) (map[string]any, bool) {
+	if err == nil {
+		return nil, false
+	}
+	var promptErr *campaign.PromptModeViolationError
+	if errors.As(err, &promptErr) {
+		return map[string]any{
+			"ok":         false,
+			"code":       campaign.ReasonPromptModePolicy,
+			"promptMode": promptErr.PromptMode,
+			"violations": promptErr.Violations,
+			"error":      promptErr.Error(),
+		}, true
+	}
+	var shimErr *campaign.ToolDriverShimRequirementError
+	if errors.As(err, &shimErr) {
+		return map[string]any{
+			"ok":        false,
+			"code":      campaign.ReasonToolDriverShim,
+			"violation": shimErr.Violation,
+			"error":     shimErr.Error(),
+		}, true
+	}
+	return nil, false
+}
+
+func (r Runner) writeCampaignSpecPolicyError(err error, jsonOut bool) (int, bool) {
+	payload, ok := campaignPolicyErrorPayload(err)
+	if !ok {
+		return 0, false
+	}
+	code, _ := payload["code"].(string)
+	msg, _ := payload["error"].(string)
+	if jsonOut {
+		if exit := r.writeJSON(payload); exit != 0 {
+			return exit, true
+		}
+	} else {
+		fmt.Fprintf(r.Stderr, "%s: %s\n", code, msg)
+	}
+	return 2, true
 }
 
 func (r Runner) loadCampaignSpec(specPath string, outRoot string) (campaign.ParsedSpec, string, error) {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,6 +126,7 @@ type suiteRunCampaignProfile struct {
 	FeedbackPolicy string   `json:"feedbackPolicy"`
 	Finalization   string   `json:"finalization"`
 	ResultChannel  string   `json:"resultChannel"`
+	ResultMinTurn  int      `json:"resultMinTurn"`
 	Parallel       int      `json:"parallel"`
 	Total          int      `json:"total"`
 	MissionOffset  int      `json:"missionOffset,omitempty"`
@@ -163,6 +165,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	resultChannel := fs.String("result-channel", "", "mission result channel: none|file_json|stdout_json")
 	resultFile := fs.String("result-file", "", "attempt-relative path for result channel file json (used with --result-channel=file_json)")
 	resultMarker := fs.String("result-marker", "", "stdout marker prefix for result channel json (used with --result-channel=stdout_json)")
+	resultMinTurn := fs.Int("result-min-turn", campaign.DefaultMinResultTurn, "minimum turn index accepted for auto result finalization (default 1)")
 	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
@@ -205,6 +208,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	}
 	if *missionOffset < 0 {
 		return r.failUsage("suite run: --mission-offset must be >= 0")
+	}
+	if *resultMinTurn < 1 {
+		return r.failUsage("suite run: --result-min-turn must be >= 1")
 	}
 	if !schema.IsValidTimeoutStartV1(strings.TrimSpace(*timeoutStart)) {
 		return r.failUsage("suite run: invalid --timeout-start (expected attempt_start|first_tool_call)")
@@ -274,9 +280,10 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		return r.failUsage("suite run: invalid --finalization-mode (expected strict|auto_fail|auto_from_result_json)")
 	}
 	resolvedResultChannel := suiteRunResultChannel{
-		Kind:   normalizeSuiteRunResultChannelKind(*resultChannel),
-		Path:   strings.TrimSpace(*resultFile),
-		Marker: strings.TrimSpace(*resultMarker),
+		Kind:         normalizeSuiteRunResultChannelKind(*resultChannel),
+		Path:         strings.TrimSpace(*resultFile),
+		Marker:       strings.TrimSpace(*resultMarker),
+		MinFinalTurn: *resultMinTurn,
 	}
 	if resolvedResultChannel.Kind == "" {
 		if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON {
@@ -308,6 +315,12 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	}
 	if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON && resolvedResultChannel.Kind == campaign.ResultChannelNone {
 		return r.failUsage("suite run: --finalization-mode auto_from_result_json requires --result-channel file_json|stdout_json")
+	}
+	if resolvedResultChannel.MinFinalTurn <= 0 {
+		resolvedResultChannel.MinFinalTurn = campaign.DefaultMinResultTurn
+	}
+	if resolvedFinalizationMode != campaign.FinalizationModeAutoFromResultJSON {
+		resolvedResultChannel.MinFinalTurn = campaign.DefaultMinResultTurn
 	}
 
 	resolvedTimeoutMs := *timeoutMs
@@ -376,6 +389,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		FeedbackPolicy: resolvedFeedbackPolicy,
 		Finalization:   resolvedFinalizationMode,
 		ResultChannel:  resolvedResultChannel.Kind,
+		ResultMinTurn:  resolvedResultChannel.MinFinalTurn,
 		Parallel:       *parallel,
 		Total:          resolvedTotal,
 		MissionOffset:  *missionOffset,
@@ -669,9 +683,10 @@ type suiteRunExecOpts struct {
 }
 
 type suiteRunResultChannel struct {
-	Kind   string
-	Path   string
-	Marker string
+	Kind         string
+	Path         string
+	Marker       string
+	MinFinalTurn int
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
@@ -707,6 +722,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	}
 	env["ZCL_FINALIZATION_MODE"] = strings.TrimSpace(opts.FinalizationMode)
 	env["ZCL_RESULT_CHANNEL_KIND"] = strings.TrimSpace(opts.ResultChannel.Kind)
+	env["ZCL_RESULT_MIN_TURN"] = strconv.Itoa(opts.ResultChannel.MinFinalTurn)
 	switch opts.ResultChannel.Kind {
 	case campaign.ResultChannelFileJSON:
 		if strings.TrimSpace(opts.ResultChannel.Path) != "" {
@@ -974,7 +990,7 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
@@ -984,6 +1000,7 @@ Notes:
   - --feedback-policy=strict leaves missing feedback as a failing contract condition unless --finalization-mode overrides it.
   - --finalization-mode=auto_from_result_json consumes mission result JSON from the configured result channel and writes feedback.json automatically.
   - --result-channel=file_json reads attempt-relative JSON from --result-file (default mission.result.json); --result-channel=stdout_json scans runner stdout for --result-marker (default ZCL_RESULT_JSON:).
+  - --result-min-turn N requires mission result payload field "turn" to be >= N before auto finalization accepts it (default 1).
   - --progress-jsonl writes machine-readable run progress events for dashboard automation.
   - campaign.state.json is updated after run completion for cross-run continuity.
   - Attempts are allocated just-in-time, in waves (--parallel), to avoid pre-expiry before execution.
@@ -1071,8 +1088,12 @@ func maybeWriteAutoResultFeedback(now time.Time, env map[string]string, ar *suit
 	if err != nil {
 		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_MISSING", err)
 	}
-	writeOpts, err := decodeSuiteResultFeedback(raw)
+	writeOpts, err := decodeSuiteResultFeedback(raw, resultChannel.MinFinalTurn)
 	if err != nil {
+		var turnErr *missionResultTurnTooEarlyError
+		if errors.As(err, &turnErr) {
+			return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY", err)
+		}
 		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_INVALID", err)
 	}
 
@@ -1153,7 +1174,26 @@ func extractSuiteResultJSONFromStdout(buf []byte, marker string) ([]byte, error)
 	return nil, fmt.Errorf("stdout result marker %q not found", marker)
 }
 
-func decodeSuiteResultFeedback(raw []byte) (feedback.WriteOpts, error) {
+type missionResultTurnTooEarlyError struct {
+	RequiredMin int
+	Actual      int
+	Missing     bool
+}
+
+func (e *missionResultTurnTooEarlyError) Error() string {
+	if e == nil {
+		return "mission result turn is below required minimum"
+	}
+	if e.Missing {
+		return fmt.Sprintf("mission result requires integer field \"turn\" >= %d", e.RequiredMin)
+	}
+	return fmt.Sprintf("mission result turn %d is below required minimum %d", e.Actual, e.RequiredMin)
+}
+
+func decodeSuiteResultFeedback(raw []byte, minFinalTurn int) (feedback.WriteOpts, error) {
+	if minFinalTurn <= 0 {
+		minFinalTurn = campaign.DefaultMinResultTurn
+	}
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return feedback.WriteOpts{}, fmt.Errorf("invalid mission result json: %w", err)
@@ -1165,6 +1205,19 @@ func decodeSuiteResultFeedback(raw []byte) (feedback.WriteOpts, error) {
 	okVal, ok := rawOK.(bool)
 	if !ok {
 		return feedback.WriteOpts{}, fmt.Errorf("mission result field \"ok\" must be boolean")
+	}
+
+	turnVal, hasTurn, err := parseMissionResultTurn(obj)
+	if err != nil {
+		return feedback.WriteOpts{}, err
+	}
+	if minFinalTurn > campaign.DefaultMinResultTurn {
+		if !hasTurn {
+			return feedback.WriteOpts{}, &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Missing: true}
+		}
+		if turnVal < minFinalTurn {
+			return feedback.WriteOpts{}, &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Actual: turnVal}
+		}
 	}
 
 	opts := feedback.WriteOpts{OK: okVal}
@@ -1197,7 +1250,7 @@ func decodeSuiteResultFeedback(raw []byte) (feedback.WriteOpts, error) {
 		payload := map[string]any{}
 		for k, v := range obj {
 			switch strings.TrimSpace(k) {
-			case "ok", "decisionTags":
+			case "ok", "decisionTags", "turn":
 				continue
 			default:
 				payload[k] = v
@@ -1213,6 +1266,25 @@ func decodeSuiteResultFeedback(raw []byte) (feedback.WriteOpts, error) {
 		opts.ResultJSON = string(b)
 	}
 	return opts, nil
+}
+
+func parseMissionResultTurn(obj map[string]any) (int, bool, error) {
+	rawTurn, present := obj["turn"]
+	if !present {
+		return 0, false, nil
+	}
+	switch v := rawTurn.(type) {
+	case float64:
+		if v != float64(int(v)) {
+			return 0, false, fmt.Errorf("mission result field \"turn\" must be integer")
+		}
+		if int(v) < 1 {
+			return 0, false, fmt.Errorf("mission result field \"turn\" must be >= 1")
+		}
+		return int(v), true, nil
+	default:
+		return 0, false, fmt.Errorf("mission result field \"turn\" must be integer")
+	}
 }
 
 func toStringSlice(v any) ([]string, error) {

@@ -145,6 +145,7 @@
                 "type": "object",
                 "properties": {
                   "mode": { "type": "string", "enum": ["strict", "auto_fail", "auto_from_result_json"] },
+                  "minResultTurn": { "type": "integer", "minimum": 0 },
                   "resultChannel": {
                     "type": "object",
                     "properties": {

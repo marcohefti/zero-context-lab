@@ -28,6 +28,7 @@ flows:
         shims: ["tool-cli"]
       finalization:
         mode: auto_from_result_json
+        minResultTurn: 3
         resultChannel:
           kind: file_json
           path: mission.result.json

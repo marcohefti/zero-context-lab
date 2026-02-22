@@ -34,6 +34,7 @@ const (
 	ReasonAborted          = "ZCL_E_CAMPAIGN_ABORTED"
 	ReasonSemanticFailed   = "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
 	ReasonPromptModePolicy = "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION"
+	ReasonToolDriverShim   = "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED"
 
 	SelectionModeAll       = "all"
 	SelectionModeMissionID = "mission_id"
@@ -62,6 +63,7 @@ const (
 
 	DefaultResultChannelPath   = "mission.result.json"
 	DefaultResultChannelMarker = "ZCL_RESULT_JSON:"
+	DefaultMinResultTurn       = 1
 )
 
 type SpecV1 struct {
@@ -205,6 +207,7 @@ type ToolDriverSpec struct {
 
 type FinalizationSpec struct {
 	Mode          string            `json:"mode,omitempty" yaml:"mode,omitempty"` // strict|auto_fail|auto_from_result_json
+	MinResultTurn int               `json:"minResultTurn,omitempty" yaml:"minResultTurn,omitempty"`
 	ResultChannel ResultChannelSpec `json:"resultChannel,omitempty" yaml:"resultChannel,omitempty"`
 }
 
@@ -243,6 +246,34 @@ func (e *PromptModeViolationError) Error() string {
 	}
 	v := e.Violations[0]
 	return fmt.Sprintf("promptMode mission_only violation: flow=%s mission=%s index=%d term=%q", v.FlowID, v.MissionID, v.MissionIndex, v.Term)
+}
+
+type ToolDriverShimRequirement struct {
+	FlowID         string   `json:"flowId"`
+	PromptMode     string   `json:"promptMode,omitempty"`
+	ToolDriverKind string   `json:"toolDriverKind"`
+	RequiredOneOf  []string `json:"requiredOneOf"`
+	Snippet        string   `json:"snippet"`
+}
+
+type ToolDriverShimRequirementError struct {
+	Code      string                    `json:"code"`
+	Violation ToolDriverShimRequirement `json:"violation"`
+}
+
+func (e *ToolDriverShimRequirementError) Error() string {
+	if e == nil {
+		return "toolDriver shim requirement violated"
+	}
+	v := e.Violation
+	return fmt.Sprintf(
+		"flow %q: promptMode=%s with toolDriver.kind=%s requires shims; set one of %s (example: %s)",
+		v.FlowID,
+		v.PromptMode,
+		v.ToolDriverKind,
+		strings.Join(v.RequiredOneOf, " or "),
+		v.Snippet,
+	)
 }
 
 func ParseSpecFile(path string) (ParsedSpec, error) {
@@ -435,6 +466,12 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		if !isValidFinalizationMode(f.Runner.Finalization.Mode) {
 			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.mode (expected %s|%s|%s)", f.FlowID, FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON)
 		}
+		if f.Runner.Finalization.MinResultTurn < 0 {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.minResultTurn must be >= 1 when set", f.FlowID)
+		}
+		if f.Runner.Finalization.MinResultTurn == 0 {
+			f.Runner.Finalization.MinResultTurn = DefaultMinResultTurn
+		}
 		f.Runner.Finalization.ResultChannel.Kind = strings.ToLower(strings.TrimSpace(f.Runner.Finalization.ResultChannel.Kind))
 		if f.Runner.Finalization.ResultChannel.Kind == "" {
 			if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON {
@@ -474,7 +511,16 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=mission_only requires runner.finalization.mode=%s", f.FlowID, FinalizationModeAutoFromResultJSON)
 			}
 			if f.Runner.ToolDriver.Kind == ToolDriverCLIFunnel && len(f.Runner.Shims) == 0 {
-				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=mission_only with toolDriver.kind=%s requires runner.shims or runner.toolDriver.shims", f.FlowID, ToolDriverCLIFunnel)
+				return ParsedSpec{}, &ToolDriverShimRequirementError{
+					Code: ReasonToolDriverShim,
+					Violation: ToolDriverShimRequirement{
+						FlowID:         f.FlowID,
+						PromptMode:     spec.PromptMode,
+						ToolDriverKind: f.Runner.ToolDriver.Kind,
+						RequiredOneOf:  []string{"runner.shims", "runner.toolDriver.shims"},
+						Snippet:        "runner.shims: [\"tool-cli\"]\n# or\nrunner.toolDriver.shims: [\"tool-cli\"]",
+					},
+				}
 			}
 		}
 		if f.Runner.FreshAgentPerAttempt == nil {
@@ -731,6 +777,13 @@ func defaultMissionOnlyForbiddenTerms() []string {
 		"tool.calls.jsonl",
 		"feedback.json",
 	}
+}
+
+func DefaultMissionOnlyForbiddenTerms() []string {
+	terms := defaultMissionOnlyForbiddenTerms()
+	out := make([]string, len(terms))
+	copy(out, terms)
+	return out
 }
 
 func decodeSpecStrict(absPath string, raw []byte) (SpecV1, error) {

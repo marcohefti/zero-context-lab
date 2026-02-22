@@ -915,6 +915,108 @@ func TestSuiteRun_FinalizationAutoFromResultNoTraceStillProducesEvidence(t *test
 	}
 }
 
+func TestSuiteRun_FinalizationAutoFromResultMinTurnRejectsEarlyTurn(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-min-turn",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 30, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "file_json",
+		"--result-min-turn", "3",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-turn-2",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+	var sum struct {
+		Attempts []struct {
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 1 || sum.Attempts[0].AutoFeedbackCode != "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY" {
+		t.Fatalf("expected turn-too-early code, got %+v", sum)
+	}
+}
+
+func TestSuiteRun_FinalizationAutoFromResultMinTurnAcceptsFinalTurn(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-min-turn-ok",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 35, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "file_json",
+		"--result-min-turn", "3",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-turn-3",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			Finish           struct {
+				OK bool `json:"ok"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK || sum.Attempts[0].AutoFeedbackCode != "" {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return
@@ -986,6 +1088,26 @@ func TestHelperSuiteRunnerProcess(t *testing.T) {
 		}
 		if err := os.WriteFile(path, []byte(`{"ok":`), 0o644); err != nil {
 			os.Exit(109)
+		}
+		os.Exit(exit)
+	case "result-file-turn-2":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+		if path == "" {
+			os.Exit(110)
+		}
+		if err := os.WriteFile(path, []byte(`{"ok":true,"turn":2,"resultJson":{"proof":"turn-2"}}`), 0o644); err != nil {
+			os.Exit(111)
+		}
+		os.Exit(exit)
+	case "result-file-turn-3":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+		if path == "" {
+			os.Exit(112)
+		}
+		if err := os.WriteFile(path, []byte(`{"ok":true,"turn":3,"resultJson":{"proof":"turn-3"}}`), 0o644); err != nil {
+			os.Exit(113)
 		}
 		os.Exit(exit)
 	case "result-stdout-ok":

@@ -332,6 +332,176 @@ flows:
 	}
 }
 
+func TestCampaignLint_MissionOnlyViolationReturnsTypedCode(t *testing.T) {
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-lint-mission-only",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and call zcl feedback." }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-lint-mission-only
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 18, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign lint expected 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK         bool   `json:"ok"`
+		Code       string `json:"code"`
+		PromptMode string `json:"promptMode"`
+		Violations []struct {
+			FlowID string `json:"flowId"`
+			Term   string `json:"term"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign lint output: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK || out.Code != "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION" || out.PromptMode != "mission_only" || len(out.Violations) == 0 {
+		t.Fatalf("unexpected campaign lint policy output: %+v", out)
+	}
+}
+
+func TestCampaignLint_CLIFunnelShimViolationStructured(t *testing.T) {
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-lint-shim",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and return proof." }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-lint-shim
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      toolDriver:
+        kind: cli_funnel
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 18, 5, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign lint expected 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK        bool   `json:"ok"`
+		Code      string `json:"code"`
+		Violation struct {
+			FlowID        string   `json:"flowId"`
+			RequiredOneOf []string `json:"requiredOneOf"`
+			Snippet       string   `json:"snippet"`
+		} `json:"violation"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign lint output: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK || out.Code != "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED" {
+		t.Fatalf("unexpected campaign lint shim output: %+v", out)
+	}
+	if out.Violation.FlowID != "flow-a" || len(out.Violation.RequiredOneOf) != 2 || !strings.Contains(out.Violation.Snippet, "runner.toolDriver.shims") {
+		t.Fatalf("unexpected shim violation payload: %+v", out.Violation)
+	}
+}
+
+func TestCampaignRun_MissionOnlyViolationReturnsTypedCode(t *testing.T) {
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-mission-only",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and call zcl feedback." }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-run-mission-only
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 18, 10, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign run expected 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign run policy output: %v stdout=%q", err, stdout.String())
+	}
+	if out.Code != "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION" {
+		t.Fatalf("expected prompt mode policy code, got %+v", out)
+	}
+}
+
 func TestCampaignResume_DoesNotDuplicateAttempts(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()
@@ -718,7 +888,8 @@ flows:
 		OK          bool     `json:"ok"`
 		ReasonCodes []string `json:"reasonCodes"`
 		Compliance  struct {
-			OK bool `json:"ok"`
+			OK   bool   `json:"ok"`
+			Code string `json:"code"`
 		} `json:"promptModeCompliance"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
@@ -726,6 +897,9 @@ flows:
 	}
 	if out.OK || out.Compliance.OK {
 		t.Fatalf("expected mission-only prompt compliance failure, got %+v", out)
+	}
+	if out.Compliance.Code != "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION" {
+		t.Fatalf("expected prompt mode compliance code, got %+v", out.Compliance)
 	}
 	if !strings.Contains(strings.Join(out.ReasonCodes, ","), "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION") {
 		t.Fatalf("expected prompt mode reason code, got %+v", out.ReasonCodes)
