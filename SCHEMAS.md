@@ -125,6 +125,8 @@ Example:
     "timeoutStart": "first_tool_call",
     "isolationModel": "process_runner",
     "feedbackPolicy": "auto_fail",
+    "finalization": "auto_from_result_json",
+    "resultChannel": "file_json",
     "parallel": 1,
     "total": 2,
     "failFast": true,
@@ -137,6 +139,11 @@ Example:
   "createdAt": "2026-02-15T18:00:12.123456789Z"
 }
 ```
+
+Notes:
+- `campaignProfile.finalization` records attempt finalization policy (`strict|auto_fail|auto_from_result_json`).
+- `campaignProfile.resultChannel` records mission result channel (`none|file_json|stdout_json`).
+- In no-context mode (`promptMode: mission_only`), `auto_from_result_json` is required and ZCL writes `feedback.json` from the configured result channel.
 
 ## `attempt.json` (v1)
 
@@ -420,6 +427,38 @@ Required fields:
   }
 }
 ```
+
+## `campaign.spec.v1` (input contract; strict)
+
+Path:
+- `internal/campaign/campaign.spec.schema.json`
+- commonly authored as `campaign.yaml` / `campaign.json`
+
+Parse/validation behavior:
+- Unknown fields fail parse (strict decode), except explicit `x-*` extensions.
+- First-class commands (`zcl campaign lint/run/canary/resume`) all use this contract.
+
+Core enforced fields:
+- `campaignId`, `flows[]`
+- `promptMode`: `default|mission_only`
+- `noContext.forbiddenPromptTerms`: mission-only contamination guard list
+- `missionSource.path` and `missionSource.selection` (`all|mission_id|index|range`)
+- `execution.flowMode` (`sequence|parallel`)
+- `pairGate` (`enabled`, `stopOnFirstMissionFailure`, `traceProfile`)
+- `semantic` (`enabled`, `rulesPath`)
+- `cleanup` (`beforeMission`, `afterMission`, `onFailure`)
+- `timeouts` (`campaignGlobalTimeoutMs`, `defaultAttemptTimeoutMs`, `cleanupHookTimeoutMs`, `timeoutStart`)
+- `invalidRunPolicy` (`statuses`, `publishRequiresValid`, `forceFlag`)
+- `flows[].runner`:
+  - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent`
+  - `command`, `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
+  - `toolDriver.kind`: `shell|cli_funnel|mcp_proxy|http_proxy`
+  - `finalization.mode`: `strict|auto_fail|auto_from_result_json`
+  - `finalization.resultChannel.kind`: `none|file_json|stdout_json`
+
+Mission-only guardrails:
+- `promptMode: mission_only` requires `flows[].runner.finalization.mode=auto_from_result_json`.
+- Prompt contamination against forbidden harness terms fails lint/parse/publish-check with `ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION`.
 
 ## `campaign.state.json` (optional; v1)
 

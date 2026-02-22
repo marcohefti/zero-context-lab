@@ -22,6 +22,8 @@ const (
 	RunnerTypeCodexExec    = "codex_exec"
 	RunnerTypeCodexSub     = "codex_subagent"
 	RunnerTypeClaudeSub    = "claude_subagent"
+	PromptModeDefault      = "default"
+	PromptModeMissionOnly  = "mission_only"
 	RunStatusValid         = "valid"
 	RunStatusInvalid       = "invalid"
 	RunStatusAborted       = "aborted"
@@ -31,6 +33,7 @@ const (
 	ReasonFlowFailed       = "ZCL_E_CAMPAIGN_FLOW_FAILED"
 	ReasonAborted          = "ZCL_E_CAMPAIGN_ABORTED"
 	ReasonSemanticFailed   = "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
+	ReasonPromptModePolicy = "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION"
 
 	SelectionModeAll       = "all"
 	SelectionModeMissionID = "mission_id"
@@ -43,12 +46,29 @@ const (
 	TraceProfileNone              = "none"
 	TraceProfileStrictBrowserComp = "strict_browser_comparison"
 	TraceProfileMCPRequired       = "mcp_required"
+
+	ToolDriverShell     = "shell"
+	ToolDriverCLIFunnel = "cli_funnel"
+	ToolDriverMCPProxy  = "mcp_proxy"
+	ToolDriverHTTPProxy = "http_proxy"
+
+	FinalizationModeStrict             = "strict"
+	FinalizationModeAutoFail           = "auto_fail"
+	FinalizationModeAutoFromResultJSON = "auto_from_result_json"
+
+	ResultChannelNone       = "none"
+	ResultChannelFileJSON   = "file_json"
+	ResultChannelStdoutJSON = "stdout_json"
+
+	DefaultResultChannelPath   = "mission.result.json"
+	DefaultResultChannelMarker = "ZCL_RESULT_JSON:"
 )
 
 type SpecV1 struct {
 	SchemaVersion int    `json:"schemaVersion" yaml:"schemaVersion"`
 	CampaignID    string `json:"campaignId" yaml:"campaignId"`
 	OutRoot       string `json:"outRoot,omitempty" yaml:"outRoot,omitempty"`
+	PromptMode    string `json:"promptMode,omitempty" yaml:"promptMode,omitempty"` // default|mission_only
 
 	TotalMissions  int  `json:"totalMissions,omitempty" yaml:"totalMissions,omitempty"`
 	CanaryMissions int  `json:"canaryMissions,omitempty" yaml:"canaryMissions,omitempty"`
@@ -61,6 +81,7 @@ type SpecV1 struct {
 	Cleanup       CleanupSpec       `json:"cleanup,omitempty" yaml:"cleanup,omitempty"`
 	Timeouts      TimeoutsSpec      `json:"timeouts,omitempty" yaml:"timeouts,omitempty"`
 	Output        OutputPolicySpec  `json:"output,omitempty" yaml:"output,omitempty"`
+	NoContext     NoContextSpec     `json:"noContext,omitempty" yaml:"noContext,omitempty"`
 
 	InvalidRunPolicy InvalidRunPolicySpec `json:"invalidRunPolicy,omitempty" yaml:"invalidRunPolicy,omitempty"`
 
@@ -118,6 +139,10 @@ type TimeoutsSpec struct {
 	TimeoutStart            string `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"`
 }
 
+type NoContextSpec struct {
+	ForbiddenPromptTerms []string `json:"forbiddenPromptTerms,omitempty" yaml:"forbiddenPromptTerms,omitempty"`
+}
+
 type OutputPolicySpec struct {
 	ReportPath    string `json:"reportPath,omitempty" yaml:"reportPath,omitempty"`
 	SummaryPath   string `json:"summaryPath,omitempty" yaml:"summaryPath,omitempty"`
@@ -151,13 +176,15 @@ type RunnerAdapterSpec struct {
 	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 	Shims   []string          `json:"shims,omitempty" yaml:"shims,omitempty"`
 
-	SessionIsolation string `json:"sessionIsolation,omitempty" yaml:"sessionIsolation,omitempty"` // auto|process|native
-	FeedbackPolicy   string `json:"feedbackPolicy,omitempty" yaml:"feedbackPolicy,omitempty"`     // strict|auto_fail
-	Mode             string `json:"mode,omitempty" yaml:"mode,omitempty"`                         // discovery|ci
-	TimeoutMs        int64  `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
-	TimeoutStart     string `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"` // attempt_start|first_tool_call
-	Strict           *bool  `json:"strict,omitempty" yaml:"strict,omitempty"`
-	StrictExpect     *bool  `json:"strictExpect,omitempty" yaml:"strictExpect,omitempty"`
+	SessionIsolation string           `json:"sessionIsolation,omitempty" yaml:"sessionIsolation,omitempty"` // auto|process|native
+	FeedbackPolicy   string           `json:"feedbackPolicy,omitempty" yaml:"feedbackPolicy,omitempty"`     // strict|auto_fail
+	Mode             string           `json:"mode,omitempty" yaml:"mode,omitempty"`                         // discovery|ci
+	TimeoutMs        int64            `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
+	TimeoutStart     string           `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"` // attempt_start|first_tool_call
+	Strict           *bool            `json:"strict,omitempty" yaml:"strict,omitempty"`
+	StrictExpect     *bool            `json:"strictExpect,omitempty" yaml:"strictExpect,omitempty"`
+	ToolDriver       ToolDriverSpec   `json:"toolDriver,omitempty" yaml:"toolDriver,omitempty"`
+	Finalization     FinalizationSpec `json:"finalization,omitempty" yaml:"finalization,omitempty"`
 
 	MCP MCPLifecycleSpec `json:"mcp,omitempty" yaml:"mcp,omitempty"`
 
@@ -171,6 +198,22 @@ type MCPLifecycleSpec struct {
 	ShutdownOnComplete bool  `json:"shutdownOnComplete,omitempty" yaml:"shutdownOnComplete,omitempty"`
 }
 
+type ToolDriverSpec struct {
+	Kind  string   `json:"kind,omitempty" yaml:"kind,omitempty"` // shell|cli_funnel|mcp_proxy|http_proxy
+	Shims []string `json:"shims,omitempty" yaml:"shims,omitempty"`
+}
+
+type FinalizationSpec struct {
+	Mode          string            `json:"mode,omitempty" yaml:"mode,omitempty"` // strict|auto_fail|auto_from_result_json
+	ResultChannel ResultChannelSpec `json:"resultChannel,omitempty" yaml:"resultChannel,omitempty"`
+}
+
+type ResultChannelSpec struct {
+	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // none|file_json|stdout_json
+	Path   string `json:"path,omitempty" yaml:"path,omitempty"`     // required for file_json (relative to attempt dir)
+	Marker string `json:"marker,omitempty" yaml:"marker,omitempty"` // stdout_json marker prefix
+}
+
 type ParsedSpec struct {
 	SpecPath string
 	Spec     SpecV1
@@ -180,6 +223,26 @@ type ParsedSpec struct {
 	FlowSuites map[string]suite.ParsedSuite
 	// MissionIndexes is the canonical campaign selection/order after missionSource.selection.
 	MissionIndexes []int
+}
+
+type PromptModeViolation struct {
+	FlowID       string `json:"flowId"`
+	MissionID    string `json:"missionId"`
+	MissionIndex int    `json:"missionIndex"`
+	Term         string `json:"term"`
+}
+
+type PromptModeViolationError struct {
+	PromptMode string                `json:"promptMode"`
+	Violations []PromptModeViolation `json:"violations"`
+}
+
+func (e *PromptModeViolationError) Error() string {
+	if e == nil || len(e.Violations) == 0 {
+		return "promptMode mission_only violation"
+	}
+	v := e.Violations[0]
+	return fmt.Sprintf("promptMode mission_only violation: flow=%s mission=%s index=%d term=%q", v.FlowID, v.MissionID, v.MissionIndex, v.Term)
 }
 
 func ParseSpecFile(path string) (ParsedSpec, error) {
@@ -212,6 +275,17 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	}
 	if spec.CanaryMissions < 0 {
 		return ParsedSpec{}, fmt.Errorf("canaryMissions must be >= 0")
+	}
+	spec.PromptMode = strings.ToLower(strings.TrimSpace(spec.PromptMode))
+	if spec.PromptMode == "" {
+		spec.PromptMode = PromptModeDefault
+	}
+	if !isValidPromptMode(spec.PromptMode) {
+		return ParsedSpec{}, fmt.Errorf("invalid promptMode (expected %s|%s)", PromptModeDefault, PromptModeMissionOnly)
+	}
+	spec.NoContext.ForbiddenPromptTerms = normalizeTerms(spec.NoContext.ForbiddenPromptTerms)
+	if spec.PromptMode == PromptModeMissionOnly && len(spec.NoContext.ForbiddenPromptTerms) == 0 {
+		spec.NoContext.ForbiddenPromptTerms = defaultMissionOnlyForbiddenTerms()
 	}
 	spec.MissionSource.Path = strings.TrimSpace(spec.MissionSource.Path)
 	if spec.MissionSource.Path != "" && !filepath.IsAbs(spec.MissionSource.Path) {
@@ -328,6 +402,14 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		if !schema.IsValidFeedbackPolicyV1(f.Runner.FeedbackPolicy) {
 			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.feedbackPolicy", f.FlowID)
 		}
+		f.Runner.ToolDriver.Kind = strings.ToLower(strings.TrimSpace(f.Runner.ToolDriver.Kind))
+		if f.Runner.ToolDriver.Kind == "" {
+			f.Runner.ToolDriver.Kind = ToolDriverShell
+		}
+		if !isValidToolDriverKind(f.Runner.ToolDriver.Kind) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.toolDriver.kind (expected %s|%s|%s|%s)", f.FlowID, ToolDriverShell, ToolDriverCLIFunnel, ToolDriverMCPProxy, ToolDriverHTTPProxy)
+		}
+		f.Runner.ToolDriver.Shims = normalizeCommand(f.Runner.ToolDriver.Shims)
 		if strings.TrimSpace(f.Runner.TimeoutStart) == "" && strings.TrimSpace(spec.Timeouts.TimeoutStart) != "" {
 			f.Runner.TimeoutStart = spec.Timeouts.TimeoutStart
 		}
@@ -340,7 +422,61 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		if f.Runner.MCP.MaxToolCalls < 0 || f.Runner.MCP.IdleTimeoutMs < 0 {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.mcp fields must be >= 0", f.FlowID)
 		}
-		f.Runner.Shims = normalizeCommand(f.Runner.Shims)
+		f.Runner.Shims = dedupeStringsStable(normalizeCommand(append(append([]string{}, f.Runner.Shims...), f.Runner.ToolDriver.Shims...)))
+		f.Runner.Finalization.Mode = strings.ToLower(strings.TrimSpace(f.Runner.Finalization.Mode))
+		if f.Runner.Finalization.Mode == "" {
+			switch schema.NormalizeFeedbackPolicyV1(f.Runner.FeedbackPolicy) {
+			case schema.FeedbackPolicyStrictV1:
+				f.Runner.Finalization.Mode = FinalizationModeStrict
+			default:
+				f.Runner.Finalization.Mode = FinalizationModeAutoFail
+			}
+		}
+		if !isValidFinalizationMode(f.Runner.Finalization.Mode) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.mode (expected %s|%s|%s)", f.FlowID, FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON)
+		}
+		f.Runner.Finalization.ResultChannel.Kind = strings.ToLower(strings.TrimSpace(f.Runner.Finalization.ResultChannel.Kind))
+		if f.Runner.Finalization.ResultChannel.Kind == "" {
+			if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON {
+				f.Runner.Finalization.ResultChannel.Kind = ResultChannelFileJSON
+			} else {
+				f.Runner.Finalization.ResultChannel.Kind = ResultChannelNone
+			}
+		}
+		if !isValidResultChannelKind(f.Runner.Finalization.ResultChannel.Kind) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.resultChannel.kind (expected %s|%s|%s)", f.FlowID, ResultChannelNone, ResultChannelFileJSON, ResultChannelStdoutJSON)
+		}
+		switch f.Runner.Finalization.ResultChannel.Kind {
+		case ResultChannelFileJSON:
+			f.Runner.Finalization.ResultChannel.Path = strings.TrimSpace(f.Runner.Finalization.ResultChannel.Path)
+			if f.Runner.Finalization.ResultChannel.Path == "" {
+				f.Runner.Finalization.ResultChannel.Path = DefaultResultChannelPath
+			}
+			if filepath.IsAbs(f.Runner.Finalization.ResultChannel.Path) {
+				return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.resultChannel.path must be attempt-relative", f.FlowID)
+			}
+			f.Runner.Finalization.ResultChannel.Marker = ""
+		case ResultChannelStdoutJSON:
+			f.Runner.Finalization.ResultChannel.Marker = strings.TrimSpace(f.Runner.Finalization.ResultChannel.Marker)
+			if f.Runner.Finalization.ResultChannel.Marker == "" {
+				f.Runner.Finalization.ResultChannel.Marker = DefaultResultChannelMarker
+			}
+			f.Runner.Finalization.ResultChannel.Path = ""
+		default:
+			f.Runner.Finalization.ResultChannel.Path = ""
+			f.Runner.Finalization.ResultChannel.Marker = ""
+		}
+		if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON && f.Runner.Finalization.ResultChannel.Kind == ResultChannelNone {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.mode=%s requires runner.finalization.resultChannel.kind", f.FlowID, FinalizationModeAutoFromResultJSON)
+		}
+		if spec.PromptMode == PromptModeMissionOnly {
+			if f.Runner.Finalization.Mode != FinalizationModeAutoFromResultJSON {
+				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=mission_only requires runner.finalization.mode=%s", f.FlowID, FinalizationModeAutoFromResultJSON)
+			}
+			if f.Runner.ToolDriver.Kind == ToolDriverCLIFunnel && len(f.Runner.Shims) == 0 {
+				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=mission_only with toolDriver.kind=%s requires runner.shims or runner.toolDriver.shims", f.FlowID, ToolDriverCLIFunnel)
+			}
+		}
 		if f.Runner.FreshAgentPerAttempt == nil {
 			def := true
 			f.Runner.FreshAgentPerAttempt = &def
@@ -409,14 +545,23 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	if spec.TotalMissions > 0 && spec.TotalMissions < 1 {
 		return ParsedSpec{}, fmt.Errorf("totalMissions must be >= 1 when set")
 	}
-
-	return ParsedSpec{
+	parsed := ParsedSpec{
 		SpecPath:       absPath,
 		Spec:           spec,
 		BaseSuite:      base,
 		FlowSuites:     flowSuites,
 		MissionIndexes: indexes,
-	}, nil
+	}
+	if spec.PromptMode == PromptModeMissionOnly {
+		violations := EvaluatePromptModeViolations(parsed)
+		if len(violations) > 0 {
+			return ParsedSpec{}, &PromptModeViolationError{
+				PromptMode: spec.PromptMode,
+				Violations: violations,
+			}
+		}
+	}
+	return parsed, nil
 }
 
 func (s SpecV1) PairGateEnabled() bool {
@@ -512,6 +657,80 @@ func WindowMissionIndexes(indexes []int, missionOffset int, totalMissions int) (
 	out := make([]int, len(window))
 	copy(out, window)
 	return out, nil
+}
+
+func EvaluatePromptModeViolations(parsed ParsedSpec) []PromptModeViolation {
+	if parsed.Spec.PromptMode != PromptModeMissionOnly {
+		return nil
+	}
+	terms := parsed.Spec.NoContext.ForbiddenPromptTerms
+	if len(terms) == 0 {
+		terms = defaultMissionOnlyForbiddenTerms()
+	}
+	if len(terms) == 0 || len(parsed.MissionIndexes) == 0 || len(parsed.FlowSuites) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]PromptModeViolation, 0, 8)
+	for _, flow := range parsed.Spec.Flows {
+		ps, ok := parsed.FlowSuites[flow.FlowID]
+		if !ok {
+			continue
+		}
+		for _, idx := range parsed.MissionIndexes {
+			if idx < 0 || idx >= len(ps.Suite.Missions) {
+				continue
+			}
+			m := ps.Suite.Missions[idx]
+			promptLower := strings.ToLower(m.Prompt)
+			for _, term := range terms {
+				term = strings.TrimSpace(term)
+				if term == "" {
+					continue
+				}
+				needle := strings.ToLower(term)
+				if !strings.Contains(promptLower, needle) {
+					continue
+				}
+				key := flow.FlowID + "|" + strconv.Itoa(idx) + "|" + m.MissionID + "|" + needle
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, PromptModeViolation{
+					FlowID:       flow.FlowID,
+					MissionID:    m.MissionID,
+					MissionIndex: idx,
+					Term:         term,
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].FlowID != out[j].FlowID {
+			return out[i].FlowID < out[j].FlowID
+		}
+		if out[i].MissionIndex != out[j].MissionIndex {
+			return out[i].MissionIndex < out[j].MissionIndex
+		}
+		if out[i].MissionID != out[j].MissionID {
+			return out[i].MissionID < out[j].MissionID
+		}
+		return out[i].Term < out[j].Term
+	})
+	return out
+}
+
+func defaultMissionOnlyForbiddenTerms() []string {
+	return []string{
+		"zcl run",
+		"zcl mcp proxy",
+		"zcl http proxy",
+		"zcl feedback",
+		"zcl attempt finish",
+		"tool.calls.jsonl",
+		"feedback.json",
+	}
 }
 
 func decodeSpecStrict(absPath string, raw []byte) (SpecV1, error) {
@@ -659,9 +878,73 @@ func normalizeCommand(in []string) []string {
 	return out
 }
 
+func normalizeTerms(in []string) []string {
+	in = normalizeCommand(in)
+	if len(in) == 0 {
+		return nil
+	}
+	return dedupeStringsStable(in)
+}
+
+func dedupeStringsStable(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		key := strings.TrimSpace(v)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func isValidRunnerType(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidPromptMode(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case PromptModeDefault, PromptModeMissionOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidToolDriverKind(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case ToolDriverShell, ToolDriverCLIFunnel, ToolDriverMCPProxy, ToolDriverHTTPProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidFinalizationMode(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidResultChannelKind(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case ResultChannelNone, ResultChannelFileJSON, ResultChannelStdoutJSON:
 		return true
 	default:
 		return false

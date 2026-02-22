@@ -682,6 +682,239 @@ func TestSuiteRun_WritesCampaignStateAndProgress(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_FinalizationAutoFromResultFileJSON(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-file",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "file_json",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir       string `json:"attemptDir"`
+			AutoFeedback     bool   `json:"autoFeedback"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			Finish           struct {
+				OK bool `json:"ok"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	if !sum.Attempts[0].AutoFeedback || sum.Attempts[0].AutoFeedbackCode != "" {
+		t.Fatalf("expected auto feedback from result channel without infra code, got %+v", sum.Attempts[0])
+	}
+
+	fbBytes, err := os.ReadFile(filepath.Join(sum.Attempts[0].AttemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		OK         bool `json:"ok"`
+		ResultJSON struct {
+			Proof string `json:"proof"`
+		} `json:"resultJson"`
+	}
+	if err := json.Unmarshal(fbBytes, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if !fb.OK || fb.ResultJSON.Proof != "file-channel-ok" {
+		t.Fatalf("unexpected feedback payload: %+v", fb)
+	}
+}
+
+func TestSuiteRun_FinalizationAutoFromResultStdoutJSON(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-stdout",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 5, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--capture-runner-io=false",
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "stdout_json",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-stdout-ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			Finish           struct {
+				OK bool `json:"ok"`
+			} `json:"finish"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK || sum.Attempts[0].AutoFeedbackCode != "" {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+}
+
+func TestSuiteRun_FinalizationAutoFromResultInvalidWritesTypedFailure(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-invalid",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 10, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "file_json",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-invalid",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+	}
+	var sum struct {
+		Attempts []struct {
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 1 || sum.Attempts[0].AutoFeedbackCode != "ZCL_E_MISSION_RESULT_INVALID" {
+		t.Fatalf("expected typed result-channel invalid code, got %+v", sum)
+	}
+}
+
+func TestSuiteRun_FinalizationAutoFromResultNoTraceStillProducesEvidence(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-result-no-trace",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 20, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--finalization-mode", "auto_from_result_json",
+		"--result-channel", "file_json",
+		"--json",
+		"--",
+		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-no-trace-ok",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+	var sum struct {
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum)
+	}
+	tracePath := filepath.Join(sum.Attempts[0].AttemptDir, "tool.calls.jsonl")
+	traceBytes, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("read tool.calls.jsonl: %v", err)
+	}
+	if !strings.Contains(string(traceBytes), "suite-runner-result-channel") {
+		t.Fatalf("expected synthetic result-channel trace event, got %s", string(traceBytes))
+	}
+}
+
 func TestHelperSuiteRunnerProcess(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return
@@ -725,6 +958,43 @@ func TestHelperSuiteRunnerProcess(t *testing.T) {
 		os.Exit(exit)
 	case "no-feedback":
 		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		os.Exit(exit)
+	case "result-file-ok":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+		if path == "" {
+			os.Exit(104)
+		}
+		if err := os.WriteFile(path, []byte(`{"ok":true,"resultJson":{"proof":"file-channel-ok"}}`), 0o644); err != nil {
+			os.Exit(105)
+		}
+		os.Exit(exit)
+	case "result-file-no-trace-ok":
+		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+		if path == "" {
+			os.Exit(106)
+		}
+		if err := os.WriteFile(path, []byte(`{"ok":true,"resultJson":{"proof":"file-channel-no-trace"}}`), 0o644); err != nil {
+			os.Exit(107)
+		}
+		os.Exit(exit)
+	case "result-file-invalid":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+		if path == "" {
+			os.Exit(108)
+		}
+		if err := os.WriteFile(path, []byte(`{"ok":`), 0o644); err != nil {
+			os.Exit(109)
+		}
+		os.Exit(exit)
+	case "result-stdout-ok":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		marker := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_MARKER"))
+		if marker == "" {
+			marker = "ZCL_RESULT_JSON:"
+		}
+		_, _ = os.Stdout.WriteString(marker + `{"ok":true,"resultJson":{"proof":"stdout-channel-ok"}}` + "\n")
 		os.Exit(exit)
 	case "sleep":
 		time.Sleep(3 * time.Second)

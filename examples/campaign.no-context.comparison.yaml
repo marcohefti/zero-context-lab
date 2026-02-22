@@ -1,0 +1,57 @@
+schemaVersion: 1
+campaignId: no-context-comparison
+outRoot: .zcl
+promptMode: mission_only
+
+missionSource:
+  path: ./missions
+  selection:
+    mode: range
+    range:
+      start: 0
+      end: 9
+
+execution:
+  flowMode: parallel
+
+pairGate:
+  enabled: true
+  stopOnFirstMissionFailure: true
+  traceProfile: strict_browser_comparison
+
+semantic:
+  enabled: true
+  rulesPath: ./examples/semantic.rulepack.yaml
+
+flows:
+  - flowId: flow-a
+    runner:
+      type: codex_subagent
+      command: ["codex", "agent", "run", "--", "./scripts/runner_flow_a.sh"]
+      sessionIsolation: process
+      feedbackPolicy: strict
+      freshAgentPerAttempt: true
+      toolDriver:
+        kind: cli_funnel
+        shims: ["tool-a"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+          path: mission.result.json
+
+  - flowId: flow-b
+    runner:
+      type: claude_subagent
+      command: ["claude", "--", "./scripts/runner_flow_b.sh"]
+      sessionIsolation: process
+      feedbackPolicy: strict
+      freshAgentPerAttempt: true
+      toolDriver:
+        kind: cli_funnel
+        shims: ["tool-b"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+          path: mission.result.json

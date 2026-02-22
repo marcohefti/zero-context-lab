@@ -560,6 +560,178 @@ flows:
 	}
 }
 
+func TestCampaignRun_AdapterParityConformance(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-adapter-parity",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-adapter-parity
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-process
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+  - flowId: flow-codex-exec
+    suiteFile: suite.json
+    runner:
+      type: codex_exec
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+  - flowId: flow-codex-sub
+    suiteFile: suite.json
+    runner:
+      type: codex_subagent
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+  - flowId: flow-claude-sub
+    suiteFile: suite.json
+    runner:
+      type: claude_subagent
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 16, 30, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-adapter-parity", "campaign.run.state.json"))
+	if err != nil {
+		t.Fatalf("read campaign state: %v", err)
+	}
+	var st struct {
+		Status   string `json:"status"`
+		FlowRuns []struct {
+			RunnerType string `json:"runnerType"`
+			Attempts   []struct {
+				Status string   `json:"status"`
+				Errors []string `json:"errors"`
+			} `json:"attempts"`
+		} `json:"flowRuns"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal campaign state: %v", err)
+	}
+	if st.Status != "valid" || len(st.FlowRuns) != 4 {
+		t.Fatalf("unexpected campaign state: %+v", st)
+	}
+	signatures := map[string]int{}
+	for _, fr := range st.FlowRuns {
+		if len(fr.Attempts) != 1 {
+			t.Fatalf("expected one attempt per flow, got %+v", fr)
+		}
+		sig := fr.Attempts[0].Status + "|" + strings.Join(fr.Attempts[0].Errors, ",")
+		signatures[sig]++
+	}
+	if len(signatures) != 1 {
+		t.Fatalf("expected identical adapter outcome signatures, got %+v", signatures)
+	}
+	for sig := range signatures {
+		if sig != "valid|" {
+			t.Fatalf("expected valid adapter signature, got %q", sig)
+		}
+	}
+}
+
+func TestCampaignPublishCheck_FailsMissionOnlyPromptLeak(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-no-context",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve the mission and return proof JSON." }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-no-context
+promptMode: mission_only
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-ok"]
+      toolDriver:
+        kind: shell
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 16, 40, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	// Simulate accidental harness leakage introduced after run.
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-no-context",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and call zcl feedback with result." }
+  ]
+}`)
+
+	stdout.Reset()
+	stderr.Reset()
+	code = r.Run([]string{"campaign", "publish-check", "--campaign-id", "cmp-no-context", "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("expected publish-check failure, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK          bool     `json:"ok"`
+		ReasonCodes []string `json:"reasonCodes"`
+		Compliance  struct {
+			OK bool `json:"ok"`
+		} `json:"promptModeCompliance"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal publish-check output: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK || out.Compliance.OK {
+		t.Fatalf("expected mission-only prompt compliance failure, got %+v", out)
+	}
+	if !strings.Contains(strings.Join(out.ReasonCodes, ","), "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION") {
+		t.Fatalf("expected prompt mode reason code, got %+v", out.ReasonCodes)
+	}
+}
+
 func countJSONLLines(t *testing.T, path string) int {
 	t.Helper()
 	f, err := os.Open(path)

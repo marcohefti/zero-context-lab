@@ -2,6 +2,7 @@
 #
 # Supported by current ZCL parser/executor:
 # - schemaVersion, campaignId, outRoot
+# - promptMode (default|mission_only), noContext.forbiddenPromptTerms
 # - totalMissions, canaryMissions, failFast
 # - missionSource.path + missionSource.selection (all|mission_id|index|range)
 # - execution.flowMode (sequence|parallel)
@@ -12,10 +13,13 @@
 # - output.reportPath/summaryPath/resultsMdPath/publishCheck/progressJsonl
 # - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
 # - flows[].flowId, flows[].runner.* (suiteFile optional when missionSource.path is set)
+# - flows[].runner.toolDriver.kind/shims
+# - flows[].runner.finalization.mode/resultChannel
 # - flows[].adapterContract.requiredOutputFields (must include attemptDir/status/errors)
 schemaVersion: 1
 campaignId: tool-comparison
 outRoot: .zcl
+promptMode: default
 
 totalMissions: 0
 canaryMissions: 3
@@ -42,6 +46,12 @@ pairGate:
 semantic:
   enabled: true
   rulesPath: ./examples/semantic.rulepack.yaml
+
+noContext:
+  forbiddenPromptTerms:
+    - "zcl run"
+    - "zcl mcp proxy"
+    - "zcl feedback"
 
 cleanup:
   beforeMission:
@@ -83,6 +93,13 @@ flows:
       strict: true
       strictExpect: true
       freshAgentPerAttempt: true
+      toolDriver:
+        kind: cli_funnel
+        shims: ["tool-cli"]
+      finalization:
+        mode: auto_fail
+        resultChannel:
+          kind: none
       mcp:
         maxToolCalls: 60
         idleTimeoutMs: 30000
@@ -104,6 +121,13 @@ flows:
       strict: true
       strictExpect: true
       freshAgentPerAttempt: true
+      toolDriver:
+        kind: cli_funnel
+        shims: ["tool-cli"]
+      finalization:
+        mode: auto_fail
+        resultChannel:
+          kind: none
       mcp:
         maxToolCalls: 60
         idleTimeoutMs: 30000

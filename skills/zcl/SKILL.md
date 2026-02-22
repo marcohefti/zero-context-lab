@@ -18,6 +18,7 @@ Run a mission through ZCL with funnel-first evidence and deterministic artifacts
 | First-class campaign lifecycle (`campaign lint/run/canary/resume/status/report/publish-check`) | yes | yes | Report/publish paths are guarded by invalid-run policy and `--force`. |
 | Mission-by-mission campaign engine with checkpointing (`campaign.plan.json`, `campaign.progress.jsonl`) | yes | yes | Resume and duplicate-attempt guards rely on progress ledger + campaign lock. |
 | Runner adapter contract (`process_cmd`, `codex_exec`, `codex_subagent`, `claude_subagent`) | yes | yes | Normalized attempt contract requires `attemptDir`, `status`, `errors`. |
+| Adapter parity conformance at campaign layer | yes | yes | Integration coverage asserts identical outcome signatures across adapter types for equivalent flows. |
 | Semantic gating (`validate --semantic`, campaign semantic gate) | yes | yes | Semantic-enabled campaigns fail gate when semantic rules are unevaluated or failing. |
 | MCP lifecycle controls (`max-tool-calls`, `idle-timeout-ms`, `shutdown-on-complete`) | yes | yes | Flow runner env injects MCP lifecycle knobs deterministically. |
 | Cleanup hooks (`cleanup.beforeMission/afterMission/onFailure`) + campaign global timeout | yes | yes | Hook/global timeout failures produce aborted campaign with typed reason codes + cleanup lifecycle progress events. |
@@ -25,6 +26,9 @@ Run a mission through ZCL with funnel-first evidence and deterministic artifacts
 | Flow execution mode (`execution.flowMode`: sequence/parallel) | yes | yes | Campaign mission engine can run flow pairs sequentially or in parallel per mission. |
 | Built-in traceability gate profiles (`pairGate.traceProfile`) | yes | yes | Includes `strict_browser_comparison` and `mcp_required` without external validators. |
 | Campaign summary outputs (`campaign.summary.json`, `RESULTS.md`) | yes | yes | Auto-written on campaign run/report for claimed-vs-verified review. |
+| Mission-only prompt mode (`promptMode: mission_only`) | yes | yes | Parse/lint/publish-check enforce no harness-term leakage in mission prompts. |
+| Flow driver contract (`runner.toolDriver.kind`) | yes | yes | Supported kinds: `shell`, `cli_funnel`, `mcp_proxy`, `http_proxy`; shims are merged deterministically. |
+| Auto finalization from mission result channel | yes | yes | `runner.finalization.mode=auto_from_result_json` + `resultChannel` auto-writes `feedback.json` and typed failures. |
 | Prompt materialization (`mission prompts build`) with deterministic IDs | yes | yes | Uses mission selection and stable hash IDs for reproducible prompt artifacts. |
 | Runner-native subagent lifecycle management inside ZCL | partial | no | Accepted design direction; currently adapters normalize through suite-run orchestration. |
 
@@ -51,10 +55,11 @@ When an operator says "run this through ZCL: <mission>", do this:
    - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
 5. Use process-runner orchestration only as an explicit fallback (Mode B):
-   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --shim tool-cli --json -- <runner-cmd> [args...]`
+   - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --campaign-id <campaignId> --progress-jsonl <path|-> --shim tool-cli --json -- <runner-cmd> [args...]`
    - `--shim tool-cli` lets the agent type a tool command directly while ZCL still records invocations to `tool.calls.jsonl`.
    - Suite run captures runner IO by default into `runner.*` logs for post-mortems.
-   - `--feedback-policy strict` disables synthetic feedback finalization; `auto_fail` writes canonical infra-failure feedback when missing.
+   - `--feedback-policy strict` + `--finalization-mode strict` expects explicit `zcl feedback`.
+   - `--finalization-mode auto_from_result_json` consumes mission proof JSON from `file_json` or `stdout_json` channel.
 6. Use first-class campaign orchestration for multi-flow deterministic benchmarking:
    - `zcl campaign lint --spec <campaign.(yaml|yml|json)> --json`
    - `zcl campaign canary --spec <campaign.(yaml|yml|json)> --missions 3 --json`
@@ -66,8 +71,14 @@ When an operator says "run this through ZCL: <mission>", do this:
    - Minimal mode pattern: `missionSource.path: ./missions` + `flows[].runner` blocks (no `suiteFile` required).
    - Fresh-session policy: keep `runner.freshAgentPerAttempt=true` (default/enforced).
    - Traceability profile: set `pairGate.traceProfile` (`strict_browser_comparison` or `mcp_required`) for baseline gate families.
-7. Require the agent to finish by running:
-   - `zcl feedback --ok|--fail --result ...` or `--result-json ...`
+   - No-context campaign mode:
+     - set `promptMode: mission_only`
+     - set `flows[].runner.finalization.mode: auto_from_result_json`
+     - set `flows[].runner.finalization.resultChannel.kind: file_json|stdout_json`
+     - run `zcl campaign lint --spec ... --json` and fail on prompt contamination before campaign execution.
+7. Finalize attempts:
+   - Harness-aware mode (`promptMode: default`): agent must run `zcl feedback --ok|--fail --result ...` or `--result-json ...`.
+   - No-context mode (`promptMode: mission_only`): agent emits mission result JSON on configured channel; ZCL writes `feedback.json` automatically.
 8. Optionally ask for self-report feedback and persist it as secondary evidence:
    - `zcl note --kind agent --message "..."`
 9. Report back from artifacts (not from transcript):
@@ -85,17 +96,24 @@ When an operator says "run this through ZCL: <mission>", do this:
    - `zcl mission prompts build --spec <campaign.(yaml|yml|json)> --template <template.txt|md> --json`
 13. Start from in-repo canonical templates when bootstrapping campaign specs:
    - `examples/campaign.canonical.yaml`
+   - `examples/campaign.no-context.comparison.yaml`
+   - `examples/campaign.no-context.codex-exec.yaml`
+   - `examples/campaign.no-context.codex-subagent.yaml`
+   - `examples/campaign.no-context.claude-subagent.yaml`
    - `examples/semantic.rulepack.yaml`
 
-## Fixed Harness Preamble (Turn 1)
+## Prompt Policy (Turn 1)
 
-You must tell the spawned agent:
-- Finish rule: must end with `zcl feedback ...` (required for scoring).
-- Attempt context: ZCL attempt env vars are already provided (do not invent ids).
-- Tool execution rule depends on how you launched the attempt:
-  - If running under `zcl suite run --session-isolation process --shim <tool>`: the agent should invoke the tool normally (no `zcl run` ceremony).
-  - If no shim is installed: all actions must go through ZCL funnels (e.g. `zcl run -- ...`) so evidence exists.
-  - For MCP funnels with lifecycle controls in long campaigns: `zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> ...`.
+Choose exactly one mode:
+
+- `promptMode: mission_only` (preferred for zero-context):
+  - Give mission intent + output contract only.
+  - Do **not** mention harness commands (`zcl run`, `zcl mcp proxy`, `zcl feedback`, artifact filenames).
+  - Ensure campaign finalization uses `auto_from_result_json`.
+- `promptMode: default` (harness-aware fallback):
+  - Include finish rule (`zcl feedback ...`) and funnel execution requirements.
+  - If running under `zcl suite run --shim <tool>`, the agent can invoke the tool directly.
+  - If no shim is installed, actions must go through ZCL funnels (for example `zcl run -- ...`).
 
 ## Turn 2 (Default)
 
@@ -114,6 +132,15 @@ Suite `expects` can be grounded in:
 - trace-derived constraints (`expects.trace.*`), e.g.:
   - `maxToolCallsTotal`, `maxFailuresTotal`, `maxRepeatStreak`
   - `requireCommandPrefix: ["tool-cli"]` to ensure the intended tool was actually invoked
+
+## Migration Path: Harness Prompt -> Mission-Only
+
+1. Move harness instructions out of mission prompts.
+2. Set `promptMode: mission_only` in campaign spec.
+3. Set flow finalization to `auto_from_result_json` and choose `resultChannel` (`file_json` or `stdout_json`).
+4. Set `runner.toolDriver` and shims so ZCL owns tool funnel policy.
+5. Run `zcl campaign lint --spec ... --json` and fix any `promptMode` violations.
+6. Run canary, then full run, then `zcl campaign publish-check --campaign-id ... --json`.
 
 ## Local Install (CLI + Skill)
 

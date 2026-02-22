@@ -123,6 +123,8 @@ type suiteRunCampaignProfile struct {
 	TimeoutStart   string   `json:"timeoutStart"`
 	IsolationModel string   `json:"isolationModel"`
 	FeedbackPolicy string   `json:"feedbackPolicy"`
+	Finalization   string   `json:"finalization"`
+	ResultChannel  string   `json:"resultChannel"`
 	Parallel       int      `json:"parallel"`
 	Total          int      `json:"total"`
 	MissionOffset  int      `json:"missionOffset,omitempty"`
@@ -157,6 +159,10 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	timeoutMs := fs.Int64("timeout-ms", 0, "optional attempt timeout override in ms (default from suite defaults.timeoutMs)")
 	timeoutStart := fs.String("timeout-start", "", "optional timeout anchor override: attempt_start|first_tool_call")
 	feedbackPolicy := fs.String("feedback-policy", "", "missing feedback policy override: strict|auto_fail (default from suite defaults, else auto_fail)")
+	finalizationMode := fs.String("finalization-mode", "", "attempt finalization override: strict|auto_fail|auto_from_result_json")
+	resultChannel := fs.String("result-channel", "", "mission result channel: none|file_json|stdout_json")
+	resultFile := fs.String("result-file", "", "attempt-relative path for result channel file json (used with --result-channel=file_json)")
+	resultMarker := fs.String("result-marker", "", "stdout marker prefix for result channel json (used with --result-channel=stdout_json)")
 	blindOverride := fs.String("blind", "", "optional blind-mode override: on|off")
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
@@ -263,6 +269,46 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	if !schema.IsValidFeedbackPolicyV1(resolvedFeedbackPolicy) {
 		return r.failUsage("suite run: invalid --feedback-policy (expected strict|auto_fail)")
 	}
+	resolvedFinalizationMode := normalizeSuiteRunFinalizationMode(*finalizationMode, resolvedFeedbackPolicy)
+	if !isValidSuiteRunFinalizationMode(resolvedFinalizationMode) {
+		return r.failUsage("suite run: invalid --finalization-mode (expected strict|auto_fail|auto_from_result_json)")
+	}
+	resolvedResultChannel := suiteRunResultChannel{
+		Kind:   normalizeSuiteRunResultChannelKind(*resultChannel),
+		Path:   strings.TrimSpace(*resultFile),
+		Marker: strings.TrimSpace(*resultMarker),
+	}
+	if resolvedResultChannel.Kind == "" {
+		if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON {
+			resolvedResultChannel.Kind = campaign.ResultChannelFileJSON
+		} else {
+			resolvedResultChannel.Kind = campaign.ResultChannelNone
+		}
+	}
+	if !isValidSuiteRunResultChannelKind(resolvedResultChannel.Kind) {
+		return r.failUsage("suite run: invalid --result-channel (expected none|file_json|stdout_json)")
+	}
+	switch resolvedResultChannel.Kind {
+	case campaign.ResultChannelFileJSON:
+		if resolvedResultChannel.Path == "" {
+			resolvedResultChannel.Path = campaign.DefaultResultChannelPath
+		}
+		if filepath.IsAbs(resolvedResultChannel.Path) {
+			return r.failUsage("suite run: --result-file must be attempt-relative")
+		}
+		resolvedResultChannel.Marker = ""
+	case campaign.ResultChannelStdoutJSON:
+		if resolvedResultChannel.Marker == "" {
+			resolvedResultChannel.Marker = campaign.DefaultResultChannelMarker
+		}
+		resolvedResultChannel.Path = ""
+	default:
+		resolvedResultChannel.Path = ""
+		resolvedResultChannel.Marker = ""
+	}
+	if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON && resolvedResultChannel.Kind == campaign.ResultChannelNone {
+		return r.failUsage("suite run: --finalization-mode auto_from_result_json requires --result-channel file_json|stdout_json")
+	}
 
 	resolvedTimeoutMs := *timeoutMs
 	if resolvedTimeoutMs == 0 {
@@ -328,6 +374,8 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		TimeoutStart:   resolvedTimeoutStart,
 		IsolationModel: effectiveIsolation,
 		FeedbackPolicy: resolvedFeedbackPolicy,
+		Finalization:   resolvedFinalizationMode,
+		ResultChannel:  resolvedResultChannel.Kind,
 		Parallel:       *parallel,
 		Total:          resolvedTotal,
 		MissionOffset:  *missionOffset,
@@ -398,6 +446,8 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		RunnerCmd:        runnerCmd,
 		RunnerArgs:       runnerArgs,
 		FeedbackPolicy:   resolvedFeedbackPolicy,
+		FinalizationMode: resolvedFinalizationMode,
+		ResultChannel:    resolvedResultChannel,
 		Strict:           *strict,
 		StrictExpect:     *strictExpect,
 		CaptureRunnerIO:  *captureRunnerIO,
@@ -601,6 +651,8 @@ type suiteRunExecOpts struct {
 	RunnerCmd        string
 	RunnerArgs       []string
 	FeedbackPolicy   string
+	FinalizationMode string
+	ResultChannel    suiteRunResultChannel
 	Strict           bool
 	StrictExpect     bool
 	CaptureRunnerIO  bool
@@ -614,6 +666,12 @@ type suiteRunExecOpts struct {
 	StderrWriter     io.Writer
 	Progress         *suiteRunProgressEmitter
 	ExtraEnv         map[string]string
+}
+
+type suiteRunResultChannel struct {
+	Kind   string
+	Path   string
+	Marker string
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
@@ -646,6 +704,18 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			continue
 		}
 		env[key] = v
+	}
+	env["ZCL_FINALIZATION_MODE"] = strings.TrimSpace(opts.FinalizationMode)
+	env["ZCL_RESULT_CHANNEL_KIND"] = strings.TrimSpace(opts.ResultChannel.Kind)
+	switch opts.ResultChannel.Kind {
+	case campaign.ResultChannelFileJSON:
+		if strings.TrimSpace(opts.ResultChannel.Path) != "" {
+			env["ZCL_MISSION_RESULT_PATH"] = filepath.Join(pm.OutDirAbs, opts.ResultChannel.Path)
+		}
+	case campaign.ResultChannelStdoutJSON:
+		if strings.TrimSpace(opts.ResultChannel.Marker) != "" {
+			env["ZCL_MISSION_RESULT_MARKER"] = strings.TrimSpace(opts.ResultChannel.Marker)
+		}
 	}
 	if p := filepath.Join(pm.OutDirAbs, "prompt.txt"); fileExists(p) {
 		env["ZCL_PROMPT_PATH"] = p
@@ -737,6 +807,18 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	} else {
 		_ = writeRunnerCommandFile(pm.OutDirAbs, opts.RunnerCmd, opts.RunnerArgs, env, shimBinDir)
 	}
+	if opts.ResultChannel.Kind == campaign.ResultChannelStdoutJSON {
+		maxBytes := opts.RunnerIOMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = schema.CaptureMaxBytesV1
+		}
+		if stdoutTB == nil {
+			stdoutTB = newTailBuffer(maxBytes)
+		}
+		if stderrTB == nil {
+			stderrTB = newTailBuffer(maxBytes)
+		}
+	}
 
 	if err := verifyAttemptMatchesEnv(pm.OutDirAbs, env); err != nil {
 		harnessErr = true
@@ -786,7 +868,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
 		stopRunnerLogs()
 	}
-	if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar, opts.FeedbackPolicy); err != nil {
+	if err := maybeFinalizeSuiteFeedback(r.Now(), env, &ar, opts.FinalizationMode, opts.FeedbackPolicy, opts.ResultChannel, stdoutTB); err != nil {
 		harnessErr = true
 		fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
 	}
@@ -892,13 +974,16 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
   - --session-isolation=auto refuses process fallback when host advertises native spawn via ZCL_HOST_NATIVE_SPAWN=1.
+  - --feedback-policy controls default finalization behavior when --finalization-mode is omitted.
   - --feedback-policy=auto_fail writes canonical infra-failure feedback when runners exit without feedback.
-  - --feedback-policy=strict leaves missing feedback as a failing contract condition (no auto-finalization).
+  - --feedback-policy=strict leaves missing feedback as a failing contract condition unless --finalization-mode overrides it.
+  - --finalization-mode=auto_from_result_json consumes mission result JSON from the configured result channel and writes feedback.json automatically.
+  - --result-channel=file_json reads attempt-relative JSON from --result-file (default mission.result.json); --result-channel=stdout_json scans runner stdout for --result-marker (default ZCL_RESULT_JSON:).
   - --progress-jsonl writes machine-readable run progress events for dashboard automation.
   - campaign.state.json is updated after run completion for cross-run continuity.
   - Attempts are allocated just-in-time, in waves (--parallel), to avoid pre-expiry before execution.
@@ -917,6 +1002,311 @@ func envBoolish(name string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeSuiteRunFinalizationMode(mode string, feedbackPolicy string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode != "" {
+		return mode
+	}
+	switch schema.NormalizeFeedbackPolicyV1(feedbackPolicy) {
+	case schema.FeedbackPolicyStrictV1:
+		return campaign.FinalizationModeStrict
+	default:
+		return campaign.FinalizationModeAutoFail
+	}
+}
+
+func isValidSuiteRunFinalizationMode(mode string) bool {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case campaign.FinalizationModeStrict, campaign.FinalizationModeAutoFail, campaign.FinalizationModeAutoFromResultJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeSuiteRunResultChannelKind(kind string) string {
+	return strings.TrimSpace(strings.ToLower(kind))
+}
+
+func isValidSuiteRunResultChannelKind(kind string) bool {
+	switch normalizeSuiteRunResultChannelKind(kind) {
+	case campaign.ResultChannelNone, campaign.ResultChannelFileJSON, campaign.ResultChannelStdoutJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func maybeFinalizeSuiteFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, finalizationMode string, feedbackPolicy string, resultChannel suiteRunResultChannel, stdoutTB *tailBuffer) error {
+	mode := normalizeSuiteRunFinalizationMode(finalizationMode, feedbackPolicy)
+	switch mode {
+	case campaign.FinalizationModeAutoFromResultJSON:
+		return maybeWriteAutoResultFeedback(now, env, ar, resultChannel, stdoutTB)
+	case campaign.FinalizationModeAutoFail:
+		return maybeWriteAutoFailureFeedback(now, env, ar, schema.FeedbackPolicyAutoFailV1)
+	default:
+		return maybeWriteAutoFailureFeedback(now, env, ar, schema.FeedbackPolicyStrictV1)
+	}
+}
+
+func maybeWriteAutoResultFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, resultChannel suiteRunResultChannel, stdoutTB *tailBuffer) error {
+	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
+	if outDir == "" {
+		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto result finalization")
+	}
+	feedbackPath := filepath.Join(outDir, "feedback.json")
+	if fileExists(feedbackPath) {
+		return nil
+	}
+	if ar.RunnerErrorCode != "" {
+		return maybeWriteAutoFailureFeedback(now, env, ar, schema.FeedbackPolicyAutoFailV1)
+	}
+	if ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0 {
+		return maybeWriteAutoFailureFeedback(now, env, ar, schema.FeedbackPolicyAutoFailV1)
+	}
+
+	raw, err := readSuiteResultChannel(outDir, resultChannel, stdoutTB)
+	if err != nil {
+		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_MISSING", err)
+	}
+	writeOpts, err := decodeSuiteResultFeedback(raw)
+	if err != nil {
+		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_INVALID", err)
+	}
+
+	envTrace := trace.Env{
+		RunID:     env["ZCL_RUN_ID"],
+		SuiteID:   env["ZCL_SUITE_ID"],
+		MissionID: env["ZCL_MISSION_ID"],
+		AttemptID: env["ZCL_ATTEMPT_ID"],
+		AgentID:   env["ZCL_AGENT_ID"],
+		OutDirAbs: outDir,
+		TmpDirAbs: env["ZCL_TMP_DIR"],
+	}
+	if err := ensureAutoFeedbackTrace(now, envTrace, "suite-runner-result-channel", "", "auto finalization from mission result channel"); err != nil {
+		return err
+	}
+	if err := feedback.Write(now, envTrace, writeOpts); err != nil {
+		return err
+	}
+	ar.AutoFeedback = true
+	ar.AutoFeedbackCode = ""
+	return nil
+}
+
+func readSuiteResultChannel(outDir string, resultChannel suiteRunResultChannel, stdoutTB *tailBuffer) ([]byte, error) {
+	kind := normalizeSuiteRunResultChannelKind(resultChannel.Kind)
+	switch kind {
+	case campaign.ResultChannelFileJSON:
+		rel := strings.TrimSpace(resultChannel.Path)
+		if rel == "" {
+			rel = campaign.DefaultResultChannelPath
+		}
+		if filepath.IsAbs(rel) {
+			return nil, fmt.Errorf("result channel file path must be attempt-relative")
+		}
+		path := filepath.Join(outDir, rel)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	case campaign.ResultChannelStdoutJSON:
+		if stdoutTB == nil {
+			return nil, fmt.Errorf("stdout result channel requires runner stdout capture")
+		}
+		buf, _, _ := stdoutTB.Snapshot()
+		if len(buf) == 0 {
+			return nil, fmt.Errorf("stdout result channel is empty")
+		}
+		marker := strings.TrimSpace(resultChannel.Marker)
+		if marker == "" {
+			marker = campaign.DefaultResultChannelMarker
+		}
+		return extractSuiteResultJSONFromStdout(buf, marker)
+	default:
+		return nil, fmt.Errorf("unsupported result channel kind %q", kind)
+	}
+}
+
+func extractSuiteResultJSONFromStdout(buf []byte, marker string) ([]byte, error) {
+	text := strings.TrimSpace(string(buf))
+	if text == "" {
+		return nil, fmt.Errorf("stdout result channel is empty")
+	}
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, marker) {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, marker))
+			if raw == "" {
+				return nil, fmt.Errorf("stdout result marker found but payload is empty")
+			}
+			return []byte(raw), nil
+		}
+	}
+	return nil, fmt.Errorf("stdout result marker %q not found", marker)
+}
+
+func decodeSuiteResultFeedback(raw []byte) (feedback.WriteOpts, error) {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return feedback.WriteOpts{}, fmt.Errorf("invalid mission result json: %w", err)
+	}
+	rawOK, ok := obj["ok"]
+	if !ok {
+		return feedback.WriteOpts{}, fmt.Errorf("mission result requires boolean field \"ok\"")
+	}
+	okVal, ok := rawOK.(bool)
+	if !ok {
+		return feedback.WriteOpts{}, fmt.Errorf("mission result field \"ok\" must be boolean")
+	}
+
+	opts := feedback.WriteOpts{OK: okVal}
+	if tags, present := obj["decisionTags"]; present {
+		parsedTags, err := toStringSlice(tags)
+		if err != nil {
+			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"decisionTags\" must be string array")
+		}
+		opts.DecisionTags = parsedTags
+	}
+
+	if rawResult, present := obj["result"]; present {
+		resultText, ok := rawResult.(string)
+		if !ok {
+			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"result\" must be string")
+		}
+		opts.Result = resultText
+	}
+	if rawResultJSON, present := obj["resultJson"]; present {
+		b, err := store.CanonicalJSON(rawResultJSON)
+		if err != nil {
+			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"resultJson\" must be valid json")
+		}
+		opts.ResultJSON = string(b)
+	}
+	if opts.Result != "" && opts.ResultJSON != "" {
+		return feedback.WriteOpts{}, fmt.Errorf("mission result cannot include both \"result\" and \"resultJson\"")
+	}
+	if opts.Result == "" && opts.ResultJSON == "" {
+		payload := map[string]any{}
+		for k, v := range obj {
+			switch strings.TrimSpace(k) {
+			case "ok", "decisionTags":
+				continue
+			default:
+				payload[k] = v
+			}
+		}
+		if len(payload) == 0 {
+			return feedback.WriteOpts{}, fmt.Errorf("mission result must include \"result\", \"resultJson\", or additional proof fields")
+		}
+		b, err := store.CanonicalJSON(payload)
+		if err != nil {
+			return feedback.WriteOpts{}, err
+		}
+		opts.ResultJSON = string(b)
+	}
+	return opts, nil
+}
+
+func toStringSlice(v any) ([]string, error) {
+	items, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("not an array")
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, fmt.Errorf("non-string entry")
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func maybeWriteResultChannelFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, code string, cause error) error {
+	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
+	if outDir == "" {
+		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
+	}
+	feedbackPath := filepath.Join(outDir, "feedback.json")
+	if fileExists(feedbackPath) {
+		return nil
+	}
+	envTrace := trace.Env{
+		RunID:     env["ZCL_RUN_ID"],
+		SuiteID:   env["ZCL_SUITE_ID"],
+		MissionID: env["ZCL_MISSION_ID"],
+		AttemptID: env["ZCL_ATTEMPT_ID"],
+		AgentID:   env["ZCL_AGENT_ID"],
+		OutDirAbs: outDir,
+		TmpDirAbs: env["ZCL_TMP_DIR"],
+	}
+	msg := strings.TrimSpace(cause.Error())
+	if msg == "" {
+		msg = "mission result channel error"
+	}
+	if err := ensureAutoFeedbackTrace(now, envTrace, "suite-runner-result-channel", code, msg); err != nil {
+		return err
+	}
+	result := map[string]any{
+		"kind":   "infra_failure",
+		"source": "result_channel",
+		"code":   strings.TrimSpace(code),
+		"error":  msg,
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
+		OK:                   false,
+		ResultJSON:           string(b),
+		DecisionTags:         []string{schema.DecisionTagBlocked},
+		SkipSuiteResultShape: true,
+	}); err != nil {
+		return err
+	}
+	ar.AutoFeedback = true
+	ar.AutoFeedbackCode = strings.TrimSpace(code)
+	return nil
+}
+
+func ensureAutoFeedbackTrace(now time.Time, envTrace trace.Env, op string, code string, msg string) error {
+	tracePath := filepath.Join(envTrace.OutDirAbs, "tool.calls.jsonl")
+	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if nonEmpty {
+		return nil
+	}
+	argv := []string{"zcl", strings.TrimSpace(op)}
+	res := trace.ResultForTrace{
+		ExitCode:   0,
+		DurationMs: 0,
+		OutBytes:   int64(len(msg)),
+		OutPreview: msg,
+	}
+	if strings.TrimSpace(code) != "" {
+		res.SpawnError = strings.TrimSpace(code)
+		res.OutBytes = 0
+		res.OutPreview = ""
+		res.ErrBytes = int64(len(msg))
+		res.ErrPreview = msg
+	}
+	return trace.AppendCLIRunEvent(now, envTrace, argv, res)
 }
 
 func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, feedbackPolicy string) error {

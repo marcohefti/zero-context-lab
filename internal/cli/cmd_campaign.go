@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -108,6 +109,7 @@ func (r Runner) runCampaignLint(args []string) int {
 		"campaignId":    parsed.Spec.CampaignID,
 		"specPath":      parsed.SpecPath,
 		"outRoot":       resolvedOutRoot,
+		"promptMode":    parsed.Spec.PromptMode,
 		"flows":         len(parsed.Spec.Flows),
 		"execution": map[string]any{
 			"flowMode": parsed.Spec.Execution.FlowMode,
@@ -125,6 +127,10 @@ func (r Runner) runCampaignLint(args []string) int {
 		"semantic": map[string]any{
 			"enabled":   parsed.Spec.Semantic.Enabled,
 			"rulesPath": parsed.Spec.Semantic.RulesPath,
+		},
+		"noContext": map[string]any{
+			"forbiddenPromptTerms": parsed.Spec.NoContext.ForbiddenPromptTerms,
+			"violations":           campaign.EvaluatePromptModeViolations(parsed),
 		},
 		"extensions": parsed.Spec.Extensions,
 	}
@@ -500,15 +506,46 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 	if len(policy.Statuses) > 0 && !containsString(policy.Statuses, st.Status) {
 		ok = false
 	}
+	promptModeCompliance := map[string]any{
+		"ok":         true,
+		"promptMode": "",
+	}
+	if strings.TrimSpace(st.SpecPath) != "" {
+		parsed, perr := campaign.ParseSpecFile(st.SpecPath)
+		if perr != nil {
+			var promptErr *campaign.PromptModeViolationError
+			if errors.As(perr, &promptErr) {
+				ok = false
+				promptModeCompliance["ok"] = false
+				promptModeCompliance["promptMode"] = promptErr.PromptMode
+				promptModeCompliance["violations"] = promptErr.Violations
+				promptModeCompliance["error"] = promptErr.Error()
+				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, campaign.ReasonPromptModePolicy))
+			} else {
+				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", perr.Error())
+				return 1
+			}
+		} else {
+			violations := campaign.EvaluatePromptModeViolations(parsed)
+			promptModeCompliance["promptMode"] = parsed.Spec.PromptMode
+			if len(violations) > 0 {
+				ok = false
+				promptModeCompliance["ok"] = false
+				promptModeCompliance["violations"] = violations
+				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, campaign.ReasonPromptModePolicy))
+			}
+		}
+	}
 	if *force && !ok {
 		ok = true
 	}
 	out := map[string]any{
-		"ok":          ok,
-		"campaignId":  st.CampaignID,
-		"runId":       st.RunID,
-		"status":      st.Status,
-		"reasonCodes": st.ReasonCodes,
+		"ok":                   ok,
+		"campaignId":           st.CampaignID,
+		"runId":                st.RunID,
+		"status":               st.Status,
+		"reasonCodes":          st.ReasonCodes,
+		"promptModeCompliance": promptModeCompliance,
 	}
 	if *jsonOut {
 		writeExit := r.writeJSON(out)
@@ -827,6 +864,8 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		"--campaign-id", parsed.Spec.CampaignID,
 		"--session-isolation", flow.Runner.SessionIsolation,
 		"--feedback-policy", flow.Runner.FeedbackPolicy,
+		"--finalization-mode", flow.Runner.Finalization.Mode,
+		"--result-channel", flow.Runner.Finalization.ResultChannel.Kind,
 		"--parallel", "1",
 		"--total", strconv.Itoa(seg.TotalMissions),
 		"--mission-offset", strconv.Itoa(seg.MissionOffset),
@@ -841,6 +880,16 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	}
 	if strings.TrimSpace(flow.Runner.TimeoutStart) != "" {
 		args = append(args, "--timeout-start", strings.TrimSpace(flow.Runner.TimeoutStart))
+	}
+	switch flow.Runner.Finalization.ResultChannel.Kind {
+	case campaign.ResultChannelFileJSON:
+		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path) != "" {
+			args = append(args, "--result-file", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path))
+		}
+	case campaign.ResultChannelStdoutJSON:
+		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker) != "" {
+			args = append(args, "--result-marker", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker))
+		}
 	}
 	if flow.Runner.Strict != nil {
 		args = append(args, "--strict="+strconv.FormatBool(*flow.Runner.Strict))
@@ -863,6 +912,10 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	}
 	env["ZCL_CAMPAIGN_RUNNER_TYPE"] = strings.TrimSpace(flow.Runner.Type)
 	env["ZCL_FRESH_AGENT_PER_ATTEMPT"] = "1"
+	env["ZCL_TOOL_DRIVER_KIND"] = strings.TrimSpace(flow.Runner.ToolDriver.Kind)
+	if parsed.Spec.PromptMode == campaign.PromptModeMissionOnly {
+		env["ZCL_PROMPT_MODE"] = campaign.PromptModeMissionOnly
+	}
 	if flow.Runner.MCP.MaxToolCalls > 0 {
 		env["ZCL_MCP_MAX_TOOL_CALLS"] = strconv.FormatInt(flow.Runner.MCP.MaxToolCalls, 10)
 	}

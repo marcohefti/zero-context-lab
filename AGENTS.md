@@ -19,13 +19,19 @@ Repo validation (must be green after meaningful changes):
 
 Canonical operator templates:
 - `examples/campaign.canonical.yaml`
+- `examples/campaign.no-context.comparison.yaml`
+- `examples/campaign.no-context.codex-exec.yaml`
+- `examples/campaign.no-context.codex-subagent.yaml`
+- `examples/campaign.no-context.claude-subagent.yaml`
 - `examples/semantic.rulepack.yaml`
 - `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
 
 Campaign capability status (operator truth source):
 - `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks (`beforeMission/afterMission/onFailure`), campaign lock, traceability profiles, campaign summary outputs (`campaign.summary.json`, `RESULTS.md`).
 - `implemented+enforced`: minimal campaign mode (`missionSource.path` + flows without `suiteFile`) for mission-pack ingestion.
-- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving), but hidden session reuse is blocked (`freshAgentPerAttempt` defaults/enforced true).
+- `implemented+enforced`: mission-only campaign mode (`promptMode: mission_only`) with lint/publish-check prompt-leak guardrails.
+- `implemented+enforced`: flow-level driver and finalization contracts (`runner.toolDriver`, `runner.finalization.mode`, `runner.finalization.resultChannel`), including auto finalization from mission result JSON channels.
+- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving), with conformance coverage for campaign-level parity and hidden session reuse blocked (`freshAgentPerAttempt` defaults/enforced true).
 
 ## Non-Negotiables (Keep This Boring)
 
@@ -53,7 +59,7 @@ Campaign capability status (operator truth source):
 3. Start attempt (JSON output is required for automation):
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-   - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
+   - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
    - First-class campaign orchestration:
      - `zcl campaign lint --spec <campaign.(yaml|yml|json)> --json`
      - `zcl campaign canary --spec <campaign.(yaml|yml|json)> --missions 3 --json`
@@ -63,13 +69,19 @@ Campaign capability status (operator truth source):
    - Minimal mode for routine multi-mission comparison:
      - one `campaign.yaml` with `missionSource.path: ./missions` and flow runner blocks
      - no per-flow `suiteFile` required
+   - Mission-only no-context mode:
+     - set `promptMode: mission_only`
+     - set `runner.finalization.mode: auto_from_result_json`
+     - set `runner.finalization.resultChannel` (`file_json` or `stdout_json`)
+     - set `runner.toolDriver` so ZCL owns tool funnel policy instead of prompt ceremony
    - Env handoff: source `<attemptDir>/attempt.env.sh` (auto-written), or run `zcl attempt env --format sh <attemptDir>`
 4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
    - MCP: `zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
    - HTTP: `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]` (writes `tool.calls.jsonl`)
 5. Finish with authoritative outcome:
-   - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
+   - Explicit path: `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
+   - No-context path: emit mission result JSON on configured result channel and let ZCL auto-write `feedback.json`
 6. Optional secondary evidence:
    - `zcl note --kind agent|operator --message <text>`
    - `zcl enrich --runner codex|claude --rollout <rollout.jsonl> [<attemptDir>]`

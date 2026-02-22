@@ -8,6 +8,7 @@
     "schemaVersion": { "type": "integer", "enum": [1] },
     "campaignId": { "type": "string", "minLength": 1 },
     "outRoot": { "type": "string" },
+    "promptMode": { "type": "string", "enum": ["default", "mission_only"] },
     "totalMissions": { "type": "integer", "minimum": 0 },
     "canaryMissions": { "type": "integer", "minimum": 0 },
     "failFast": { "type": "boolean" },
@@ -56,6 +57,13 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "rulesPath": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "noContext": {
+      "type": "object",
+      "properties": {
+        "forbiddenPromptTerms": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },
@@ -125,6 +133,30 @@
               "strict": { "type": "boolean" },
               "strictExpect": { "type": "boolean" },
               "freshAgentPerAttempt": { "type": "boolean" },
+              "toolDriver": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "enum": ["shell", "cli_funnel", "mcp_proxy", "http_proxy"] },
+                  "shims": { "type": "array", "items": { "type": "string" } }
+                },
+                "additionalProperties": false
+              },
+              "finalization": {
+                "type": "object",
+                "properties": {
+                  "mode": { "type": "string", "enum": ["strict", "auto_fail", "auto_from_result_json"] },
+                  "resultChannel": {
+                    "type": "object",
+                    "properties": {
+                      "kind": { "type": "string", "enum": ["none", "file_json", "stdout_json"] },
+                      "path": { "type": "string" },
+                      "marker": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
               "mcp": {
                 "type": "object",
                 "properties": {

@@ -1303,7 +1303,7 @@ Usage:
   zcl attempt finish [--strict] [--json] [<attemptDir>]
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
-  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] --json -- <runner-cmd> [args...]
   zcl campaign lint --spec <campaign.(yaml|yml|json)> [--json]
   zcl campaign run --spec <campaign.(yaml|yml|json)> [--json]
   zcl campaign canary --spec <campaign.(yaml|yml|json)> [--json]
@@ -1413,7 +1413,7 @@ Notes:
 func printSuiteHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   zcl suite plan --file <suite.(yaml|yml|json)> --json
-  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] --json -- <runner-cmd> [args...]
 `)
 }
 
