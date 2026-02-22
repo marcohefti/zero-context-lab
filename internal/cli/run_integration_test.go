@@ -14,6 +14,12 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
+const helperProcessEnv = "ZCL_TEST_HELPER_PROCESS"
+
+func init() {
+	maybeRunHelperProcess()
+}
+
 func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
@@ -373,53 +379,18 @@ func TestRun_RepeatGuardBlocksNoProgressLoops(t *testing.T) {
 }
 
 func TestHelperProcess(t *testing.T) {
-	// This is executed as a subprocess of the test binary.
-	args := os.Args
-	idx := 0
-	for i := range args {
-		if args[i] == "--" {
-			idx = i + 1
-			break
-		}
-	}
-	out := ""
-	errOut := ""
-	outFile := ""
-	helper := false
-	exit := 0
-	for _, a := range args[idx:] {
-		if a == "helper=1" {
-			helper = true
-		} else if strings.HasPrefix(a, "stdout=") {
-			out = strings.TrimPrefix(a, "stdout=")
-		} else if strings.HasPrefix(a, "stdout-file=") {
-			outFile = strings.TrimPrefix(a, "stdout-file=")
-		} else if strings.HasPrefix(a, "stderr=") {
-			errOut = strings.TrimPrefix(a, "stderr=")
-		} else if strings.HasPrefix(a, "exit=") {
-			n, _ := strconv.Atoi(strings.TrimPrefix(a, "exit="))
-			exit = n
-		}
-	}
-	if outFile != "" {
-		b, err := os.ReadFile(outFile)
-		if err != nil {
-			_, _ = os.Stderr.WriteString("helper read stdout-file: " + err.Error())
-			os.Exit(2)
-		}
-		out = string(b)
-	}
-	if !helper && os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+	// Compatibility fallback in case helper mode was not triggered from init().
+	cfg := parseHelperProcessConfig(os.Args)
+	if !helperProcessEnabled() || !cfg.Helper {
 		return
 	}
-	_, _ = os.Stdout.WriteString(out)
-	_, _ = os.Stderr.WriteString(errOut)
-	os.Exit(exit)
+	runHelperProcess(cfg)
+	os.Exit(cfg.Exit)
 }
 
 func setAttemptEnv(t *testing.T, outDir string) {
 	t.Helper()
-	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv(helperProcessEnv, "1")
 	t.Setenv("CI", "")
 	t.Setenv("ZCL_ALLOW_UNSAFE_CAPTURE", "")
 	t.Setenv("ZCL_OUT_DIR", outDir)
@@ -445,6 +416,74 @@ func setAttemptEnv(t *testing.T, outDir string) {
 	if err := os.WriteFile(filepath.Join(outDir, "attempt.json"), b, 0o644); err != nil {
 		t.Fatalf("write attempt.json: %v", err)
 	}
+}
+
+type helperProcessConfig struct {
+	Helper  bool
+	Stdout  string
+	Stderr  string
+	OutFile string
+	Exit    int
+}
+
+func maybeRunHelperProcess() {
+	if !helperProcessEnabled() {
+		return
+	}
+	cfg := parseHelperProcessConfig(os.Args)
+	if !cfg.Helper {
+		return
+	}
+	runHelperProcess(cfg)
+	os.Exit(cfg.Exit)
+}
+
+func helperProcessEnabled() bool {
+	return os.Getenv(helperProcessEnv) == "1"
+}
+
+func parseHelperProcessConfig(args []string) helperProcessConfig {
+	idx := 0
+	for i := range args {
+		if args[i] == "--" {
+			idx = i + 1
+			break
+		}
+	}
+	cfg := helperProcessConfig{}
+	for _, a := range args[idx:] {
+		switch {
+		case a == "helper=1":
+			cfg.Helper = true
+		case strings.HasPrefix(a, "stdout="):
+			cfg.Stdout = strings.TrimPrefix(a, "stdout=")
+		case strings.HasPrefix(a, "stdout-file="):
+			cfg.OutFile = strings.TrimPrefix(a, "stdout-file=")
+		case strings.HasPrefix(a, "stderr="):
+			cfg.Stderr = strings.TrimPrefix(a, "stderr=")
+		case strings.HasPrefix(a, "exit="):
+			n, _ := strconv.Atoi(strings.TrimPrefix(a, "exit="))
+			cfg.Exit = n
+		}
+	}
+	return cfg
+}
+
+func runHelperProcess(cfg helperProcessConfig) {
+	out := cfg.Stdout
+	if cfg.OutFile != "" {
+		b, err := os.ReadFile(cfg.OutFile)
+		if err != nil {
+			_, _ = os.Stderr.WriteString("helper read stdout-file: " + err.Error())
+			_ = os.Stderr.Sync()
+			os.Exit(2)
+		}
+		out = string(b)
+	}
+	_, _ = os.Stdout.WriteString(out)
+	_, _ = os.Stderr.WriteString(cfg.Stderr)
+	_ = os.Stdout.Sync()
+	_ = os.Stderr.Sync()
 }
 
 func setAttemptMode(t *testing.T, outDir string, mode string) {

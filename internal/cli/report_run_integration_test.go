@@ -37,7 +37,7 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 		t.Fatalf("attempt.Start a2: %v", err)
 	}
 
-	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv(helperProcessEnv, "1")
 
 	r := Runner{
 		Version: "0.0.0-dev",
@@ -47,7 +47,7 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 	}
 
 	setEnvFromMap(t, a1.Env)
-	if code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stdout=ok\n", "exit=0"}); code != 0 {
+	if code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=ok\n", "exit=0"}); code != 0 {
 		t.Fatalf("run a1: code=%d", code)
 	}
 	if code := r.Run([]string{"feedback", "--ok", "--result", "ok"}); code != 0 {
@@ -55,7 +55,7 @@ func TestReport_RunJSONAggregates(t *testing.T) {
 	}
 
 	setEnvFromMap(t, a2.Env)
-	if code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "stderr=bad\n", "exit=1"}); code != 1 {
+	if code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stderr=bad\n", "exit=1"}); code != 1 {
 		t.Fatalf("run a2 expected exit 1, got %d", code)
 	}
 	if code := r.Run([]string{"feedback", "--fail", "--result", "bad", "--decision-tag", "blocked"}); code != 0 {
