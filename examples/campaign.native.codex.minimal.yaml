@@ -19,6 +19,9 @@ flows:
   - flowId: codex-native
     runner:
       type: codex_app_server
+      model: gpt-5.3-codex-spark
+      modelReasoningEffort: medium
+      modelReasoningPolicy: best_effort
       sessionIsolation: native
       runtimeStrategies: ["codex_app_server"]
       feedbackPolicy: auto_fail

@@ -555,3 +555,105 @@ flows:
 		t.Fatalf("expected default min result turn %d, got %d", DefaultMinResultTurn, ps.Spec.Flows[0].Runner.Finalization.MinResultTurn)
 	}
 }
+
+func TestParseSpecFile_NativeModelAndReasoningDefaults(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "Solve mission and return proof." }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-native-model
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: codex_app_server
+      model: " gpt-5.3-codex-spark "
+      modelReasoningEffort: " MEDIUM "
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if ps.Spec.Flows[0].Runner.Model != "gpt-5.3-codex-spark" {
+		t.Fatalf("expected trimmed model, got %q", ps.Spec.Flows[0].Runner.Model)
+	}
+	if ps.Spec.Flows[0].Runner.ModelReasoningEffort != ModelReasoningEffortMedium {
+		t.Fatalf("expected normalized reasoning effort, got %q", ps.Spec.Flows[0].Runner.ModelReasoningEffort)
+	}
+	if ps.Spec.Flows[0].Runner.ModelReasoningPolicy != ModelReasoningPolicyBestEffort {
+		t.Fatalf("expected default reasoning policy %q, got %q", ModelReasoningPolicyBestEffort, ps.Spec.Flows[0].Runner.ModelReasoningPolicy)
+	}
+}
+
+func TestParseSpecFile_ModelReasoningPolicyRequiresEffort(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-native-model
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: codex_app_server
+      modelReasoningPolicy: required
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "runner.modelReasoningPolicy requires runner.modelReasoningEffort") {
+		t.Fatalf("expected modelReasoningPolicy validation error, got %v", err)
+	}
+}
+
+func TestParseSpecFile_ModelFieldsRequireCodexAppServer(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-native-model
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      model: gpt-5.3-codex-spark
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "supported only for runner.type=codex_app_server") {
+		t.Fatalf("expected runner.type validation error, got %v", err)
+	}
+}

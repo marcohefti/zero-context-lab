@@ -67,6 +67,7 @@ type CampaignSchemaDefaults struct {
 	FlowMode                    string   `json:"flowMode"`
 	TraceProfile                string   `json:"traceProfile"`
 	ToolDriverKind              string   `json:"toolDriverKind"`
+	ModelReasoningPolicy        string   `json:"modelReasoningPolicy"`
 	FinalizationMode            string   `json:"finalizationMode"`
 	ResultChannelKind           string   `json:"resultChannelKind"`
 	ResultChannelPath           string   `json:"resultChannelPath"`
@@ -417,7 +418,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "suite run",
-				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]",
+				Usage:   "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--native-model <slug>] [--native-model-reasoning-effort none|minimal|low|medium|high|xhigh] [--native-model-reasoning-policy best_effort|required] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]",
 				Summary: "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt.",
 			},
 			{
@@ -535,6 +536,7 @@ func Build(version string) Contract {
 				FlowMode:                    campaign.FlowModeSequence,
 				TraceProfile:                campaign.TraceProfileNone,
 				ToolDriverKind:              campaign.ToolDriverShell,
+				ModelReasoningPolicy:        campaign.ModelReasoningPolicyBestEffort,
 				FinalizationMode:            campaign.FinalizationModeAutoFail,
 				ResultChannelKind:           campaign.ResultChannelNone,
 				ResultChannelPath:           campaign.DefaultResultChannelPath,
@@ -587,6 +589,27 @@ func Build(version string) Contract {
 					Type:        "string[]",
 					Required:    false,
 					Description: "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only with cli_funnel.",
+				},
+				{
+					Path:        "flows[].runner.model",
+					Type:        "string",
+					Required:    false,
+					Description: "Native thread/start model override for codex_app_server flows.",
+				},
+				{
+					Path:        "flows[].runner.modelReasoningEffort",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.ModelReasoningEffortNone, campaign.ModelReasoningEffortMinimal, campaign.ModelReasoningEffortLow, campaign.ModelReasoningEffortMedium, campaign.ModelReasoningEffortHigh, campaign.ModelReasoningEffortXHigh},
+					Description: "Best-effort reasoning effort hint for native codex thread/start config.",
+				},
+				{
+					Path:        "flows[].runner.modelReasoningPolicy",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.ModelReasoningPolicyBestEffort, campaign.ModelReasoningPolicyRequired},
+					Default:     campaign.ModelReasoningPolicyBestEffort,
+					Description: "Behavior when modelReasoningEffort is unsupported: best_effort (fallback) or required (typed failure).",
 				},
 				{
 					Path:        "flows[].runner.finalization.mode",

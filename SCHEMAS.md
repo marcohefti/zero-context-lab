@@ -149,6 +149,8 @@ Notes:
 - `campaignProfile.finalization` records attempt finalization policy (`strict|auto_fail|auto_from_result_json`).
 - `campaignProfile.resultChannel` records mission result channel (`none|file_json|stdout_json`).
 - `campaignProfile.resultMinTurn` records minimum mission result payload turn accepted for auto finalization.
+- `campaignProfile.nativeModel` (optional) records native `thread/start` model override in native mode.
+- `campaignProfile.reasoningEffort` and `campaignProfile.reasoningPolicy` (optional) record native reasoning-hint configuration.
 - In no-context mode (`promptMode: mission_only`), `auto_from_result_json` is required and ZCL writes `feedback.json` from the configured result channel.
 
 ## `attempt.json` (v1)
@@ -461,6 +463,9 @@ Core enforced fields:
   - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent|codex_app_server`
   - `command` (required except `codex_app_server`), `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
   - `runtimeStrategies`: ordered strategy fallback chain for native execution (for example `["codex_app_server","provider_stub"]`)
+  - `model` (optional, `codex_app_server` only): native `thread/start` model override
+  - `modelReasoningEffort` (optional, `codex_app_server` only): `none|minimal|low|medium|high|xhigh`
+  - `modelReasoningPolicy` (optional, `codex_app_server` only): `best_effort|required` (defaults to `best_effort` when effort is set)
   - `toolDriver.kind`: `shell|cli_funnel|mcp_proxy|http_proxy`
   - `finalization.mode`: `strict|auto_fail|auto_from_result_json`
   - `finalization.minResultTurn`: integer >= 1 (supports non-finalizable intermediate turns)

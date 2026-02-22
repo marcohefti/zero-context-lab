@@ -59,6 +59,16 @@ const (
 	FinalizationModeAutoFail           = "auto_fail"
 	FinalizationModeAutoFromResultJSON = "auto_from_result_json"
 
+	ModelReasoningEffortNone    = "none"
+	ModelReasoningEffortMinimal = "minimal"
+	ModelReasoningEffortLow     = "low"
+	ModelReasoningEffortMedium  = "medium"
+	ModelReasoningEffortHigh    = "high"
+	ModelReasoningEffortXHigh   = "xhigh"
+
+	ModelReasoningPolicyBestEffort = "best_effort"
+	ModelReasoningPolicyRequired   = "required"
+
 	ResultChannelNone       = "none"
 	ResultChannelFileJSON   = "file_json"
 	ResultChannelStdoutJSON = "stdout_json"
@@ -181,6 +191,12 @@ type RunnerAdapterSpec struct {
 	Shims   []string          `json:"shims,omitempty" yaml:"shims,omitempty"`
 	// RuntimeStrategies is an ordered native runtime fallback chain used when sessionIsolation=native.
 	RuntimeStrategies []string `json:"runtimeStrategies,omitempty" yaml:"runtimeStrategies,omitempty"`
+	// Model is forwarded to native thread/start for codex_app_server flows.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+	// ModelReasoningEffort is forwarded as a per-thread config hint.
+	ModelReasoningEffort string `json:"modelReasoningEffort,omitempty" yaml:"modelReasoningEffort,omitempty"`
+	// ModelReasoningPolicy controls behavior when reasoning effort is unsupported.
+	ModelReasoningPolicy string `json:"modelReasoningPolicy,omitempty" yaml:"modelReasoningPolicy,omitempty"`
 
 	SessionIsolation string           `json:"sessionIsolation,omitempty" yaml:"sessionIsolation,omitempty"` // auto|process|native
 	FeedbackPolicy   string           `json:"feedbackPolicy,omitempty" yaml:"feedbackPolicy,omitempty"`     // strict|auto_fail
@@ -431,8 +447,30 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		}
 		f.Runner.Command = normalizeCommand(f.Runner.Command)
 		f.Runner.RuntimeStrategies = normalizeLowerTerms(f.Runner.RuntimeStrategies)
+		f.Runner.Model = strings.TrimSpace(f.Runner.Model)
+		f.Runner.ModelReasoningEffort = strings.ToLower(strings.TrimSpace(f.Runner.ModelReasoningEffort))
+		f.Runner.ModelReasoningPolicy = strings.ToLower(strings.TrimSpace(f.Runner.ModelReasoningPolicy))
 		if len(f.Runner.Command) == 0 && f.Runner.Type != RunnerTypeCodexAppSrv {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.command is required", f.FlowID)
+		}
+		if f.Runner.Type != RunnerTypeCodexAppSrv {
+			if f.Runner.Model != "" || f.Runner.ModelReasoningEffort != "" || f.Runner.ModelReasoningPolicy != "" {
+				return ParsedSpec{}, fmt.Errorf("flow %q: runner.model and runner.modelReasoning* are supported only for runner.type=%s", f.FlowID, RunnerTypeCodexAppSrv)
+			}
+		}
+		if f.Runner.ModelReasoningEffort == "" && f.Runner.ModelReasoningPolicy != "" {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.modelReasoningPolicy requires runner.modelReasoningEffort", f.FlowID)
+		}
+		if f.Runner.ModelReasoningEffort != "" {
+			if !isValidModelReasoningEffort(f.Runner.ModelReasoningEffort) {
+				return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.modelReasoningEffort (expected %s|%s|%s|%s|%s|%s)", f.FlowID, ModelReasoningEffortNone, ModelReasoningEffortMinimal, ModelReasoningEffortLow, ModelReasoningEffortMedium, ModelReasoningEffortHigh, ModelReasoningEffortXHigh)
+			}
+			if f.Runner.ModelReasoningPolicy == "" {
+				f.Runner.ModelReasoningPolicy = ModelReasoningPolicyBestEffort
+			}
+		}
+		if f.Runner.ModelReasoningPolicy != "" && !isValidModelReasoningPolicy(f.Runner.ModelReasoningPolicy) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.modelReasoningPolicy (expected %s|%s)", f.FlowID, ModelReasoningPolicyBestEffort, ModelReasoningPolicyRequired)
 		}
 		if strings.TrimSpace(f.Runner.SessionIsolation) == "" {
 			if f.Runner.Type == RunnerTypeCodexAppSrv {
@@ -1047,6 +1085,24 @@ func isValidFinalizationMode(v string) bool {
 func isValidResultChannelKind(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case ResultChannelNone, ResultChannelFileJSON, ResultChannelStdoutJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidModelReasoningEffort(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case ModelReasoningEffortNone, ModelReasoningEffortMinimal, ModelReasoningEffortLow, ModelReasoningEffortMedium, ModelReasoningEffortHigh, ModelReasoningEffortXHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidModelReasoningPolicy(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case ModelReasoningPolicyBestEffort, ModelReasoningPolicyRequired:
 		return true
 	default:
 		return false

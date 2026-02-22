@@ -25,6 +25,7 @@ Canonical capability keys:
 
 - One fresh runtime session per attempt in native suite mode.
 - Session/thread identifiers are persisted in `runner.ref.json`.
+- Native `thread/start` can be pinned per flow via campaign runner fields (`model`, `modelReasoningEffort`, `modelReasoningPolicy`).
 - Native events are mapped into canonical `tool.calls.jsonl` (`tool=native`) with bounds/redaction.
 - Missing/partial native event streams set integrity flags and typed failure codes.
 

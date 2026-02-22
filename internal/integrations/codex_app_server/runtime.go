@@ -22,6 +22,9 @@ const (
 	defaultStartupTimeout  = 8 * time.Second
 	defaultRequestTimeout  = 10 * time.Second
 	defaultShutdownTimeout = 3 * time.Second
+
+	reasoningPolicyBestEffort = "best_effort"
+	reasoningPolicyRequired   = "required"
 )
 
 type Config struct {
@@ -386,6 +389,9 @@ func (s *session) StartThread(ctx context.Context, req native.ThreadStartRequest
 	if strings.TrimSpace(req.Personality) != "" {
 		params["personality"] = strings.TrimSpace(req.Personality)
 	}
+	if err := s.applyReasoningEffortHint(ctx, req, params); err != nil {
+		return native.ThreadHandle{}, err
+	}
 
 	res, err := s.callWithDefaultTimeout(ctx, "thread/start", params)
 	if err != nil {
@@ -397,6 +403,116 @@ func (s *session) StartThread(ctx context.Context, req native.ThreadStartRequest
 	}
 	s.threadID = threadID
 	return native.ThreadHandle{ThreadID: threadID}, nil
+}
+
+func (s *session) applyReasoningEffortHint(ctx context.Context, req native.ThreadStartRequest, params map[string]any) error {
+	effort := strings.ToLower(strings.TrimSpace(req.ModelReasoningEffort))
+	if effort == "" {
+		return nil
+	}
+	policy := strings.ToLower(strings.TrimSpace(req.ModelReasoningPolicy))
+	if policy == "" {
+		policy = reasoningPolicyBestEffort
+	}
+	switch policy {
+	case reasoningPolicyBestEffort, reasoningPolicyRequired:
+	default:
+		return native.NewError(native.ErrorProtocol, fmt.Sprintf("invalid model reasoning policy: %q", policy))
+	}
+
+	supported, selectedModel, resolveErr := s.resolveReasoningEffortSupport(ctx, strings.TrimSpace(req.Model), effort)
+	if resolveErr != nil {
+		if policy == reasoningPolicyRequired {
+			return native.WrapError(native.ErrorCapabilityUnsupported, "failed to validate reasoning effort support", resolveErr)
+		}
+		return nil
+	}
+	if supported {
+		params["config"] = map[string]any{
+			"model_reasoning_effort": effort,
+		}
+		return nil
+	}
+	if policy == reasoningPolicyRequired {
+		name := strings.TrimSpace(selectedModel)
+		if name == "" {
+			name = strings.TrimSpace(req.Model)
+		}
+		if name == "" {
+			name = "<default>"
+		}
+		return native.NewError(native.ErrorCapabilityUnsupported, fmt.Sprintf("model %q does not support reasoning effort %q", name, effort))
+	}
+	return nil
+}
+
+func (s *session) resolveReasoningEffortSupport(ctx context.Context, requestedModel string, effort string) (bool, string, error) {
+	models, err := s.fetchModels(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	if len(models) == 0 {
+		return false, "", native.NewError(native.ErrorProtocol, "model/list returned no models")
+	}
+	target, ok := selectModelForReasoning(models, requestedModel)
+	if !ok {
+		// If the model was explicitly requested but not listed, do not preempt
+		// thread/start model validation. Treat as unsupported for required policy.
+		return false, strings.TrimSpace(requestedModel), nil
+	}
+	for _, opt := range target.SupportedReasoningEfforts {
+		if strings.EqualFold(strings.TrimSpace(opt.ReasoningEffort), effort) {
+			return true, target.ID, nil
+		}
+	}
+	return false, target.ID, nil
+}
+
+func (s *session) fetchModels(ctx context.Context) ([]modelListEntry, error) {
+	raw, err := s.callWithDefaultTimeout(ctx, "model/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Data []modelListEntry `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, native.WrapError(native.ErrorProtocol, "decode model/list response", err)
+	}
+	return parsed.Data, nil
+}
+
+type modelListEntry struct {
+	ID                        string                     `json:"id"`
+	Model                     string                     `json:"model"`
+	IsDefault                 bool                       `json:"isDefault"`
+	SupportedReasoningEfforts []modelReasoningEffortSpec `json:"supportedReasoningEfforts"`
+}
+
+type modelReasoningEffortSpec struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+}
+
+func selectModelForReasoning(models []modelListEntry, requested string) (modelListEntry, bool) {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model.ID), requested) || strings.EqualFold(strings.TrimSpace(model.Model), requested) {
+				return model, true
+			}
+		}
+		return modelListEntry{}, false
+	}
+	for _, model := range models {
+		if model.IsDefault {
+			return model, true
+		}
+	}
+	if len(models) == 0 {
+		return modelListEntry{}, false
+	}
+	// Fall back to the first visible model when the runtime does not set isDefault.
+	return models[0], true
 }
 
 func (s *session) ResumeThread(ctx context.Context, req native.ThreadResumeRequest) (native.ThreadHandle, error) {

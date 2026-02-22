@@ -13,6 +13,7 @@ const (
 	codeVersionFloor            = codes.VersionFloor
 	codeRuntimeStreamDisconnect = codes.RuntimeStreamDisconnect
 	codeRuntimeCrash            = codes.RuntimeCrash
+	codeRuntimeProtocol         = codes.RuntimeProtocol
 	codeRuntimeAuth             = codes.RuntimeAuth
 	codeRuntimeRateLimit        = codes.RuntimeRateLimit
 	codeRuntimeListenerFailure  = codes.RuntimeListenerFailure

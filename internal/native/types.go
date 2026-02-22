@@ -93,11 +93,13 @@ type TurnHandle struct {
 }
 
 type ThreadStartRequest struct {
-	Model          string `json:"model,omitempty"`
-	Cwd            string `json:"cwd,omitempty"`
-	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
-	Sandbox        string `json:"sandbox,omitempty"`
-	Personality    string `json:"personality,omitempty"`
+	Model                string `json:"model,omitempty"`
+	ModelReasoningEffort string `json:"modelReasoningEffort,omitempty"`
+	ModelReasoningPolicy string `json:"modelReasoningPolicy,omitempty"`
+	Cwd                  string `json:"cwd,omitempty"`
+	ApprovalPolicy       string `json:"approvalPolicy,omitempty"`
+	Sandbox              string `json:"sandbox,omitempty"`
+	Personality          string `json:"personality,omitempty"`
 }
 
 type ThreadResumeRequest struct {

@@ -135,6 +135,9 @@ type suiteRunCampaignProfile struct {
 	ResultChannel   string   `json:"resultChannel"`
 	ResultMinTurn   int      `json:"resultMinTurn"`
 	RuntimeStrategy string   `json:"runtimeStrategy,omitempty"`
+	NativeModel     string   `json:"nativeModel,omitempty"`
+	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
+	ReasoningPolicy string   `json:"reasoningPolicy,omitempty"`
 	Parallel        int      `json:"parallel"`
 	Total           int      `json:"total"`
 	MissionOffset   int      `json:"missionOffset,omitempty"`
@@ -178,6 +181,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	blindTermsCSV := fs.String("blind-terms", "", "optional comma-separated blind harness terms override")
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
 	runtimeStrategiesCSV := fs.String("runtime-strategies", "", "ordered native runtime strategy chain (comma-separated; default from config/env)")
+	nativeModel := fs.String("native-model", "", "native thread/start model override")
+	nativeModelReasoningEffort := fs.String("native-model-reasoning-effort", "", "native thread/start model reasoning effort hint: none|minimal|low|medium|high|xhigh")
+	nativeModelReasoningPolicy := fs.String("native-model-reasoning-policy", "", "native reasoning policy when effort is unsupported: best_effort|required")
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
 	missionOffset := fs.Int("mission-offset", 0, "0-based mission offset before scheduling (for campaign resume/canary windows)")
@@ -263,6 +269,32 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	if !nativeMode && len(argv) == 0 {
 		printSuiteRunHelp(r.Stderr)
 		return r.failUsage("suite run: missing runner command (use: zcl suite run ... -- <runner-cmd> ...)")
+	}
+	resolvedNativeModel := strings.TrimSpace(*nativeModel)
+	resolvedNativeReasoningEffort := strings.ToLower(strings.TrimSpace(*nativeModelReasoningEffort))
+	resolvedNativeReasoningPolicy := strings.ToLower(strings.TrimSpace(*nativeModelReasoningPolicy))
+	if resolvedNativeReasoningEffort == "" && resolvedNativeReasoningPolicy != "" {
+		return r.failUsage("suite run: --native-model-reasoning-policy requires --native-model-reasoning-effort")
+	}
+	if resolvedNativeReasoningEffort != "" {
+		switch resolvedNativeReasoningEffort {
+		case campaign.ModelReasoningEffortNone, campaign.ModelReasoningEffortMinimal, campaign.ModelReasoningEffortLow, campaign.ModelReasoningEffortMedium, campaign.ModelReasoningEffortHigh, campaign.ModelReasoningEffortXHigh:
+		default:
+			return r.failUsage("suite run: invalid --native-model-reasoning-effort (expected none|minimal|low|medium|high|xhigh)")
+		}
+		if resolvedNativeReasoningPolicy == "" {
+			resolvedNativeReasoningPolicy = campaign.ModelReasoningPolicyBestEffort
+		}
+	}
+	if resolvedNativeReasoningPolicy != "" {
+		switch resolvedNativeReasoningPolicy {
+		case campaign.ModelReasoningPolicyBestEffort, campaign.ModelReasoningPolicyRequired:
+		default:
+			return r.failUsage("suite run: invalid --native-model-reasoning-policy (expected best_effort|required)")
+		}
+	}
+	if !nativeMode && (resolvedNativeModel != "" || resolvedNativeReasoningEffort != "" || resolvedNativeReasoningPolicy != "") {
+		return r.failUsage("suite run: native model flags require --session-isolation native")
 	}
 
 	runtimeStrategyChain := config.ParseRuntimeStrategyCSV(*runtimeStrategiesCSV)
@@ -437,6 +469,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		ResultChannel:   resolvedResultChannel.Kind,
 		ResultMinTurn:   resolvedResultChannel.MinFinalTurn,
 		RuntimeStrategy: string(nativeRuntimeSelection.Selected),
+		NativeModel:     resolvedNativeModel,
+		ReasoningEffort: resolvedNativeReasoningEffort,
+		ReasoningPolicy: resolvedNativeReasoningPolicy,
 		Parallel:        *parallel,
 		Total:           resolvedTotal,
 		MissionOffset:   *missionOffset,
@@ -515,6 +550,9 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		NativeMode:       nativeMode,
 		NativeSelection:  nativeRuntimeSelection,
 		NativeScheduler:  buildNativeAttemptScheduler(nativeRuntimeSelection.Selected, *parallel),
+		NativeModel:      resolvedNativeModel,
+		ReasoningEffort:  resolvedNativeReasoningEffort,
+		ReasoningPolicy:  resolvedNativeReasoningPolicy,
 		FeedbackPolicy:   resolvedFeedbackPolicy,
 		FinalizationMode: resolvedFinalizationMode,
 		ResultChannel:    resolvedResultChannel,
@@ -723,6 +761,9 @@ type suiteRunExecOpts struct {
 	NativeMode       bool
 	NativeSelection  native.ResolveResult
 	NativeScheduler  *nativeAttemptScheduler
+	NativeModel      string
+	ReasoningEffort  string
+	ReasoningPolicy  string
 	FeedbackPolicy   string
 	FinalizationMode string
 	ResultChannel    suiteRunResultChannel
@@ -1384,7 +1425,13 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 	}()
 
 	cwd, _ := os.Getwd()
-	thread, err := sess.StartThread(ctx, native.ThreadStartRequest{Cwd: cwd})
+	threadReq := native.ThreadStartRequest{
+		Model:                strings.TrimSpace(opts.NativeModel),
+		ModelReasoningEffort: strings.ToLower(strings.TrimSpace(opts.ReasoningEffort)),
+		ModelReasoningPolicy: strings.ToLower(strings.TrimSpace(opts.ReasoningPolicy)),
+		Cwd:                  cwd,
+	}
+	thread, err := sess.StartThread(ctx, threadReq)
 	if err != nil {
 		ar.RunnerErrorCode = nativeErrorCode(err)
 		ec := 1
@@ -1765,13 +1812,14 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--finalization-mode strict|auto_fail|auto_from_result_json] [--result-channel none|file_json|stdout_json] [--result-file <attempt-relative-path>] [--result-marker <prefix>] [--result-min-turn N] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--native-model <slug>] [--native-model-reasoning-effort none|minimal|low|medium|high|xhigh] [--native-model-reasoning-policy best_effort|required] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json [-- <runner-cmd> [args...]]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
   - process mode requires -- <runner-cmd>; native mode forbids it.
   - --session-isolation=auto chooses native mode when ZCL_HOST_NATIVE_SPAWN=1, otherwise process mode.
   - --runtime-strategies controls ordered native runtime fallback chain (default from config/env).
+  - --native-model and --native-model-reasoning-* apply only in native mode and are forwarded to thread/start.
   - --feedback-policy controls default finalization behavior when --finalization-mode is omitted.
   - --feedback-policy=auto_fail writes canonical infra-failure feedback when runners exit without feedback.
   - --feedback-policy=strict leaves missing feedback as a failing contract condition unless --finalization-mode overrides it.

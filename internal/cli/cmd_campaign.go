@@ -1203,6 +1203,15 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 	if len(flow.Runner.RuntimeStrategies) > 0 {
 		args = append(args, "--runtime-strategies", strings.Join(flow.Runner.RuntimeStrategies, ","))
 	}
+	if strings.TrimSpace(flow.Runner.Model) != "" {
+		args = append(args, "--native-model", strings.TrimSpace(flow.Runner.Model))
+	}
+	if strings.TrimSpace(flow.Runner.ModelReasoningEffort) != "" {
+		args = append(args, "--native-model-reasoning-effort", strings.TrimSpace(flow.Runner.ModelReasoningEffort))
+	}
+	if strings.TrimSpace(flow.Runner.ModelReasoningPolicy) != "" {
+		args = append(args, "--native-model-reasoning-policy", strings.TrimSpace(flow.Runner.ModelReasoningPolicy))
+	}
 	if len(flow.Runner.Command) > 0 {
 		args = append(args, "--")
 		args = append(args, flow.Runner.Command...)

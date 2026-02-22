@@ -543,6 +543,167 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	}
 }
 
+func TestSuiteRun_NativeModelForwardedToThreadStart(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-model-forwarded",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "assert_model_forwarded")
+	t.Setenv("ZCL_HELPER_EXPECT_MODEL", "gpt-5.3-codex-spark")
+	t.Setenv("ZCL_HELPER_EXPECT_REASONING_EFFORT", "medium")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 1, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--native-model", "gpt-5.3-codex-spark",
+		"--native-model-reasoning-effort", "medium",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			RunnerErrorCode string `json:"runnerErrorCode"`
+			OK              bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK || sum.Attempts[0].RunnerErrorCode != "" {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+}
+
+func TestSuiteRun_NativeInvalidModelFailureIsTyped(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-invalid-model",
+  "defaults": { "mode": "ci", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "invalid model mission" }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "invalid_model")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--native-model", "invalid-model-id",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			RunnerErrorCode string `json:"runnerErrorCode"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v", err)
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	if sum.Attempts[0].RunnerErrorCode != codeRuntimeProtocol {
+		t.Fatalf("expected protocol runtime code for invalid model, got %+v", sum.Attempts[0])
+	}
+}
+
+func TestSuiteRun_NativeReasoningUnsupportedBestEffortFallsBack(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-reasoning-best-effort",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "reasoning fallback mission", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "reasoning_unsupported")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     time.Now,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--native-model", "gpt-5.3-codex-spark",
+		"--native-model-reasoning-effort", "medium",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected success with best-effort fallback, got code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			RunnerErrorCode string `json:"runnerErrorCode"`
+			OK              bool   `json:"ok"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v", err)
+	}
+	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK || sum.Attempts[0].RunnerErrorCode != "" {
+		t.Fatalf("expected successful fallback summary, got %+v", sum)
+	}
+}
+
 func TestSuiteRun_NativeProcessParity(t *testing.T) {
 	baseDir := t.TempDir()
 	suitePath := filepath.Join(baseDir, "suite.json")
@@ -1755,10 +1916,73 @@ func runSuiteNativeHelper(mode string) {
 				respondErr(-32601, "method not found")
 			case "timeout_on_model_list":
 				time.Sleep(2 * time.Second)
+			case "assert_model_forwarded":
+				respond(map[string]any{
+					"data": []any{
+						map[string]any{
+							"id":          "gpt-5.3-codex-spark",
+							"model":       "gpt-5.3-codex-spark",
+							"isDefault":   true,
+							"displayName": "Spark",
+							"supportedReasoningEfforts": []any{
+								map[string]any{"reasoningEffort": "medium"},
+								map[string]any{"reasoningEffort": "high"},
+							},
+							"defaultReasoningEffort": "medium",
+						},
+					},
+				})
+			case "reasoning_unsupported":
+				respond(map[string]any{
+					"data": []any{
+						map[string]any{
+							"id":          "gpt-5.3-codex-spark",
+							"model":       "gpt-5.3-codex-spark",
+							"isDefault":   true,
+							"displayName": "Spark",
+							"supportedReasoningEfforts": []any{
+								map[string]any{"reasoningEffort": "low"},
+							},
+							"defaultReasoningEffort": "low",
+						},
+					},
+				})
 			default:
 				respond(map[string]any{"data": []any{}})
 			}
 		case "thread/start":
+			params, _ := msg["params"].(map[string]any)
+			switch mode {
+			case "invalid_model":
+				if gotModel, _ := params["model"].(string); strings.TrimSpace(gotModel) == "invalid-model-id" {
+					respondErr(-32000, "thread/start: unknown model invalid-model-id")
+					continue
+				}
+			case "assert_model_forwarded":
+				expectedModel := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_MODEL"))
+				if expectedModel != "" {
+					gotModel, _ := params["model"].(string)
+					if strings.TrimSpace(gotModel) != expectedModel {
+						respondErr(-32000, fmt.Sprintf("thread/start model mismatch got=%q want=%q", gotModel, expectedModel))
+						continue
+					}
+				}
+				expectedEffort := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_REASONING_EFFORT"))
+				if expectedEffort != "" {
+					cfg, _ := params["config"].(map[string]any)
+					gotEffort, _ := cfg["model_reasoning_effort"].(string)
+					if strings.TrimSpace(gotEffort) != expectedEffort {
+						respondErr(-32000, fmt.Sprintf("thread/start reasoning mismatch got=%q want=%q", gotEffort, expectedEffort))
+						continue
+					}
+				}
+			case "reasoning_unsupported":
+				cfg, _ := params["config"].(map[string]any)
+				if effort, _ := cfg["model_reasoning_effort"].(string); strings.TrimSpace(effort) != "" {
+					respondErr(-32000, "thread/start: reasoning effort unsupported for selected model")
+					continue
+				}
+			}
 			respond(map[string]any{"thread": map[string]any{"id": threadID}})
 			writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": threadID}})
 		case "thread/resume":

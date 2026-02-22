@@ -13,6 +13,7 @@
 # - output.reportPath/summaryPath/resultsMdPath/publishCheck/progressJsonl
 # - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
 # - flows[].flowId, flows[].runner.* (suiteFile optional when missionSource.path is set)
+# - flows[].runner.model/modelReasoningEffort/modelReasoningPolicy (codex_app_server only)
 # - flows[].runner.toolDriver.kind/shims
 # - flows[].runner.finalization.mode/minResultTurn/resultChannel
 # - flows[].adapterContract.requiredOutputFields (must include attemptDir/status/errors)
