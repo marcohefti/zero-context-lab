@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/campaign"
@@ -564,8 +565,9 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 	if in.TotalMissions <= 0 {
 		in.TotalMissions = len(missionIndexes)
 	}
+	stderrMu := &sync.Mutex{}
 	execAdapter, err := runners.NewCampaignExecutor(func(_ context.Context, flow campaign.FlowSpec, missionIndex int, missionID string) (campaign.FlowRunV1, error) {
-		fr, _, runErr := r.runCampaignFlowSuite(parsed, outRoot, flow, campaignSegment{MissionOffset: missionIndex, TotalMissions: 1})
+		fr, _, runErr := r.runCampaignFlowSuite(parsed, outRoot, flow, campaignSegment{MissionOffset: missionIndex, TotalMissions: 1}, stderrMu)
 		if len(fr.Attempts) == 0 {
 			fr.Attempts = []campaign.AttemptStatusV1{{
 				MissionIndex: missionIndex,
@@ -814,7 +816,7 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 	return mg, nil
 }
 
-func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment) (campaign.FlowRunV1, *suiteRunSummary, error) {
+func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment, sharedStderrMu *sync.Mutex) (campaign.FlowRunV1, *suiteRunSummary, error) {
 	suiteFile, err := materializeCampaignFlowSuite(parsed, outRoot, flow)
 	if err != nil {
 		return campaign.FlowRunV1{}, nil, err
@@ -873,11 +875,18 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	stderrTarget := r.Stderr
+	if sharedStderrMu != nil && r.Stderr != nil {
+		stderrTarget = &lockedWriter{
+			mu: sharedStderrMu,
+			w:  r.Stderr,
+		}
+	}
 	sub := Runner{
 		Version: r.Version,
 		Now:     r.Now,
 		Stdout:  &stdout,
-		Stderr:  io.MultiWriter(r.Stderr, &stderr),
+		Stderr:  io.MultiWriter(stderrTarget, &stderr),
 	}
 	exit := sub.runSuiteRunWithEnv(args, env)
 
