@@ -7,6 +7,13 @@ description: Orchestrator workflow for running ZeroContext Lab (ZCL) attempts/su
 
 This skill is for the *orchestrator* (you), not the spawned "zero context" agent.
 
+## Native Host Integration Boundary (Current)
+
+- ZCL can plan native attempts (`zcl suite plan`, `zcl attempt start --isolation-model native_spawn`), but it does not run a native-host plugin/runtime that spawns Codex/Claude sessions by itself.
+- `zcl suite run` is process-runner orchestration. Native isolation in this command is intentionally rejected and must be host-orchestrated.
+- `zcl campaign run` currently executes flows through the suite-run adapter path, so each flow still needs a concrete `runner.command` (or equivalent harness entrypoint) for execution.
+- Practical consequence: scriptless, config-only campaign execution requires additional first-class native host integration work in ZCL.
+
 ## Goal
 
 Run a mission through ZCL with funnel-first evidence and deterministic artifacts under `.zcl/`.
@@ -31,7 +38,7 @@ Run a mission through ZCL with funnel-first evidence and deterministic artifacts
 | Auto finalization from mission result channel | yes | yes | `runner.finalization.mode=auto_from_result_json` + `resultChannel` auto-writes `feedback.json` and typed failures. |
 | 3-turn mission-only finalization gating | yes | yes | `runner.finalization.minResultTurn` blocks early/intermediate result payloads until final turn. |
 | Prompt materialization (`mission prompts build`) with deterministic IDs | yes | yes | Uses mission selection and stable hash IDs for reproducible prompt artifacts. |
-| Runner-native subagent lifecycle management inside ZCL | partial | no | Accepted design direction; currently adapters normalize through suite-run orchestration. |
+| Runner-native subagent lifecycle management inside ZCL | partial | no | ZCL does not spawn/manage host-native agent sessions itself; host harness must orchestrate native spawn per planned attempt. |
 
 Primary evidence:
 - `.zcl/.../tool.calls.jsonl`
@@ -54,7 +61,7 @@ When an operator says "run this through ZCL: <mission>", do this:
 4. Prefer native host spawning when available (Mode A):
    - Single attempt: `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <promptText> --isolation-model native_spawn --json`
    - Suite batch planning: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-   - Spawn exactly one fresh native agent session per attempt and pass the returned `env`.
+   - Spawn exactly one fresh native agent session per attempt and pass the returned `env` (spawn is done by your host harness, not by ZCL itself).
 5. Use process-runner orchestration only as an explicit fallback (Mode B):
    - `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --result-min-turn 3 --campaign-id <campaignId> --progress-jsonl <path|-> --shim tool-cli --json -- <runner-cmd> [args...]`
    - `--shim tool-cli` lets the agent type a tool command directly while ZCL still records invocations to `tool.calls.jsonl`.
