@@ -26,6 +26,7 @@ Read order:
 - Runner performs actions only through ZCL funnels (writes `tool.calls.jsonl`).
 - Runner writes authoritative outcome via `zcl feedback` (writes `feedback.json`).
 - ZCL computes + validates derived artifacts (`attempt.report.json`, `zcl validate`, `zcl expect`).
+- First-class campaigns execute mission-by-mission across flows with lock-protected checkpoints (`campaign.plan.json`, `campaign.progress.jsonl`, `campaign.run.state.json`).
 
 Primary evidence:
 - `tool.calls.jsonl` (trace)
@@ -39,6 +40,13 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl contract --json`
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`
 - `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] --json -- <runner-cmd> [args...]`
+- `zcl campaign lint --spec <campaign.(yaml|yml|json)> [--json]`
+- `zcl campaign run --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]`
+- `zcl campaign canary --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]`
+- `zcl campaign resume --campaign-id <id> [--json]`
+- `zcl campaign status --campaign-id <id> [--json]`
+- `zcl campaign report --campaign-id <id> [--format json,md] [--force] [--json]`
+- `zcl campaign publish-check --campaign-id <id> [--force] [--json]`
 - `zcl runs list [--out-root .zcl] [--suite <suiteId>] [--status any|ok|fail|missing_feedback] [--limit N] --json`
 - `zcl attempt start --suite <suiteId> --mission <missionId> [--isolation-model process_runner|native_spawn] --json`
 - `zcl attempt env [--format sh|dotenv] [--json] [<attemptDir>]`
@@ -47,13 +55,14 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl attempt list [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] [--limit N] --json`
 - `zcl attempt latest [--out-root .zcl] [--suite <suiteId>] [--mission <missionId>] [--status any|ok|fail|missing_feedback] [--tag <tag>] --json`
 - `zcl run -- <cmd> [args...]`
-- `zcl mcp proxy -- <server-cmd> [args...]`
+- `zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]`
 - `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]`
 - `zcl feedback --ok|--fail --result <string>|--result-json <json>`
 - `zcl note [--kind agent|operator|system] --message <string>|--data-json <json>`
 - `zcl report [--strict] [--json] <attemptDir|runDir>`
-- `zcl validate [--strict] [--json] <attemptDir|runDir>`
+- `zcl validate [--strict] [--semantic] [--semantic-rules <path>] [--json] <attemptDir|runDir>`
 - `zcl expect [--strict] --json <attemptDir|runDir>`
+- `zcl mission prompts build --spec <campaign.(yaml|yml|json)> --template <template.txt|md> [--out <path>] [--json]`
 - `zcl replay [--execute] [--allow <cmd1,cmd2>] [--allow-all] [--max-steps N] [--stdin] --json <attemptDir>`
 - `zcl doctor [--json]`
 - `zcl gc [--dry-run] [--json]`
@@ -90,6 +99,9 @@ Safety knobs:
 - `internal/attempt`: attempt allocation + metadata (`attempt.json`, `attempt.env.sh`, `prompt.txt`, `ZCL_TMP_DIR`).
 - `internal/planner`: suite planning (suite file -> planned attempts + env).
 - `internal/suite`: suite parsing + expectations (runner-agnostic).
+- `internal/campaign`: first-class campaign specs, run-state persistence, campaign report materialization.
+- `internal/semantic`: semantic validity gates and rule-pack evaluation.
+- `internal/runners`: runner adapters used by campaign mission engine.
 - `internal/funnel`: protocol funnels (CLI/MCP/HTTP).
 - `internal/trace`: trace shaping, bounds, redaction hooks.
 - `internal/report`: computes `attempt.report.json`.

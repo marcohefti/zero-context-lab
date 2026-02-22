@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/report"
 	"github.com/marcohefti/zero-context-lab/internal/runners"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
+	"github.com/marcohefti/zero-context-lab/internal/semantic"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 	"github.com/marcohefti/zero-context-lab/internal/trace"
 	"github.com/marcohefti/zero-context-lab/internal/validate"
@@ -104,6 +106,10 @@ func (r Runner) Run(args []string) int {
 		return r.runAttempt(args[1:])
 	case "suite":
 		return r.runSuite(args[1:])
+	case "campaign":
+		return r.runCampaign(args[1:])
+	case "mission":
+		return r.runMission(args[1:])
 	case "runs":
 		return r.runRuns(args[1:])
 	case "replay":
@@ -708,6 +714,8 @@ func (r Runner) runValidate(args []string) int {
 	fs.SetOutput(io.Discard)
 
 	strict := fs.Bool("strict", false, "strict mode (missing required artifacts fails)")
+	semanticMode := fs.Bool("semantic", false, "run semantic validation gates (feedback semantics + trace signals)")
+	semanticRules := fs.String("semantic-rules", "", "optional semantic rules file (.json|.yaml|.yml)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
 
@@ -726,6 +734,37 @@ func (r Runner) runValidate(args []string) int {
 	}
 
 	*strict = attempt.EffectiveStrict(paths[0], *strict)
+
+	if *semanticMode {
+		res, err := semantic.ValidatePath(paths[0], semantic.Options{RulesPath: strings.TrimSpace(*semanticRules)})
+		if err != nil {
+			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			return 1
+		}
+		if *jsonOut {
+			exit := r.writeJSON(res)
+			if exit != 0 {
+				return exit
+			}
+			if res.OK {
+				return 0
+			}
+			return 2
+		}
+		if res.OK {
+			fmt.Fprintf(r.Stdout, "validate: OK\n")
+			return 0
+		}
+		fmt.Fprintf(r.Stderr, "validate: FAIL\n")
+		for _, f := range res.Failures {
+			if f.Path != "" {
+				fmt.Fprintf(r.Stderr, "  %s: %s (%s)\n", f.Code, f.Message, f.Path)
+			} else {
+				fmt.Fprintf(r.Stderr, "  %s: %s\n", f.Code, f.Message)
+			}
+		}
+		return 2
+	}
 
 	res, err := validate.ValidatePath(paths[0], *strict)
 	if err != nil {
@@ -939,6 +978,9 @@ func (r Runner) runMCPProxy(args []string) int {
 	fs := flag.NewFlagSet("mcp proxy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
+	maxToolCalls := fs.Int64("max-tool-calls", 0, "max tools/call responses before proxy stops (0 disables)")
+	idleTimeoutMs := fs.Int64("idle-timeout-ms", 0, "idle timeout in ms with no MCP traffic (0 disables)")
+	shutdownOnComplete := fs.Bool("shutdown-on-complete", false, "terminate MCP server when request stream is complete and in-flight calls drain")
 	help := fs.Bool("help", false, "show help")
 	if err := fs.Parse(args); err != nil {
 		return r.failUsage("mcp proxy: invalid flags")
@@ -969,6 +1011,33 @@ func (r Runner) runMCPProxy(args []string) int {
 		printMCPProxyHelp(r.Stderr)
 		return r.failUsage("mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)")
 	}
+	if *maxToolCalls < 0 {
+		return r.failUsage("mcp proxy: --max-tool-calls must be >= 0")
+	}
+	if *idleTimeoutMs < 0 {
+		return r.failUsage("mcp proxy: --idle-timeout-ms must be >= 0")
+	}
+	if *maxToolCalls == 0 {
+		if s := strings.TrimSpace(os.Getenv("ZCL_MCP_MAX_TOOL_CALLS")); s != "" {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil || n < 0 {
+				return r.failUsage("mcp proxy: invalid ZCL_MCP_MAX_TOOL_CALLS")
+			}
+			*maxToolCalls = n
+		}
+	}
+	if *idleTimeoutMs == 0 {
+		if s := strings.TrimSpace(os.Getenv("ZCL_MCP_IDLE_TIMEOUT_MS")); s != "" {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil || n < 0 {
+				return r.failUsage("mcp proxy: invalid ZCL_MCP_IDLE_TIMEOUT_MS")
+			}
+			*idleTimeoutMs = n
+		}
+	}
+	if !*shutdownOnComplete && envBoolish("ZCL_MCP_SHUTDOWN_ON_COMPLETE") {
+		*shutdownOnComplete = true
+	}
 
 	now := r.Now()
 	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
@@ -983,7 +1052,12 @@ func (r Runner) runMCPProxy(args []string) int {
 		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
 		return 1
 	}
-	if err := mcpproxy.Proxy(ctx, env, argv, os.Stdin, r.Stdout, schema.PreviewMaxBytesV1); err != nil {
+	if err := mcpproxy.ProxyWithOptions(ctx, env, argv, os.Stdin, r.Stdout, mcpproxy.Options{
+		MaxPreviewBytes:    schema.PreviewMaxBytesV1,
+		MaxToolCalls:       *maxToolCalls,
+		IdleTimeoutMs:      *idleTimeoutMs,
+		ShutdownOnComplete: *shutdownOnComplete,
+	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
 			return 1
@@ -1230,13 +1304,21 @@ Usage:
   zcl attempt explain [--json] [--tail N] [<attemptDir>]
   zcl suite plan --file <suite.(yaml|yml|json)> --json
   zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] --json -- <runner-cmd> [args...]
+  zcl campaign lint --spec <campaign.(yaml|yml|json)> [--json]
+  zcl campaign run --spec <campaign.(yaml|yml|json)> [--json]
+  zcl campaign canary --spec <campaign.(yaml|yml|json)> [--json]
+  zcl campaign resume --campaign-id <id> [--json]
+  zcl campaign status --campaign-id <id> [--json]
+  zcl campaign report --campaign-id <id> [--json]
+  zcl campaign publish-check --campaign-id <id> [--json]
   zcl runs list --json
   zcl attempt list [filters...] --json
   zcl attempt latest [filters...] --json
   zcl feedback --ok|--fail --result <string>|--result-json <json>
   zcl note [--kind agent|operator|system] --message <string>|--data-json <json>
   zcl report [--strict] [--json] <attemptDir|runDir>
-  zcl validate [--strict] [--json] <attemptDir|runDir>
+  zcl validate [--strict] [--semantic] [--semantic-rules <path>] [--json] <attemptDir|runDir>
+  zcl mission prompts build --spec <campaign.(yaml|yml|json)> --template <template.txt|md> [--json]
   zcl replay --json <attemptDir>
   zcl expect [--strict] --json <attemptDir|runDir>
   zcl doctor [--json]
@@ -1244,7 +1326,7 @@ Usage:
   zcl pin --run-id <runId> --on|--off [--json]
 `)
 	fmt.Fprintf(w, "  %s\n", enrichUsage())
-	fmt.Fprint(w, `  zcl mcp proxy -- <server-cmd> [args...]
+	fmt.Fprint(w, `  zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]
   zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]
   zcl run -- <cmd> [args...]
 
@@ -1258,13 +1340,15 @@ Commands:
   attempt explain Fast post-mortem view from artifacts (tail trace + pointers).
   suite plan      Allocate attempt dirs for every mission in a suite file (use --json).
   suite run       Run a suite end-to-end with capability-aware isolation selection.
+  campaign        First-class campaign orchestration (lint/run/canary/resume/status/report/publish-check).
   runs list       List run index rows for automation (use --json).
   attempt list    List attempts with filters (suite/mission/status/tags) as JSON index rows.
   attempt latest  Return latest attempt matching filters as one JSON row.
   feedback        Write the canonical attempt outcome to feedback.json.
   note            Append a secondary evidence note to notes.jsonl.
   report           Compute attempt.report.json from tool.calls.jsonl + feedback.json.
-  validate         Validate artifact integrity with typed error codes.
+  validate         Validate artifact integrity and optional semantic validity with typed error codes.
+  mission          Deterministic mission prompt materialization commands.
   replay           Best-effort replay of tool.calls.jsonl (use --json).
   expect           Evaluate suite expectations against feedback.json (use --json).
   doctor           Check environment/config sanity for running ZCL.
@@ -1400,7 +1484,7 @@ Notes:
 
 func printValidateHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl validate [--strict] [--json] <attemptDir|runDir>
+  zcl validate [--strict] [--semantic] [--semantic-rules <path>] [--json] <attemptDir|runDir>
 `)
 }
 
@@ -1426,12 +1510,12 @@ func enrichUsage() string {
 
 func printMCPHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl mcp proxy -- <server-cmd> [args...]
+  zcl mcp proxy --max-tool-calls N --idle-timeout-ms N --shutdown-on-complete -- <server-cmd> [args...]
 `)
 }
 
 func printMCPProxyHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl mcp proxy -- <server-cmd> [args...]
+  zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]
 `)
 }

@@ -1,0 +1,105 @@
+# Canonical campaign template for paired benchmarking.
+#
+# Supported by current ZCL parser/executor:
+# - schemaVersion, campaignId, outRoot
+# - totalMissions, canaryMissions, failFast
+# - missionSource.selection (all|mission_id|index|range)
+# - pairGate.enabled, pairGate.stopOnFirstMissionFailure
+# - semantic.enabled, semantic.rulesPath
+# - cleanup.preMission/postMission (executed with bounded timeout)
+# - timeouts.campaignGlobalTimeoutMs/defaultAttemptTimeoutMs/cleanupHookTimeoutMs/timeoutStart
+# - output.reportPath/publishCheck/progressJsonl
+# - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
+# - flows[].flowId, flows[].suiteFile, flows[].runner.*
+# - flows[].adapterContract.requiredOutputFields (must include attemptDir/status/errors)
+schemaVersion: 1
+campaignId: tool-comparison
+outRoot: .zcl
+
+totalMissions: 0
+canaryMissions: 3
+failFast: true
+
+missionSource:
+  path: /path/to/versioned/missions
+  selection:
+    mode: range
+    missionIds: []
+    indexes: []
+    range:
+      start: 5
+      end: 8
+
+pairGate:
+  enabled: true
+  stopOnFirstMissionFailure: true
+
+semantic:
+  enabled: true
+  rulesPath: ./examples/semantic.rulepack.yaml
+
+cleanup:
+  preMission:
+    - "pkill -f 'zcl mcp proxy' || true"
+    - "rm -rf ./.zcl/tmp/* || true"
+  postMission:
+    - "pkill -f 'zcl mcp proxy' || true"
+
+timeouts:
+  campaignGlobalTimeoutMs: 7200000
+  defaultAttemptTimeoutMs: 180000
+  cleanupHookTimeoutMs: 15000
+  timeoutStart: first_tool_call
+
+output:
+  reportPath: .zcl/campaigns/tool-comparison/campaign.report.json
+  publishCheck: required
+  progressJsonl: .zcl/campaigns/tool-comparison/campaign.progress.jsonl
+
+invalidRunPolicy:
+  statuses: ["valid", "invalid", "aborted"]
+  publishRequiresValid: true
+  forceFlag: --force
+
+flows:
+  - flowId: flow-a
+    suiteFile: ./suites/flow-a.yaml
+    runner:
+      type: codex_exec
+      command: ["codex", "exec", "--", "./scripts/run_flow_a.sh"]
+      sessionIsolation: process
+      feedbackPolicy: auto_fail
+      mode: discovery
+      timeoutMs: 180000
+      timeoutStart: first_tool_call
+      strict: true
+      strictExpect: true
+      mcp:
+        maxToolCalls: 60
+        idleTimeoutMs: 30000
+        shutdownOnComplete: true
+      env:
+        ZCL_MIN_VERSION: "0.0.0-dev"
+    adapterContract:
+      requiredOutputFields: ["attemptDir", "status", "errors"]
+
+  - flowId: flow-b
+    suiteFile: ./suites/flow-b.yaml
+    runner:
+      type: codex_exec
+      command: ["codex", "exec", "--", "./scripts/run_flow_b.sh"]
+      sessionIsolation: process
+      feedbackPolicy: auto_fail
+      mode: discovery
+      timeoutMs: 180000
+      timeoutStart: first_tool_call
+      strict: true
+      strictExpect: true
+      mcp:
+        maxToolCalls: 60
+        idleTimeoutMs: 30000
+        shutdownOnComplete: true
+      env:
+        ZCL_MIN_VERSION: "0.0.0-dev"
+    adapterContract:
+      requiredOutputFields: ["attemptDir", "status", "errors"]

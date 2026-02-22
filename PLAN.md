@@ -19,7 +19,7 @@ Rules:
 2. [x] Initialize the Go module and baseline folder layout (`cmd/`, `internal/`, `scripts/`, `test/fixtures/`).
 3. [x] Implement a minimal `zcl` CLI with JSON-first output:
    `zcl contract --json` and `zcl attempt start --suite ... --mission ... --json`.
-4. [x] Add SurfWright-style repo validation scripts with minimal `PASS/FAIL` output:
+4. [x] Add deterministic repo validation scripts with minimal `PASS/FAIL` output:
    `scripts/contract-snapshot.sh`, `scripts/verify.sh`.
 5. [x] Add initial contract snapshot at `test/fixtures/contract/contract.snapshot.json`.
 6. [x] Add `.gitignore` so `.zcl/` outputs and `artifacts/` do not get committed.
@@ -135,7 +135,7 @@ Goal: proxy MCP JSON-RPC boundaries and emit trace events comparable to CLI funn
 Goal: ship a single binary with simple, safe install/update patterns and release validation.
 
 1. [x] Add a release build script and produce per-platform artifacts (mac/linux/windows) + checksums.
-2. [x] Add `scripts/release-check.*` mirroring SurfWright's approach:
+2. [x] Add `scripts/release-check.*` with deterministic release validation checks:
    validate checksums exist, versions match, and release notes/changelog policy is satisfied.
 3. [x] Add optional installer scripts (`install.sh`, `install.ps1`) and test them in CI (smoke).
 4. [x] Decide whether `zcl update` exists; if yes, implement `zcl update status --json` first.
@@ -170,4 +170,6 @@ Update this log while executing the plan.
 - 2026-02-19: Contract coherence pass: formalized `suite.run.summary.json` + `run.report.json` in contract/docs/validation, added strict CI validation for raw captures (`ZCL_E_UNSAFE_EVIDENCE`), hardened stale lock cleanup with owner PID liveness checks, expanded CI to macOS + windows store tests, and documented new safety/entropy knobs.
 - 2026-02-19: Update policy pass: added `zcl update status [--cached] [--json]`, added optional interactive once/day update notice, added `ZCL_MIN_VERSION` floor enforcement (`ZCL_E_VERSION_FLOOR`), documented explicit/manual package-manager upgrades, and added npm binary checksum verification against release `SHA256SUMS`.
 - 2026-02-19: skills.sh distribution pass: confirmed skills.sh has GitHub-hosted skill discovery with leaderboard visibility driven by `npx skills add` telemetry, added `.github/workflows/skills-sh.yml` to verify repo discoverability and send a controlled publish/update install signal for `@zcl` on push/schedule/manual, and documented skills.sh install path in `README.md`.
+- 2026-02-22: Campaign + semantic orchestration pass: added first-class `zcl campaign` command family (`run/canary/resume/status/report/publish-check`), added `zcl validate --semantic` + rule-pack wiring, added MCP proxy lifecycle controls (`--max-tool-calls`, `--idle-timeout-ms`, `--shutdown-on-complete`), added deterministic `zcl mission prompts build`, and documented new command/artifact surfaces in `AGENTS.md`, `ARCHITECTURE.md`, `SCHEMAS.md`, and `skills/zcl/SKILL.md`.
+- 2026-02-22: Campaign hardening + refactor pass: added strict campaign spec decoding (unknown-field rejection + `x-*` extensions) and `zcl campaign lint`; switched to mission-by-mission campaign engine with lock-protected plan/progress checkpoints (`campaign.plan.json`, `campaign.progress.jsonl`), adapter contract normalization for runner types, deterministic resume/no-duplicate guards, enforced cleanup/global-timeout hooks, mission selection execution (`all|mission_id|index|range`), deterministic prompt IDs/build timestamps, and added campaign e2e regression checks to `./scripts/verify.sh`.
 - YYYY-MM-DD: (who) (what step) (what changed) (what remains)

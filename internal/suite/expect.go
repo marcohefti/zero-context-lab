@@ -28,6 +28,8 @@ type TraceFacts struct {
 	RepeatMaxStreak           int64
 	DistinctCommandSignatures int64
 	CommandNamesSeen          []string
+	ToolOpsSeen               []string
+	MCPToolsSeen              []string
 }
 
 func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *TraceFacts) ExpectationResult {
@@ -131,6 +133,9 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 				}
 			}
 		}
+	}
+	if m.Expects.Semantic != nil {
+		failures = append(failures, ValidateSemantic(m.Expects.Semantic, fb, tf)...)
 	}
 
 	return ExpectationResult{

@@ -17,6 +17,15 @@ The system of record lives in the linked docs + contracts + validation scripts.
 Repo validation (must be green after meaningful changes):
 - `./scripts/verify.sh`
 
+Canonical operator templates:
+- `examples/campaign.canonical.yaml`
+- `examples/semantic.rulepack.yaml`
+- `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
+
+Campaign capability status (operator truth source):
+- `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks, campaign lock.
+- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving).
+
 ## Non-Negotiables (Keep This Boring)
 
 - Primary evidence is artifacts, not transcripts.
@@ -44,10 +53,16 @@ Repo validation (must be green after meaningful changes):
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
+   - First-class campaign orchestration:
+     - `zcl campaign lint --spec <campaign.(yaml|yml|json)> --json`
+     - `zcl campaign canary --spec <campaign.(yaml|yml|json)> --missions 3 --json`
+     - `zcl campaign run --spec <campaign.(yaml|yml|json)> --json`
+     - `zcl campaign resume --campaign-id <id> --json`
+     - `zcl campaign status --campaign-id <id> --json`
    - Env handoff: source `<attemptDir>/attempt.env.sh` (auto-written), or run `zcl attempt env --format sh <attemptDir>`
 4. Run actions through the funnel:
    - CLI: `zcl run -- <cmd> [args...]` (writes `tool.calls.jsonl`)
-   - MCP: `zcl mcp proxy -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
+   - MCP: `zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]` (writes `tool.calls.jsonl`)
    - HTTP: `zcl http proxy --upstream <url> [--listen 127.0.0.1:0] [--max-requests N] [--json]` (writes `tool.calls.jsonl`)
 5. Finish with authoritative outcome:
    - `zcl feedback --ok|--fail --result <string>` or `--result-json <json>`
@@ -58,7 +73,9 @@ Repo validation (must be green after meaningful changes):
 7. Compute and validate:
    - `zcl report --strict <attemptDir|runDir>`
    - `zcl validate --strict <attemptDir|runDir>`
+   - `zcl validate --semantic [--semantic-rules <rules.(yaml|yml|json)>] --json <attemptDir|runDir>`
    - If using suites with `expects`: `zcl expect --strict --json <attemptDir|runDir>`
+   - Campaign publication guard: `zcl campaign publish-check --campaign-id <id> --json`
    - Optional: reproduce from trace: `zcl replay --json <attemptDir>`
 8. Query/index (automation-friendly):
    - Latest attempt: `zcl attempt latest --suite <suiteId> --mission <missionId> --status ok --json`
@@ -72,6 +89,11 @@ Root: `.zcl/`
 .zcl/
   campaigns/<campaignId>/
     campaign.state.json         (optional; canonical cross-run campaign continuity)
+    campaign.run.state.json     (optional; first-class campaign execution state)
+    campaign.plan.json          (optional; canonical mission plan for deterministic resume)
+    campaign.progress.jsonl     (optional; append-only mission/flow checkpoint ledger)
+    campaign.report.json        (optional; first-class campaign aggregate report)
+    mission.prompts.json        (optional; deterministic prompt materialization artifact)
   runs/<runId>/
     run.json
     suite.json                  (optional snapshot)
@@ -100,6 +122,12 @@ If you’re changing artifact shapes or schema versions:
 - `internal/schema/`
 - `SCHEMAS.md`
 - `internal/contract/contract.go` + contract snapshot test
+
+If you’re changing first-class campaign orchestration:
+- `internal/campaign/`
+- `internal/runners/campaign_adapter.go`
+- `internal/cli/cmd_campaign.go`
+- `SCHEMAS.md` (campaign artifacts) + contract snapshot
 
 If you’re changing trace emission:
 - CLI funnel exec: `internal/funnel/cli_funnel/exec.go`

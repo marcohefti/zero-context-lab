@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -143,6 +144,90 @@ func TestProxy_FailsIfTraceCannotBeWritten(t *testing.T) {
 
 	if err := Proxy(ctx, env, serverArgv, bytes.NewBufferString(reqs), &clientOut, 16*1024); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestProxyWithOptions_MaxToolCallsStopsProxy(t *testing.T) {
+	outDir := t.TempDir()
+	env := trace.Env{
+		RunID:     "20260215-180012Z-09c5a6",
+		SuiteID:   "heftiweb-smoke",
+		MissionID: "latest-blog-title",
+		AttemptID: "001-latest-blog-title-r1",
+		OutDirAbs: outDir,
+	}
+
+	reqs := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"a"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"b"}}}`,
+	}, "\n") + "\n"
+
+	t.Setenv("GO_WANT_MCP_SERVER_HELPER", "1")
+
+	var clientOut bytes.Buffer
+	serverArgv := []string{os.Args[0], "-test.run=TestMCPServerHelper"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := ProxyWithOptions(ctx, env, serverArgv, bytes.NewBufferString(reqs), &clientOut, Options{
+		MaxPreviewBytes: 16 * 1024,
+		MaxToolCalls:    1,
+	})
+	if err == nil {
+		t.Fatalf("expected max-tool-calls error")
+	}
+
+	events := readAllTraceEvents(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	foundLimit := false
+	for _, ev := range events {
+		if ev.Op == "limit" && ev.Result.Code == "ZCL_E_MCP_MAX_TOOL_CALLS" {
+			foundLimit = true
+			break
+		}
+	}
+	if !foundLimit {
+		t.Fatalf("expected limit event in trace, got %+v", events)
+	}
+}
+
+func TestProxyWithOptions_IdleTimeoutStopsProxy(t *testing.T) {
+	outDir := t.TempDir()
+	env := trace.Env{
+		RunID:     "20260215-180012Z-09c5a6",
+		SuiteID:   "heftiweb-smoke",
+		MissionID: "latest-blog-title",
+		AttemptID: "001-latest-blog-title-r1",
+		OutDirAbs: outDir,
+	}
+
+	t.Setenv("GO_WANT_MCP_SERVER_HELPER", "1")
+	serverArgv := []string{os.Args[0], "-test.run=TestMCPServerHelper"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+
+	var clientOut bytes.Buffer
+	err := ProxyWithOptions(ctx, env, serverArgv, pr, &clientOut, Options{
+		MaxPreviewBytes: 16 * 1024,
+		IdleTimeoutMs:   150,
+	})
+	if err == nil {
+		t.Fatalf("expected idle-timeout error")
+	}
+
+	events := readAllTraceEvents(t, filepath.Join(outDir, "tool.calls.jsonl"))
+	foundTimeout := false
+	for _, ev := range events {
+		if ev.Op == "idle-timeout" && ev.Result.Code == "ZCL_E_TIMEOUT" {
+			foundTimeout = true
+			break
+		}
+	}
+	if !foundTimeout {
+		t.Fatalf("expected idle-timeout event in trace, got %+v", events)
 	}
 }
 

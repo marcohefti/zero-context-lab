@@ -3,7 +3,7 @@
 ## Purpose
 ZCL (ZeroContext Lab) is a harness pattern for measuring and improving **agent/operator UX** for any action surface we want to route agents through.
 
-SurfWright is just the first concrete target. ZCL must also support:
+A browser automation CLI may be one concrete target. ZCL must also support:
 - CLI tools
 - MCP servers and clients
 - HTTP APIs / SDKs
@@ -11,7 +11,7 @@ SurfWright is just the first concrete target. ZCL must also support:
 - anything else where we can enforce a single “funnel” and produce deterministic traces
 
 ## ZCL Is A Benchmark (Not The Tool)
-SurfWright's mission is to *be* efficient and resourceful (fast, composable primitives; deterministic JSON; explicit handles; typed failures).
+The evaluated tool's mission may be to *be* efficient and resourceful (fast, composable primitives; deterministic JSON; explicit handles; typed failures).
 
 ZCL's mission is to *measure* that, repeatably, with trace-backed evidence. ZCL is the harness/benchmark layer that:
 - defines missions/suites and success criteria
@@ -49,7 +49,7 @@ How this changes ZCL (concrete implications):
 - Implement retention/GC as a first-class concern (age/size based cleanup, plus “blessed” pinned runs).
 - Prefer "map, not manual": keep `AGENTS.md` as a table of contents that points to deeper docs, rather than a monolithic brain dump.
 - Enforce invariants mechanically: lightweight linters + structural tests should prevent contract drift (artifact layout, schema versions, bounded capture, redaction rules).
-- Prefer SurfWright-style repo validation: a few manually-written scripts with deterministic `PASS/FAIL` output, orchestrated by a single `verify` entrypoint, instead of a pile of ad-hoc commands.
+- Prefer minimal repo validation: a few manually-written scripts with deterministic `PASS/FAIL` output, orchestrated by a single `verify` entrypoint, instead of a pile of ad-hoc commands.
 - Validate boundary data shapes: funnels/adapters should record structured inputs/outputs at the protocol boundary and fail/flag on unknown shapes instead of guessing.
 
 ## Core Terms
@@ -142,7 +142,7 @@ Turn 1: harness preamble (fixed).
 
 Turn 2 (default): unstructured mission prompt + execution.
 - Mission text is a simple sentence like:
-  - “Use SurfWright through ZCL to go to heftiweb.ch and give me the title of the page.”
+  - "Use a browser tool through ZCL to go to heftiweb.ch and give me the title of the page."
 - The agent executes via the funnel and records the final result with `zcl feedback`.
 - The orchestrator reports back primarily from artifacts (`tool.calls.jsonl`, `attempt.report.json`, `feedback.json`), not from the agent’s narrative.
 
@@ -294,12 +294,12 @@ Within the ZCL repo, the intended system of record is:
 - `ARCHITECTURE.md`: the feasible design that implements the concept without overengineering.
 - A short `AGENTS.md` that acts as a map to the docs and the most important commands.
 
-### Validation discipline (SurfWright-style scripts; Go-native)
-ZCL should copy SurfWright's repo validation approach: small, manually-written scripts with deterministic output, wired into one obvious entrypoint.
+### Validation discipline (deterministic scripts; Go-native)
+ZCL should use a deterministic repo validation approach: small, manually-written scripts with deterministic output, wired into one obvious entrypoint.
 
 Principles:
 - One front door: `verify` runs everything required before merge/release.
-- In a Go repo, prefer a single `scripts/verify.sh` that runs tests + validation sequentially (mirrors SurfWright's `pnpm verify` pattern).
+- In a Go repo, prefer a single `scripts/verify.sh` that runs tests + validation sequentially (mirrors a simple `pnpm verify` pattern).
 - Each script checks one invariant and prints minimal output (`<check>: PASS` or `<check>: FAIL <reason>`).
 - Scripts may also emit machine-readable JSON reports under `artifacts/<check>/report.json` (optional), but the default output must stay small.
 - Prefer sequential execution (avoid build races and half-updated artifacts).
@@ -315,17 +315,16 @@ Script addition gate (to prevent scripts from becoming a swamp): add a new scrip
 3. Deterministic output is required for automation.
 4. The script materially reduces token/context cost in repeated agent loops.
 
-### Reference target (example): SurfWright
-This concept was developed while evaluating SurfWright as the first concrete target tool. These are example target constraints (not ZCL requirements):
+### Reference target constraints (example class)
+This concept was developed while evaluating a browser automation CLI as a concrete target tool. These are example target constraints (not ZCL requirements):
 - Stable surface properties: deterministic I/O, composable primitives, JSON-first, explicit handles (`sessionId`/`targetId`), typed failures (`code` + `message`).
-- Runtime contract inspection example: `surfwright --json contract`.
+- Runtime contract inspection example: `tool-cli --json contract`.
 - In-repo ZeroContext workflows that inspired ZCL: `docs/zerocontext-lab.md`, `docs/zerocontext-gap-workflow.md`.
 
 ### Local evidence context (where the initial evidence in this doc came from)
 These paths are included for reproducibility of the early investigation and can be ignored by readers on other machines.
 
-- The initial ZCL concept work happened inside a SurfWright checkout:
-  - `/Users/marcohefti/Sites/surfwright` (shell: `zsh`)
+- The initial ZCL concept work happened in a local tool checkout on this machine (shell: `zsh`).
 - Codex runner session storage (used as secondary evidence):
   - `/Users/marcohefti/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`
 - Codex codebase reference (to implement/verify a runner adapter):
@@ -359,7 +358,7 @@ Suggested minimum fields (conceptual):
   - `ok` (boolean)
   - `result` (string or JSON; canonical outcome recorded by `zcl feedback`)
   - `ids`: `runId`, `suiteId`, `missionId`, `attemptId`, `agentId` (if known)
-  - `subject`: what we evaluated (e.g. `{ tool:"surfwright", funnelType:"cli-wrapper", toolVersion:"0.1.1" }`)
+  - `subject`: what we evaluated (e.g. `{ tool:"tool-cli", funnelType:"cli-wrapper", toolVersion:"0.1.1" }`)
   - `timing`: `startedAt`, `endedAt`, `wallTimeMs`
   - `metrics`: `toolCallsTotal`, `toolCallsByOp`, `failuresTotal`, `failuresByCode`, `timeoutsTotal`, `retriesTotal`, `outBytesTotal`, `errBytesTotal`
   - `artifacts`: relative paths (`tool.calls.jsonl`, logs, optional screenshots/snapshots)
@@ -389,7 +388,7 @@ The parent thread that spawned it (contains `spawn_agent` + `wait` correlation):
 
 How to locate it:
 - By agent id: `rg -n --fixed-strings "019c6060-7d91-7e21-a4b5-17347d2fa54f" /Users/marcohefti/.codex/sessions`
-- By prompt fragment: `rg -n --fixed-strings "Mission: using ONLY the \`surfwright\` CLI" /Users/marcohefti/.codex/sessions`
+- By prompt fragment: `rg -n --fixed-strings "Mission: using ONLY the target tool CLI" /Users/marcohefti/.codex/sessions`
 
 ### 2) The current in-repo ZCL harness is process-based
 The harness is documented and implemented here:
@@ -403,7 +402,7 @@ It writes deterministic run artifacts under:
 - `.zerocontext-lab/runs/<runId>-<label>/...`
 
 Note on current naming vs the generalized concept:
-- The current in-repo harness logs SurfWright tool calls to `commands.jsonl` (SurfWright-specific name).
+- The current in-repo harness logs target-tool calls to `commands.jsonl` (legacy naming).
 - In this generalized concept, we call the tool-call trace `tool.calls.jsonl` to support any funnel/tool type.
 
 This session produced concrete runs in:
@@ -422,7 +421,7 @@ Evidence:
 
 This matters because it shows why ZCL cannot be tightly coupled to one runner or one runner’s flags.
 
-### 4) Tool surface reality (SurfWright mission details)
+### 4) Tool surface reality (example mission details)
 For the mission we ran:
 - `https://heftiweb.ch` links Blog to `https://blog.heftiweb.ch/` (Substack).
 - DOM waits like “wait for `h1`” can be slow/flaky on heavy JS pages.
@@ -432,7 +431,7 @@ Evidence example:
 - `.zerocontext-lab/runs/20260215-075552Z-09c5a6-gpt-5/attempts/001-heftiweb-blog-latest-title-r1/commands.jsonl` shows a failed `target wait ... --for-selector h1` leading to `E_WAIT_TIMEOUT`.
 
 ## The Issue With the Current Concept
-We conflated “ZCL” with “a harness that spawns an OS process and shims PATH for `surfwright`”. That is an implementation detail, not the concept.
+We conflated "ZCL" with "a harness that spawns an OS process and shims PATH for a specific tool binary". That is an implementation detail, not the concept.
 
 Problems with runner-centric ZCL:
 - **Chat sub-agents can’t be truly wrapped** by a process-based harness unless we introduce an explicit funnel they are forced to use.
@@ -539,7 +538,7 @@ Each line in `tool.calls.jsonl` is one action event. Core fields:
 - `v` (schema version)
 - `ts`
 - `runId`, `missionId`, `attemptId`
-- `tool` (e.g. `surfwright`, `mcp:chrome-devtools`, `http`, `sdk:stripe`)
+- `tool` (e.g. `tool-cli`, `mcp:browser-tools`, `http`, `sdk:vendor`)
 - `op` (e.g. `open`, `tools/call`, `GET`, `createCustomer`)
 - `input` (canonicalized representation of the call)
 - `result`:
@@ -558,7 +557,7 @@ Tool-specific details go under `enrichment`, not top-level.
 ZCL supports multiple funnel types.
 
 CLI funnel:
-- Wrapper binary: `zcl run -- surfwright --json ...` or `zcl surfwright --json ...`
+- Wrapper binary: `zcl run -- tool-cli --json ...` or `zcl <tool-alias> --json ...`
 - Or built-in tracing via env/flag (preferred long-term because it’s harder to bypass).
 
 MCP funnel:
@@ -652,7 +651,7 @@ Patterns worth copying into ZCL:
 ## How a Project Would Implement/Use It (Packaging Model)
 
 ### Packaging options
-ZCL is a standalone product; SurfWright (and any other tool) is a consumer of ZCL.
+ZCL is a standalone product; any evaluated tool is a consumer of ZCL.
 
 Recommended distribution shape for ZCL core:
 - **Go single-binary CLI** (`zcl`) published on GitHub Releases with signed checksums.
@@ -709,7 +708,7 @@ External runner mode (CI style):
 ## Where We Stand
 - We have proof that spawned chat sub-agents are persisted and correlatable via agent id:
   - `/Users/marcohefti/.codex/sessions/2026/02/15/rollout-2026-02-15T15-17-42-019c6060-7d91-7e21-a4b5-17347d2fa54f.jsonl`
-- We have proof the current in-repo harness produces deterministic artifacts for SurfWright when running an OS-spawned runner:
+- We have proof the current in-repo harness produces deterministic artifacts for a browser automation tool when running an OS-spawned runner:
   - `.zerocontext-lab/runs/...`
 - We have evidence that runner coupling is brittle (Codex CLI flag mismatch), reinforcing runner-agnostic design.
 

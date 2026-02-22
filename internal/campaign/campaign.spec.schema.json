@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zcl.dev/schema/campaign.spec.v1.json",
+  "title": "ZCL Campaign Spec v1",
+  "type": "object",
+  "required": ["campaignId", "flows"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "campaignId": { "type": "string", "minLength": 1 },
+    "outRoot": { "type": "string" },
+    "totalMissions": { "type": "integer", "minimum": 0 },
+    "canaryMissions": { "type": "integer", "minimum": 0 },
+    "failFast": { "type": "boolean" },
+    "missionSource": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["all", "mission_id", "index", "range"] },
+            "missionIds": { "type": "array", "items": { "type": "string" } },
+            "indexes": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+            "range": {
+              "type": "object",
+              "properties": {
+                "start": { "type": "integer", "minimum": 0 },
+                "end": { "type": "integer", "minimum": 0 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "pairGate": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "stopOnFirstMissionFailure": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "semantic": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "rulesPath": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "cleanup": {
+      "type": "object",
+      "properties": {
+        "preMission": { "type": "array", "items": { "type": "string" } },
+        "postMission": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "timeouts": {
+      "type": "object",
+      "properties": {
+        "campaignGlobalTimeoutMs": { "type": "integer", "minimum": 0 },
+        "defaultAttemptTimeoutMs": { "type": "integer", "minimum": 0 },
+        "cleanupHookTimeoutMs": { "type": "integer", "minimum": 0 },
+        "timeoutStart": { "type": "string", "enum": ["attempt_start", "first_tool_call"] }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "reportPath": { "type": "string" },
+        "publishCheck": { "type": "string" },
+        "progressJsonl": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "invalidRunPolicy": {
+      "type": "object",
+      "properties": {
+        "statuses": { "type": "array", "items": { "type": "string" } },
+        "publishRequiresValid": { "type": "boolean" },
+        "forceFlag": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "flows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["flowId", "suiteFile", "runner"],
+        "properties": {
+          "flowId": { "type": "string", "minLength": 1 },
+          "suiteFile": { "type": "string", "minLength": 1 },
+          "runner": {
+            "type": "object",
+            "required": ["command"],
+            "properties": {
+              "type": { "type": "string", "enum": ["process_cmd", "codex_exec", "codex_subagent", "claude_subagent"] },
+              "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "shims": { "type": "array", "items": { "type": "string" } },
+              "sessionIsolation": { "type": "string", "enum": ["auto", "process", "native"] },
+              "feedbackPolicy": { "type": "string", "enum": ["strict", "auto_fail"] },
+              "mode": { "type": "string", "enum": ["discovery", "ci"] },
+              "timeoutMs": { "type": "integer", "minimum": 0 },
+              "timeoutStart": { "type": "string", "enum": ["attempt_start", "first_tool_call"] },
+              "strict": { "type": "boolean" },
+              "strictExpect": { "type": "boolean" },
+              "mcp": {
+                "type": "object",
+                "properties": {
+                  "maxToolCalls": { "type": "integer", "minimum": 0 },
+                  "idleTimeoutMs": { "type": "integer", "minimum": 0 },
+                  "shutdownOnComplete": { "type": "boolean" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "adapterContract": {
+            "type": "object",
+            "properties": {
+              "requiredOutputFields": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "patternProperties": {
+    "^x-": true
+  },
+  "additionalProperties": false
+}

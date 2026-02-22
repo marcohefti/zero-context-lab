@@ -221,6 +221,8 @@ func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, er
 		maxStreak    int64
 		distinct     = map[string]bool{}
 		cmdNames     = map[string]bool{}
+		toolOps      = map[string]bool{}
+		mcpTools     = map[string]bool{}
 		seenNonEmpty bool
 	)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -242,6 +244,9 @@ func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, er
 				timeouts++
 			}
 		}
+		if ev.Op != "" {
+			toolOps[ev.Op] = true
+		}
 
 		sig := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
 		distinct[sig] = true
@@ -262,6 +267,17 @@ func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, er
 			if err := json.Unmarshal(ev.Input, &in); err == nil {
 				if len(in.Argv) > 0 && in.Argv[0] != "" {
 					cmdNames[in.Argv[0]] = true
+				}
+			}
+		} else if ev.Tool == "mcp" && ev.Op == "tools/call" && len(ev.Input) > 0 {
+			var in struct {
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(ev.Input, &in); err == nil {
+				if in.Params.Name != "" {
+					mcpTools[in.Params.Name] = true
 				}
 			}
 		} else if ev.Op == "exec" && ev.Tool != "" && ev.Tool != "cli" && ev.Tool != "http" && ev.Tool != "mcp" {
@@ -290,6 +306,16 @@ func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, er
 		cmdList = append(cmdList, s)
 	}
 	sort.Strings(cmdList)
+	var opList []string
+	for s := range toolOps {
+		opList = append(opList, s)
+	}
+	sort.Strings(opList)
+	var mcpToolList []string
+	for s := range mcpTools {
+		mcpToolList = append(mcpToolList, s)
+	}
+	sort.Strings(mcpToolList)
 
 	return &suite.TraceFacts{
 		ToolCallsTotal:            total,
@@ -298,5 +324,7 @@ func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, er
 		RepeatMaxStreak:           maxStreak,
 		DistinctCommandSignatures: int64(len(distinct)),
 		CommandNamesSeen:          cmdList,
+		ToolOpsSeen:               opList,
+		MCPToolsSeen:              mcpToolList,
 	}, nil
 }

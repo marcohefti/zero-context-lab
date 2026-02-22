@@ -31,6 +31,10 @@ type ExpectsV1 struct {
 	OK     *bool            `json:"ok,omitempty" yaml:"ok,omitempty"`
 	Result *ResultExpectsV1 `json:"result,omitempty" yaml:"result,omitempty"`
 	Trace  *TraceExpectsV1  `json:"trace,omitempty" yaml:"trace,omitempty"`
+	// Semantic expectations evaluate mission-level validity of feedback/trace content.
+	// Unlike ResultExpectsV1 (shape) and TraceExpectsV1 (counts/patterns), semantic rules
+	// can express non-empty/placeholder/boilerplate constraints.
+	Semantic *SemanticExpectsV1 `json:"semantic,omitempty" yaml:"semantic,omitempty"`
 }
 
 type ResultExpectsV1 struct {
@@ -59,6 +63,48 @@ type TraceExpectsV1 struct {
 	MaxRepeatStreak int64 `json:"maxRepeatStreak,omitempty" yaml:"maxRepeatStreak,omitempty"`
 
 	// RequireCommandPrefix requires that at least one CLI exec argv[0] has one of these prefixes.
-	// Example: ["surfwright"] ensures the attempt actually exercised SurfWright.
+	// Example: ["tool-cli"] ensures the attempt actually exercised the intended tool.
 	RequireCommandPrefix []string `json:"requireCommandPrefix,omitempty" yaml:"requireCommandPrefix,omitempty"`
+}
+
+// SemanticExpectsV1 captures mission-level semantic checks for feedback.resultJson + trace.
+// These checks are deterministic and runner-agnostic by design.
+type SemanticExpectsV1 struct {
+	// RequiredJSONPointers are RFC 6901 pointers that must exist in feedback.resultJson.
+	RequiredJSONPointers []string `json:"requiredJsonPointers,omitempty" yaml:"requiredJsonPointers,omitempty"`
+	// NonEmptyJSONPointers are RFC 6901 pointers that must exist and be meaningful
+	// (not null, not empty, not configured placeholder values).
+	NonEmptyJSONPointers []string `json:"nonEmptyJsonPointers,omitempty" yaml:"nonEmptyJsonPointers,omitempty"`
+	// PlaceholderValues are case-insensitive values considered semantically invalid
+	// for NonEmptyJSONPointers checks. Example: ["n/a","unknown","todo"].
+	PlaceholderValues []string `json:"placeholderValues,omitempty" yaml:"placeholderValues,omitempty"`
+
+	// RequireToolOps requires at least one of these trace ops to appear (e.g. tools/call).
+	RequireToolOps []string `json:"requireToolOps,omitempty" yaml:"requireToolOps,omitempty"`
+	// RequireCommandPrefix requires at least one observed CLI command prefix.
+	RequireCommandPrefix []string `json:"requireCommandPrefix,omitempty" yaml:"requireCommandPrefix,omitempty"`
+	// RequireMCPTool requires at least one observed MCP tool name from tools/call.
+	RequireMCPTool []string `json:"requireMCPTool,omitempty" yaml:"requireMCPTool,omitempty"`
+
+	// MinMeaningfulFields enforces a lower bound on meaningful feedback.resultJson fields.
+	// Meaningful fields are non-null, non-empty, and not placeholders.
+	MinMeaningfulFields int64 `json:"minMeaningfulFields,omitempty" yaml:"minMeaningfulFields,omitempty"`
+
+	// SuspiciousBoilerplate enables conservative boilerplate detection.
+	SuspiciousBoilerplate bool `json:"suspiciousBoilerplate,omitempty" yaml:"suspiciousBoilerplate,omitempty"`
+	// BoilerplateMCPTools defines MCP tool names treated as generic boilerplate when
+	// SuspiciousBoilerplate=true. If omitted, defaults are used.
+	BoilerplateMCPTools []string `json:"boilerplateMcpTools,omitempty" yaml:"boilerplateMcpTools,omitempty"`
+	// BoilerplateCommandPrefixes defines CLI command prefixes treated as generic boilerplate
+	// when SuspiciousBoilerplate=true.
+	BoilerplateCommandPrefixes []string `json:"boilerplateCommandPrefixes,omitempty" yaml:"boilerplateCommandPrefixes,omitempty"`
+	// MaxMeaningfulFieldsForBoilerplate sets the upper bound of meaningful fields where
+	// boilerplate traces still count as suspicious. Default is 1 when unset.
+	MaxMeaningfulFieldsForBoilerplate int64 `json:"maxMeaningfulFieldsForBoilerplate,omitempty" yaml:"maxMeaningfulFieldsForBoilerplate,omitempty"`
+
+	// HookCommand runs an external semantic hook command for mission-specific checks.
+	// The command receives attempt context via env vars and may emit JSON to stdout.
+	HookCommand []string `json:"hookCommand,omitempty" yaml:"hookCommand,omitempty"`
+	// HookTimeoutMs limits HookCommand execution time. Default is 10000ms when unset.
+	HookTimeoutMs int64 `json:"hookTimeoutMs,omitempty" yaml:"hookTimeoutMs,omitempty"`
 }

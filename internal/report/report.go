@@ -146,6 +146,14 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 			return schema.AttemptReportJSONV1{}, err
 		}
 	} else if ok && feedbackPresent {
+		var opNames []string
+		for op := range metrics.ToolCallsByOp {
+			if strings.TrimSpace(op) == "" {
+				continue
+			}
+			opNames = append(opNames, op)
+		}
+		sort.Strings(opNames)
 		tf := suite.TraceFacts{
 			ToolCallsTotal:            metrics.ToolCallsTotal,
 			FailuresTotal:             metrics.FailuresTotal,
@@ -153,6 +161,8 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 			RepeatMaxStreak:           0,
 			DistinctCommandSignatures: 0,
 			CommandNamesSeen:          nil,
+			ToolOpsSeen:               opNames,
+			MCPToolsSeen:              nil,
 		}
 		if signals != nil {
 			tf.RepeatMaxStreak = signals.RepeatMaxStreak

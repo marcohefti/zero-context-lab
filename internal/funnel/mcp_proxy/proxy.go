@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/redact"
@@ -60,14 +61,43 @@ func (c *boundedCapture) snapshot() (preview string, total int64, truncated bool
 }
 
 func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, maxPreviewBytes int) error {
+	return ProxyWithOptions(ctx, env, serverArgv, clientIn, clientOut, Options{
+		MaxPreviewBytes: maxPreviewBytes,
+	})
+}
+
+type Options struct {
+	MaxPreviewBytes    int
+	MaxToolCalls       int64
+	IdleTimeoutMs      int64
+	ShutdownOnComplete bool
+}
+
+func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, opts Options) error {
 	if len(serverArgv) == 0 {
 		return fmt.Errorf("missing server command argv")
 	}
+	maxPreviewBytes := opts.MaxPreviewBytes
 	if maxPreviewBytes < 0 {
 		maxPreviewBytes = 0
 	}
+	if opts.MaxToolCalls < 0 {
+		opts.MaxToolCalls = 0
+	}
+	if opts.IdleTimeoutMs < 0 {
+		opts.IdleTimeoutMs = 0
+	}
 
-	cmd := exec.CommandContext(ctx, serverArgv[0], serverArgv[1:]...)
+	proxyCtx := ctx
+	cancelProxy := func() {}
+	if opts.MaxToolCalls > 0 || opts.IdleTimeoutMs > 0 || opts.ShutdownOnComplete {
+		var cancel context.CancelFunc
+		proxyCtx, cancel = context.WithCancel(ctx)
+		cancelProxy = cancel
+	}
+	defer cancelProxy()
+
+	cmd := exec.CommandContext(proxyCtx, serverArgv[0], serverArgv[1:]...)
 	serverIn, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -97,7 +127,42 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	var (
 		mu       sync.Mutex
 		inflight = map[string]reqInfo{}
+
+		activityMu    sync.Mutex
+		lastActivity  = time.Now()
+		idleTimedOut  atomic.Bool
+		maxCallsHit   atomic.Bool
+		forcedStop    atomic.Bool
+		toolCallsSeen int64
 	)
+	touch := func() {
+		activityMu.Lock()
+		lastActivity = time.Now()
+		activityMu.Unlock()
+	}
+	touch()
+
+	if opts.IdleTimeoutMs > 0 {
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-proxyCtx.Done():
+					return
+				case <-ticker.C:
+					activityMu.Lock()
+					idle := time.Since(lastActivity)
+					activityMu.Unlock()
+					if idle >= time.Duration(opts.IdleTimeoutMs)*time.Millisecond {
+						idleTimedOut.Store(true)
+						cancelProxy()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	redServerArgv, argvApplied := redactStrings(serverArgv)
@@ -148,6 +213,7 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			if len(line) == 0 {
 				continue
 			}
+			touch()
 			// Forward as-is.
 			_, _ = serverIn.Write(append(line, '\n'))
 
@@ -182,6 +248,7 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 		if len(line) == 0 {
 			continue
 		}
+		touch()
 		_, _ = clientOut.Write(append(line, '\n'))
 
 		var msg map[string]any
@@ -313,19 +380,51 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 		if err := store.AppendJSONL(tracePath, ev); err != nil {
 			return err
 		}
+
+		if op == "tools/call" && opts.MaxToolCalls > 0 {
+			toolCallsSeen++
+			if toolCallsSeen > opts.MaxToolCalls {
+				maxCallsHit.Store(true)
+				cancelProxy()
+				break
+			}
+		}
+
+		if opts.ShutdownOnComplete {
+			mu.Lock()
+			inflightCount := len(inflight)
+			mu.Unlock()
+			if inflightCount == 0 {
+				select {
+				case <-reqDone:
+					forcedStop.Store(true)
+					cancelProxy()
+				default:
+				}
+			}
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return err
 	}
 
-	<-reqDone
+	select {
+	case <-reqDone:
+	case <-proxyCtx.Done():
+	}
 	waitErr := cmd.Wait()
 	waited = true
 
 	// If the attempt has a deadline and we hit it, record a timeout event.
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if errors.Is(proxyCtx.Err(), context.DeadlineExceeded) || idleTimedOut.Load() {
 		in := map[string]any{"argv": redServerArgv}
 		inRaw, _ := store.CanonicalJSON(in)
+		op := "timeout"
+		msg := "attempt deadline exceeded"
+		if idleTimedOut.Load() {
+			op = "idle-timeout"
+			msg = "mcp idle timeout exceeded"
+		}
 		ev := schema.TraceEventV1{
 			V:         schema.TraceSchemaV1,
 			TS:        time.Now().UTC().Format(time.RFC3339Nano),
@@ -335,7 +434,7 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			AttemptID: env.AttemptID,
 			AgentID:   env.AgentID,
 			Tool:      "mcp",
-			Op:        "timeout",
+			Op:        op,
 			Input:     inRaw,
 			Result: schema.TraceResultV1{
 				OK:         false,
@@ -347,6 +446,43 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 				ErrBytes: 0,
 			},
 			RedactionsApplied: argvApplied,
+			Warnings: []schema.TraceWarningV1{{
+				Code:    "ZCL_W_MCP_TIMEOUT",
+				Message: msg,
+			}},
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+	if maxCallsHit.Load() {
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "limit",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         false,
+				Code:       "ZCL_E_MCP_MAX_TOOL_CALLS",
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+			Warnings: []schema.TraceWarningV1{{
+				Code:    "ZCL_W_MCP_MAX_TOOL_CALLS",
+				Message: "mcp max tool calls reached",
+			}},
 		}
 		if err := store.AppendJSONL(tracePath, ev); err != nil {
 			return err
@@ -394,6 +530,9 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 	}
 
 	if waitErr != nil {
+		if forcedStop.Load() && !maxCallsHit.Load() && !idleTimedOut.Load() {
+			return nil
+		}
 		var ee *exec.ExitError
 		if errors.As(waitErr, &ee) {
 			// Treat server exit as OK if it exited cleanly after EOF; keep error for non-zero.
@@ -403,6 +542,12 @@ func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.
 			return nil
 		}
 		return waitErr
+	}
+	if maxCallsHit.Load() {
+		return fmt.Errorf("ZCL_E_MCP_MAX_TOOL_CALLS: reached configured max tool calls")
+	}
+	if idleTimedOut.Load() {
+		return fmt.Errorf("ZCL_E_TIMEOUT: mcp idle timeout exceeded")
 	}
 	return nil
 }

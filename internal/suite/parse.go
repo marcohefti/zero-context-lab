@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/marcohefti/zero-context-lab/internal/blind"
@@ -131,10 +132,104 @@ func ParseFile(path string) (ParsedSuite, error) {
 				tr.RequireCommandPrefix = out
 			}
 		}
+		if m.Expects != nil && m.Expects.Semantic != nil {
+			sem := m.Expects.Semantic
+			req, err := normalizeJSONPointers(sem.RequiredJSONPointers)
+			if err != nil {
+				return ParsedSuite{}, fmt.Errorf("mission %q: %w", m.MissionID, err)
+			}
+			sem.RequiredJSONPointers = req
+			nonEmpty, err := normalizeJSONPointers(sem.NonEmptyJSONPointers)
+			if err != nil {
+				return ParsedSuite{}, fmt.Errorf("mission %q: %w", m.MissionID, err)
+			}
+			sem.NonEmptyJSONPointers = nonEmpty
+			sem.PlaceholderValues = normalizeStringList(sem.PlaceholderValues, true)
+			sem.RequireToolOps = normalizeStringList(sem.RequireToolOps, false)
+			sem.RequireCommandPrefix = normalizeStringList(sem.RequireCommandPrefix, false)
+			sem.RequireMCPTool = normalizeStringList(sem.RequireMCPTool, false)
+			sem.BoilerplateMCPTools = normalizeStringList(sem.BoilerplateMCPTools, false)
+			sem.BoilerplateCommandPrefixes = normalizeStringList(sem.BoilerplateCommandPrefixes, false)
+			sem.HookCommand = normalizeCommand(sem.HookCommand)
+			if sem.MinMeaningfulFields < 0 {
+				return ParsedSuite{}, fmt.Errorf("mission %q: expects.semantic.minMeaningfulFields must be >= 0", m.MissionID)
+			}
+			if sem.MaxMeaningfulFieldsForBoilerplate < 0 {
+				return ParsedSuite{}, fmt.Errorf("mission %q: expects.semantic.maxMeaningfulFieldsForBoilerplate must be >= 0", m.MissionID)
+			}
+			if sem.HookTimeoutMs < 0 {
+				return ParsedSuite{}, fmt.Errorf("mission %q: expects.semantic.hookTimeoutMs must be >= 0", m.MissionID)
+			}
+		}
 	}
 
 	// Canonical representation is the parsed/normalized struct.
 	return ParsedSuite{Suite: s, CanonicalJSON: s}, nil
+}
+
+func normalizeJSONPointers(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, ptr := range in {
+		ptr = strings.TrimSpace(ptr)
+		if ptr == "" {
+			return nil, fmt.Errorf("expects.semantic pointers cannot contain empty entries")
+		}
+		if !IsValidJSONPointer(ptr) {
+			return nil, fmt.Errorf("invalid expects.semantic pointer %q", ptr)
+		}
+		if seen[ptr] {
+			continue
+		}
+		seen[ptr] = true
+		out = append(out, ptr)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func normalizeStringList(in []string, lower bool) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if lower {
+			v = strings.ToLower(v)
+		}
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeCommand(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, part := range in {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func FindMission(s SuiteFileV1, missionID string) *MissionV1 {

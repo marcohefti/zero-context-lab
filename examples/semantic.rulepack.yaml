@@ -1,0 +1,44 @@
+schemaVersion: 1
+
+default:
+  # Enforce non-null mission proof fields.
+  nonEmptyJsonPointers:
+    - /proof/title
+    - /proof/url
+  placeholderValues:
+    - n/a
+    - na
+    - unknown
+    - todo
+    - null
+    - none
+    - tbd
+    - placeholder
+  minMeaningfulFields: 2
+
+  # Catch generic scaffold traces with low-semantic outputs.
+  suspiciousBoilerplate: true
+  boilerplateMcpTools:
+    - new_page
+    - take_snapshot
+    - list_pages
+  boilerplateCommandPrefixes:
+    - echo
+    - cat
+  maxMeaningfulFieldsForBoilerplate: 1
+
+  # Require a concrete action signal in trace.
+  requireToolOps:
+    - tools/call
+    - exec
+
+missions:
+  # Example mission-specific hardening.
+  flow-b-docs-commands-extract:
+    requiredJsonPointers:
+      - /proof/commands
+    nonEmptyJsonPointers:
+      - /proof/commands
+    minMeaningfulFields: 2
+    requireMCPTool:
+      - docs_search

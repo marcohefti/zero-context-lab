@@ -125,6 +125,7 @@ type suiteRunCampaignProfile struct {
 	FeedbackPolicy string   `json:"feedbackPolicy"`
 	Parallel       int      `json:"parallel"`
 	Total          int      `json:"total"`
+	MissionOffset  int      `json:"missionOffset,omitempty"`
 	FailFast       bool     `json:"failFast"`
 	Blind          bool     `json:"blind"`
 	Shims          []string `json:"shims,omitempty"`
@@ -157,6 +158,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	sessionIsolation := fs.String("session-isolation", "auto", "session isolation strategy: auto|process|native")
 	parallel := fs.Int("parallel", 1, "max concurrent attempt waves (just-in-time allocation)")
 	total := fs.Int("total", 0, "total attempts to run (default = number of suite missions)")
+	missionOffset := fs.Int("mission-offset", 0, "0-based mission offset before scheduling (for campaign resume/canary windows)")
 	campaignID := fs.String("campaign-id", "", "campaign id for cross-run continuity (default suiteId)")
 	campaignStatePath := fs.String("campaign-state", "", "path to campaign.state.json (default <outRoot>/campaigns/<campaignId>/campaign.state.json)")
 	progressJSONL := fs.String("progress-jsonl", "", "write structured progress events to path or '-' (stderr)")
@@ -169,7 +171,7 @@ func (r Runner) runSuiteRun(args []string) int {
 	runnerIORaw := fs.Bool("runner-io-raw", false, "capture raw runner stdout/stderr (unsafe; may contain secrets)")
 
 	var shims stringListFlag
-	fs.Var(&shims, "shim", "install attempt-local shims for tool binaries (repeatable; e.g. --shim surfwright)")
+	fs.Var(&shims, "shim", "install attempt-local shims for tool binaries (repeatable; e.g. --shim tool-cli)")
 
 	jsonOut := fs.Bool("json", false, "print JSON output (required)")
 	help := fs.Bool("help", false, "show help")
@@ -190,6 +192,9 @@ func (r Runner) runSuiteRun(args []string) int {
 	}
 	if *total < 0 {
 		return r.failUsage("suite run: --total must be >= 0")
+	}
+	if *missionOffset < 0 {
+		return r.failUsage("suite run: --mission-offset must be >= 0")
 	}
 	if !schema.IsValidTimeoutStartV1(strings.TrimSpace(*timeoutStart)) {
 		return r.failUsage("suite run: invalid --timeout-start (expected attempt_start|first_tool_call)")
@@ -296,7 +301,8 @@ func (r Runner) runSuiteRun(args []string) int {
 
 	missions := make([]suite.MissionV1, 0, resolvedTotal)
 	for i := 0; i < resolvedTotal; i++ {
-		missions = append(missions, parsed.Suite.Missions[i%len(parsed.Suite.Missions)])
+		idx := (*missionOffset + i) % len(parsed.Suite.Missions)
+		missions = append(missions, parsed.Suite.Missions[idx])
 	}
 
 	summary := suiteRunSummary{
@@ -320,6 +326,7 @@ func (r Runner) runSuiteRun(args []string) int {
 		FeedbackPolicy: resolvedFeedbackPolicy,
 		Parallel:       *parallel,
 		Total:          resolvedTotal,
+		MissionOffset:  *missionOffset,
 		FailFast:       *failFast,
 		Blind:          resolvedBlind,
 		Shims:          dedupeSortedStrings([]string(shims)),
@@ -646,10 +653,6 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			env["ZCL_SHIM_BIN_DIR"] = shimBinDir
 			// Prepend to PATH so the agent can type the tool name and still be traced.
 			env["PATH"] = shimBinDir + ":" + os.Getenv("PATH")
-			// SurfWright state isolation (attempt-local) by default when shimming.
-			if _, ok := env["SURFWRIGHT_STATE_DIR"]; !ok && strings.Contains(" "+strings.Join(opts.Shims, " ")+" ", " surfwright ") && env["ZCL_TMP_DIR"] != "" {
-				env["SURFWRIGHT_STATE_DIR"] = filepath.Join(env["ZCL_TMP_DIR"], "surfwright-state")
-			}
 		}
 	}
 
@@ -865,7 +868,7 @@ func promptContamination(attemptDir string, terms []string) []string {
 
 func printSuiteRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
+  zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms a,b,c] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--fail-fast] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]
 
 Notes:
   - Requires --json (stdout is reserved for JSON; runner stdout/stderr is streamed to stderr).
@@ -875,7 +878,8 @@ Notes:
   - --progress-jsonl writes machine-readable run progress events for dashboard automation.
   - campaign.state.json is updated after run completion for cross-run continuity.
   - Attempts are allocated just-in-time, in waves (--parallel), to avoid pre-expiry before execution.
-  - When --shim is used, ZCL prepends an attempt-local bin dir to PATH so the agent can type the tool name (e.g. surfwright) and still have invocations traced via zcl run.
+  - --mission-offset shifts scheduling start point (useful for campaign resume/canary slices).
+  - When --shim is used, ZCL prepends an attempt-local bin dir to PATH so the agent can type the tool name directly and still have invocations traced via zcl run.
   - In blind mode, contaminated prompts are rejected and recorded with typed evidence.
   - After the runner exits, ZCL finishes each attempt (report + validate + expect).
 `)
@@ -1188,22 +1192,8 @@ case "$PATH" in
 esac
 export PATH
 
-%s
-
 exec "$ZCL" run --capture -- "%s" "$@"
-`, shimSurfwrightStateBlock(bin), bin)
-}
-
-func shimSurfwrightStateBlock(bin string) string {
-	if bin != "surfwright" {
-		return ""
-	}
-	return `# SurfWright state isolation (attempt-local) when not already set.
-if [ -n "${ZCL_TMP_DIR:-}" ] && [ -z "${SURFWRIGHT_STATE_DIR:-}" ]; then
-  SURFWRIGHT_STATE_DIR="${ZCL_TMP_DIR}/surfwright-state"
-  export SURFWRIGHT_STATE_DIR
-fi
-`
+`, bin)
 }
 
 func writeRunnerCommandFile(attemptDir string, runnerCmd string, runnerArgs []string, env map[string]string, shimBinDir string) error {
@@ -1231,9 +1221,6 @@ func writeRunnerCommandFile(attemptDir string, runnerCmd string, runnerArgs []st
 	fmt.Fprintf(f, "ZCL_ATTEMPT_ID=%s\n", env["ZCL_ATTEMPT_ID"])
 	fmt.Fprintf(f, "ZCL_OUT_DIR=%s\n", env["ZCL_OUT_DIR"])
 	fmt.Fprintf(f, "ZCL_TMP_DIR=%s\n", env["ZCL_TMP_DIR"])
-	if v := env["SURFWRIGHT_STATE_DIR"]; v != "" {
-		fmt.Fprintf(f, "SURFWRIGHT_STATE_DIR=%s\n", v)
-	}
 	if v := env["PATH"]; v != "" {
 		fmt.Fprintf(f, "PATH=%s\n", v)
 	}

@@ -85,7 +85,7 @@ Minimal v1 suite shape (example):
           "maxToolCallsTotal": 30,
           "maxFailuresTotal": 5,
           "maxRepeatStreak": 10,
-          "requireCommandPrefix": ["surfwright"]
+          "requireCommandPrefix": ["tool-cli"]
         }
       }
     }
@@ -345,7 +345,7 @@ Required fields (metrics fields may be zero when computed from partial evidence 
     "distinctCommandSignatures": 3,
     "failureRateBps": 7000,
     "noProgressSuspected": true,
-    "commandNamesSeen": ["surfwright", "curl"]
+    "commandNamesSeen": ["tool-cli", "curl"]
   },
   "metrics": {
     "toolCallsTotal": 3,
@@ -449,6 +449,162 @@ Example:
       "failFast": true,
       "passed": 2,
       "failed": 0
+    }
+  ]
+}
+```
+
+## `campaign.run.state.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.run.state.json`
+
+Written by first-class campaign commands (`zcl campaign run|canary|resume`) and consumed by:
+- `zcl campaign status`
+- `zcl campaign report`
+- `zcl campaign publish-check`
+
+Execution model note:
+- Campaign orchestration is mission-by-mission.
+- Progress is checkpointed via `campaign.plan.json` + `campaign.progress.jsonl`.
+- Resume logic uses progress checkpoints (not inferred counters) to avoid duplicate attempts.
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "runId": "20260222-120000Z-a1b2c3",
+  "specPath": "/abs/path/campaign.yaml",
+  "outRoot": ".zcl",
+  "status": "valid",
+  "reasonCodes": [],
+  "startedAt": "2026-02-22T12:00:00.123456789Z",
+  "updatedAt": "2026-02-22T12:01:00.123456789Z",
+  "completedAt": "2026-02-22T12:01:00.123456789Z",
+  "totalMissions": 3,
+  "missionOffset": 0,
+  "missionsCompleted": 3,
+  "canary": false,
+  "resumedFromRunId": "20260222-110000Z-ffeedd",
+  "flowRuns": [],
+  "missionGates": []
+}
+```
+
+Status values:
+- `running`
+- `valid`
+- `invalid`
+- `aborted`
+
+## `campaign.plan.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.plan.json`
+
+Written by:
+- `zcl campaign run`
+- `zcl campaign canary`
+- `zcl campaign resume`
+
+Purpose:
+- Canonical mission plan for deterministic campaign resume/reconciliation.
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "specPath": "/abs/path/campaign.yaml",
+  "missions": [
+    { "missionIndex": 0, "missionId": "m1" },
+    { "missionIndex": 1, "missionId": "m2" }
+  ],
+  "createdAt": "2026-02-22T12:00:00.123456789Z",
+  "updatedAt": "2026-02-22T12:00:00.123456789Z"
+}
+```
+
+## `campaign.progress.jsonl` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.progress.jsonl`
+
+Written by:
+- first-class campaign mission engine (`run|canary|resume`)
+
+Purpose:
+- append-only mission/flow checkpoint ledger for deterministic resume and duplicate-attempt guards.
+
+Event example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "runId": "20260222-120000Z-a1b2c3",
+  "missionIndex": 0,
+  "missionId": "m1",
+  "flowId": "flow-a",
+  "attemptId": "001-m1-r1",
+  "attemptDir": ".zcl/runs/20260222-120000Z-abcd01/attempts/001-m1-r1",
+  "status": "valid",
+  "reasonCodes": [],
+  "idempotencyKey": "cmp-main:flow-a:0",
+  "createdAt": "2026-02-22T12:00:10.123456789Z"
+}
+```
+
+## `campaign.report.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/campaign.report.json`
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "runId": "20260222-120000Z-a1b2c3",
+  "status": "valid",
+  "reasonCodes": [],
+  "outRoot": ".zcl",
+  "totalMissions": 3,
+  "missionsCompleted": 3,
+  "gatesPassed": 3,
+  "gatesFailed": 0,
+  "flows": [],
+  "updatedAt": "2026-02-22T12:01:00.123456789Z"
+}
+```
+
+`zcl campaign report` refuses export when `status` is `invalid|aborted` unless `--force` is set.
+
+## `mission.prompts.json` (optional; v1)
+
+Path: `.zcl/campaigns/<campaignId>/mission.prompts.json`
+
+Written by:
+- `zcl mission prompts build --spec ... --template ...`
+
+Determinism note:
+- Prompt IDs are stable hash IDs.
+- Output ordering follows canonical flow+mission selection order.
+- `createdAt` is deterministic from spec/template/prompt content (not wall-clock time).
+
+Example:
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "cmp-main",
+  "specPath": "/abs/path/campaign.yaml",
+  "templatePath": "/abs/path/template.md",
+  "outPath": ".zcl/campaigns/cmp-main/mission.prompts.json",
+  "createdAt": "2026-02-22T12:05:00.123456789Z",
+  "prompts": [
+    {
+      "id": "flow-a-m1-001",
+      "flowId": "flow-a",
+      "suiteId": "suite-a",
+      "missionId": "m1",
+      "missionIndex": 0,
+      "prompt": "..."
     }
   ]
 }

@@ -87,6 +87,88 @@
       ]
     },
     {
+      "id": "campaign.run.state.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.run.state.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "runId",
+        "status",
+        "updatedAt",
+        "totalMissions",
+        "missionsCompleted"
+      ]
+    },
+    {
+      "id": "campaign.plan.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.plan.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "specPath",
+        "missions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    {
+      "id": "campaign.progress.jsonl",
+      "kind": "jsonl",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.progress.jsonl",
+      "requiredFields": []
+    },
+    {
+      "id": "campaign.report.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/campaign.report.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "runId",
+        "status",
+        "totalMissions",
+        "missionsCompleted",
+        "gatesPassed",
+        "gatesFailed"
+      ]
+    },
+    {
+      "id": "mission.prompts.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/campaigns/<campaignId>/mission.prompts.json",
+      "requiredFields": [
+        "schemaVersion",
+        "campaignId",
+        "specPath",
+        "templatePath",
+        "outPath",
+        "createdAt",
+        "prompts"
+      ]
+    },
+    {
       "id": "attempt.json",
       "kind": "json",
       "schemaVersions": [
@@ -307,8 +389,8 @@
     },
     {
       "id": "validate",
-      "usage": "zcl validate [--strict] [--json] <attemptDir|runDir>",
-      "summary": "Validate artifact integrity (schemas, ids, bounds, containment) with typed error codes."
+      "usage": "zcl validate [--strict] [--semantic] [--semantic-rules <path>] [--json] <attemptDir|runDir>",
+      "summary": "Validate artifact integrity and optional semantic mission validity with typed error codes."
     },
     {
       "id": "doctor",
@@ -332,8 +414,8 @@
     },
     {
       "id": "mcp proxy",
-      "usage": "zcl mcp proxy -- <server-cmd> [args...]",
-      "summary": "MCP stdio proxy funnel (records initialize/tools/list/tools/call)."
+      "usage": "zcl mcp proxy [--max-tool-calls N] [--idle-timeout-ms N] [--shutdown-on-complete] -- <server-cmd> [args...]",
+      "summary": "MCP stdio proxy funnel with lifecycle controls (records initialize/tools/list/tools/call)."
     },
     {
       "id": "http proxy",
@@ -392,8 +474,48 @@
     },
     {
       "id": "suite run",
-      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
+      "usage": "zcl suite run --file <suite.(yaml|yml|json)> [--run-id <runId>] [--mode discovery|ci] [--timeout-ms N] [--timeout-start attempt_start|first_tool_call] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] [--blind on|off] [--blind-terms <csv>] [--session-isolation auto|process|native] [--parallel N] [--total M] [--mission-offset N] [--out-root .zcl] [--strict] [--strict-expect] [--shim <bin>] [--capture-runner-io] --json -- <runner-cmd> [args...]",
       "summary": "Run a suite with capability-aware isolation, optional campaign continuity/progress stream, and deterministic finish/validate/expect per attempt."
+    },
+    {
+      "id": "campaign run",
+      "usage": "zcl campaign run --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--missions N] [--mission-offset N] [--json]",
+      "summary": "Run a first-class campaign across configured flows with pair/semantic/timeout/artifact gates."
+    },
+    {
+      "id": "campaign lint",
+      "usage": "zcl campaign lint --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--json]",
+      "summary": "Validate campaign spec shape (strict unknown-field rejection) and print resolved mission selection/runtime defaults."
+    },
+    {
+      "id": "campaign canary",
+      "usage": "zcl campaign canary --spec <campaign.(yaml|yml|json)> [--out-root .zcl] [--missions N] [--mission-offset N] [--json]",
+      "summary": "Run a bounded canary mission window before full campaign execution."
+    },
+    {
+      "id": "campaign resume",
+      "usage": "zcl campaign resume --campaign-id <id> [--out-root .zcl] [--json]",
+      "summary": "Resume remaining missions from campaign.run.state.json continuity."
+    },
+    {
+      "id": "campaign status",
+      "usage": "zcl campaign status --campaign-id <id> [--out-root .zcl] [--json]",
+      "summary": "Read the latest first-class campaign execution state."
+    },
+    {
+      "id": "campaign report",
+      "usage": "zcl campaign report --campaign-id <id> [--out-root .zcl] [--format json,md] [--force] [--json]",
+      "summary": "Export campaign aggregate reports with invalid-run publication guards."
+    },
+    {
+      "id": "campaign publish-check",
+      "usage": "zcl campaign publish-check --campaign-id <id> [--out-root .zcl] [--force] [--json]",
+      "summary": "Refuse publish-ready benchmark output unless campaign status is valid (unless forced)."
+    },
+    {
+      "id": "mission prompts build",
+      "usage": "zcl mission prompts build --spec <campaign.(yaml|yml|json)> --template <template.txt|md> [--out <path>] [--out-root .zcl] [--json]",
+      "summary": "Deterministically materialize mission prompts from campaign spec + template."
     },
     {
       "id": "replay",
@@ -483,6 +605,11 @@
       "retryable": true
     },
     {
+      "code": "ZCL_E_MCP_MAX_TOOL_CALLS",
+      "summary": "MCP proxy stopped after configured max tool calls.",
+      "retryable": true
+    },
+    {
       "code": "ZCL_E_CONTAMINATED_PROMPT",
       "summary": "Blind mode rejected a prompt containing harness terms.",
       "retryable": false
@@ -501,6 +628,26 @@
       "code": "ZCL_E_EXPECTATION_FAILED",
       "summary": "Suite expectations did not match feedback.json.",
       "retryable": false
+    },
+    {
+      "code": "ZCL_E_SEMANTIC",
+      "summary": "Semantic mission validation failed.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_GATE_FAILED",
+      "summary": "Campaign pair gate failed for one or more missions.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED",
+      "summary": "Campaign first mission canary/pair gate failed.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_LOCK_TIMEOUT",
+      "summary": "Campaign lock acquisition failed (another campaign run/resume likely owns the lock).",
+      "retryable": true
     }
   ]
 }
