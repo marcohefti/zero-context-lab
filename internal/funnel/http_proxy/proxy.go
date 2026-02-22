@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +112,7 @@ func Start(ctx context.Context, env trace.Env, listenAddr string, upstream strin
 	}
 
 	var handled int64
+	var stopOnce sync.Once
 
 	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -175,7 +177,13 @@ func Start(ctx context.Context, env trace.Env, listenAddr string, upstream strin
 		writeHTTPEvent(start, env, tracePath, r.Method, reqURL.String(), reqCounter.total, total, prevRed, trunc || capped, &resp.StatusCode, maxPreviewBytes, nil, append(urlApplied.Names, prevApplied.Names...))
 
 		if maxRequests > 0 && int(idx) >= maxRequests {
-			go func() { _ = srv.Close() }()
+			stopOnce.Do(func() {
+				go func() {
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = srv.Shutdown(shutdownCtx)
+				}()
+			})
 		}
 	})
 
