@@ -323,8 +323,20 @@ func boundedToolInputJSON(v any, maxBytes int) (json.RawMessage, bool, []schema.
 		return b3, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
 	}
 
-	// Unknown input type: omit it rather than violating bounds.
-	return nil, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input omitted to fit bounds"}}, nil
+	// Unknown input type: emit a bounded placeholder object so strict validators
+	// still see a present, valid JSON input field.
+	placeholder := map[string]any{
+		"truncated": true,
+		"reason":    "input_truncated_to_fit_bounds",
+	}
+	bp, err := json.Marshal(placeholder)
+	if err != nil {
+		return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
+	}
+	if len(bp) > maxBytes {
+		return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
+	}
+	return bp, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
 }
 
 func capStringBytes(s string, maxBytes int) (string, bool) {

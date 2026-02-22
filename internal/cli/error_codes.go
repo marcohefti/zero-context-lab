@@ -3,20 +3,21 @@ package cli
 import "github.com/marcohefti/zero-context-lab/internal/codes"
 
 const (
-	codeUsage                   = codes.Usage
-	codeIO                      = codes.IO
-	codeMissingArtifact         = codes.MissingArtifact
-	codeTimeout                 = codes.Timeout
-	codeSpawn                   = codes.Spawn
-	codeToolFailed              = codes.ToolFailed
-	codeContaminatedPrompt      = codes.ContaminatedPrompt
-	codeVersionFloor            = codes.VersionFloor
-	codeRuntimeStreamDisconnect = codes.RuntimeStreamDisconnect
-	codeRuntimeCrash            = codes.RuntimeCrash
-	codeRuntimeProtocol         = codes.RuntimeProtocol
-	codeRuntimeAuth             = codes.RuntimeAuth
-	codeRuntimeRateLimit        = codes.RuntimeRateLimit
-	codeRuntimeListenerFailure  = codes.RuntimeListenerFailure
+	codeUsage                      = codes.Usage
+	codeIO                         = codes.IO
+	codeMissingArtifact            = codes.MissingArtifact
+	codeTimeout                    = codes.Timeout
+	codeSpawn                      = codes.Spawn
+	codeToolFailed                 = codes.ToolFailed
+	codeContaminatedPrompt         = codes.ContaminatedPrompt
+	codeVersionFloor               = codes.VersionFloor
+	codeRuntimeStreamDisconnect    = codes.RuntimeStreamDisconnect
+	codeRuntimeCrash               = codes.RuntimeCrash
+	codeRuntimeProtocol            = codes.RuntimeProtocol
+	codeRuntimeAuth                = codes.RuntimeAuth
+	codeRuntimeRateLimit           = codes.RuntimeRateLimit
+	codeRuntimeListenerFailure     = codes.RuntimeListenerFailure
+	codeRuntimeFinalAnswerNotFound = codes.RuntimeFinalAnswerNotFound
 
 	codeMissionResultMissing      = codes.MissionResultMissing
 	codeMissionResultInvalid      = codes.MissionResultInvalid

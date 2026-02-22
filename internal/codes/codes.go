@@ -74,6 +74,7 @@ const (
 	RuntimeRateLimit             = "ZCL_E_RUNTIME_RATE_LIMIT"
 	RuntimeListenerFailure       = "ZCL_E_RUNTIME_LISTENER_FAILURE"
 	RuntimeCrash                 = "ZCL_E_RUNTIME_CRASH"
+	RuntimeFinalAnswerNotFound   = "ZCL_E_RUNTIME_FINAL_ANSWER_NOT_FOUND"
 )
 
 func CampaignFlowExit(exitCode int) string {

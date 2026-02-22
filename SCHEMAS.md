@@ -180,6 +180,11 @@ Optional fields:
 - `blindTerms` (normalized harness terms used by contamination checks)
 - `scratchDir` (path relative to `<outRoot>/` for per-attempt scratch space under `<outRoot>/tmp/<runId>/<attemptId>`)
 - `attemptEnvSh` (ready-to-source env handoff file path relative to attemptDir; default `attempt.env.sh`)
+- `nativeResult` (native codex result extraction provenance):
+  - `resultSource` (`task_complete_last_agent_message|phase_final_answer|delta_fallback`; empty when no final-answer source exists)
+  - `phaseAware` (whether `phase` metadata was observed on assistant messages)
+  - `commentaryMessagesObserved` (count of `phase=commentary` assistant messages observed)
+  - `reasoningItemsObserved` (count of reasoning items observed)
 
 ## `prompt.txt` (snapshot; optional)
 
@@ -225,7 +230,7 @@ Each line is one v1 `TraceEvent`:
 
 Notes:
 - `suiteId` and `agentId` are optional.
-- `input`/`enrichment` are stored as bounded/canonicalized JSON when possible; inputs may be truncated with a warning when they exceed bounds.
+- `input`/`enrichment` are stored as bounded/canonicalized JSON when possible; oversized inputs are truncated or replaced with a bounded placeholder object plus `ZCL_W_INPUT_TRUNCATED`.
 - `result.code` is a typed ZCL code when ZCL can classify; otherwise a normalized tool error code.
 - `redactionsApplied` lists the redaction rules applied to this event (informational only; scoring must not depend on it).
 - Native runtime events use `tool: "native"` and carry runtime/session/thread/turn correlation fields in `input`.
@@ -399,6 +404,7 @@ Optional fields:
 - `timedOutBeforeFirstToolCall`: timeout expired before first traced action could run.
 - `tokenEstimates`: lightweight token estimates from `runner.metrics.json` (fallback: trace byte heuristic).
 - `expectations`: when `suite.json` exists and contains `expects` for the mission, `zcl report` evaluates them against `feedback.json`.
+- `nativeResult`: mirrors `attempt.json.nativeResult` provenance for native codex result extraction.
 
 ## `oracle.verdict.json` (optional; v1)
 

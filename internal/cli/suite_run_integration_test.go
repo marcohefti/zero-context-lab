@@ -541,6 +541,325 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if ref.RuntimeID != "codex_app_server" || strings.TrimSpace(ref.SessionID) == "" {
 		t.Fatalf("unexpected runner ref: %+v", ref)
 	}
+
+	fbRaw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(fbRaw, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if fb.Result != "native-result" {
+		t.Fatalf("expected native delta fallback result, got %q", fb.Result)
+	}
+
+	attemptRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var attempt struct {
+		NativeResult struct {
+			ResultSource               string `json:"resultSource"`
+			PhaseAware                 bool   `json:"phaseAware"`
+			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
+			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+		} `json:"nativeResult"`
+	}
+	if err := json.Unmarshal(attemptRaw, &attempt); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	if attempt.NativeResult.ResultSource != "delta_fallback" || attempt.NativeResult.PhaseAware {
+		t.Fatalf("unexpected attempt nativeResult: %+v", attempt.NativeResult)
+	}
+
+	repRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json"))
+	if err != nil {
+		t.Fatalf("read attempt.report.json: %v", err)
+	}
+	var rep struct {
+		NativeResult struct {
+			ResultSource               string `json:"resultSource"`
+			PhaseAware                 bool   `json:"phaseAware"`
+			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
+			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+		} `json:"nativeResult"`
+	}
+	if err := json.Unmarshal(repRaw, &rep); err != nil {
+		t.Fatalf("unmarshal attempt.report.json: %v", err)
+	}
+	if rep.NativeResult.ResultSource != "delta_fallback" || rep.NativeResult.PhaseAware {
+		t.Fatalf("unexpected report nativeResult: %+v", rep.NativeResult)
+	}
+}
+
+func TestSuiteRun_NativeFinalResultPrefersTaskCompleteLastAgentMessage(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-task-complete-preferred",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "task_complete_preferred")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	attemptDir := sum.Attempts[0].AttemptDir
+
+	fbRaw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(fbRaw, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if fb.Result != "TASK_COMPLETE_FINAL" {
+		t.Fatalf("expected task_complete result, got %q", fb.Result)
+	}
+
+	attemptRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var attempt struct {
+		NativeResult struct {
+			ResultSource               string `json:"resultSource"`
+			PhaseAware                 bool   `json:"phaseAware"`
+			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
+			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+		} `json:"nativeResult"`
+	}
+	if err := json.Unmarshal(attemptRaw, &attempt); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	if attempt.NativeResult.ResultSource != "task_complete_last_agent_message" {
+		t.Fatalf("unexpected result source: %+v", attempt.NativeResult)
+	}
+	if !attempt.NativeResult.PhaseAware || attempt.NativeResult.CommentaryMessagesObserved < 1 || attempt.NativeResult.ReasoningItemsObserved < 1 {
+		t.Fatalf("unexpected provenance counters: %+v", attempt.NativeResult)
+	}
+}
+
+func TestSuiteRun_NativeFinalResultUsesPhaseFinalAnswer(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-phase-final-answer",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "phase_final_answer")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	attemptDir := sum.Attempts[0].AttemptDir
+
+	fbRaw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(fbRaw, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if fb.Result != "PHASE_FINAL_ANSWER" {
+		t.Fatalf("expected phase-final result, got %q", fb.Result)
+	}
+
+	attemptRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var attempt struct {
+		NativeResult struct {
+			ResultSource               string `json:"resultSource"`
+			PhaseAware                 bool   `json:"phaseAware"`
+			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
+			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+		} `json:"nativeResult"`
+	}
+	if err := json.Unmarshal(attemptRaw, &attempt); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	if attempt.NativeResult.ResultSource != "phase_final_answer" || !attempt.NativeResult.PhaseAware {
+		t.Fatalf("unexpected result source/provenance: %+v", attempt.NativeResult)
+	}
+	if attempt.NativeResult.CommentaryMessagesObserved < 1 || attempt.NativeResult.ReasoningItemsObserved < 1 {
+		t.Fatalf("expected commentary/reasoning counters, got %+v", attempt.NativeResult)
+	}
+}
+
+func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailure(t *testing.T) {
+	outRoot := t.TempDir()
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-final-answer-missing",
+  "defaults": { "mode": "ci", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt" }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "phase_without_final_answer")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.Run([]string{
+		"suite", "run",
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	})
+	if code == 1 {
+		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, stderr.String())
+	}
+
+	var sum struct {
+		Attempts []struct {
+			AttemptDir       string `json:"attemptDir"`
+			RunnerErrorCode  string `json:"runnerErrorCode"`
+			AutoFeedbackCode string `json:"autoFeedbackCode"`
+			AutoFeedback     bool   `json:"autoFeedback"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v (stdout=%q)", err, stdout.String())
+	}
+	if len(sum.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
+	}
+	a := sum.Attempts[0]
+	if a.RunnerErrorCode != codeRuntimeFinalAnswerNotFound || a.AutoFeedbackCode != codeRuntimeFinalAnswerNotFound || !a.AutoFeedback {
+		t.Fatalf("expected missing-final-answer typed failure, got %+v", a)
+	}
+
+	fbRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback.json: %v", err)
+	}
+	var fb struct {
+		OK         bool `json:"ok"`
+		ResultJSON struct {
+			Kind string `json:"kind"`
+			Code string `json:"code"`
+		} `json:"resultJson"`
+	}
+	if err := json.Unmarshal(fbRaw, &fb); err != nil {
+		t.Fatalf("unmarshal feedback.json: %v", err)
+	}
+	if fb.OK || fb.ResultJSON.Kind != "runtime_failure" || fb.ResultJSON.Code != codeRuntimeFinalAnswerNotFound {
+		t.Fatalf("unexpected failure feedback payload: %+v", fb)
+	}
+
+	attemptRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.json"))
+	if err != nil {
+		t.Fatalf("read attempt.json: %v", err)
+	}
+	var attempt struct {
+		NativeResult struct {
+			ResultSource               string `json:"resultSource"`
+			PhaseAware                 bool   `json:"phaseAware"`
+			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
+			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+		} `json:"nativeResult"`
+	}
+	if err := json.Unmarshal(attemptRaw, &attempt); err != nil {
+		t.Fatalf("unmarshal attempt.json: %v", err)
+	}
+	if attempt.NativeResult.ResultSource != "" || !attempt.NativeResult.PhaseAware || attempt.NativeResult.CommentaryMessagesObserved < 1 {
+		t.Fatalf("unexpected provenance for missing final answer: %+v", attempt.NativeResult)
+	}
 }
 
 func TestSuiteRun_NativeModelForwardedToThreadStart(t *testing.T) {
@@ -2043,6 +2362,126 @@ func runSuiteNativeHelper(mode string) {
 				os.Exit(137)
 			case "disconnect_during_turn":
 				return
+			case "task_complete_preferred":
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":    "msg-commentary-1",
+							"type":  "AgentMessage",
+							"phase": "commentary",
+							"content": []any{
+								map[string]any{"type": "Text", "text": "Commentary message"},
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":   "reasoning-1",
+							"type": "Reasoning",
+							"summary_text": []any{
+								"reasoning summary",
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "ignored-delta"}})
+				writeJSON(map[string]any{
+					"method": "codex/event/task_complete",
+					"params": map[string]any{
+						"msg": map[string]any{
+							"type":               "task_complete",
+							"turn_id":            turnID,
+							"last_agent_message": "TASK_COMPLETE_FINAL",
+						},
+					},
+				})
+				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
+			case "phase_final_answer":
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":    "msg-commentary-2",
+							"type":  "AgentMessage",
+							"phase": "commentary",
+							"content": []any{
+								map[string]any{"type": "Text", "text": "Working..."},
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":    "msg-final-2",
+							"type":  "AgentMessage",
+							"phase": "final_answer",
+							"content": []any{
+								map[string]any{"type": "Text", "text": "PHASE_FINAL_ANSWER"},
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":   "reasoning-2",
+							"type": "Reasoning",
+							"summary_text": []any{
+								"reasoning summary",
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "ignored-delta"}})
+				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
+			case "phase_without_final_answer":
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":    "msg-commentary-3",
+							"type":  "AgentMessage",
+							"phase": "commentary",
+							"content": []any{
+								map[string]any{"type": "Text", "text": "Still working..."},
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{
+					"method": "item/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+						"item": map[string]any{
+							"id":   "reasoning-3",
+							"type": "Reasoning",
+							"summary_text": []any{
+								"reasoning summary",
+							},
+						},
+					},
+				})
+				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
 			default:
 				if slow {
 					time.Sleep(900 * time.Millisecond)

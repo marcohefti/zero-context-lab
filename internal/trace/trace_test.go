@@ -75,3 +75,31 @@ func TestAppendCLIRunEvent_BoundsInputAndSignalsTruncation(t *testing.T) {
 		t.Fatalf("expected ZCL_W_INPUT_TRUNCATED warning, got: %+v", ev.Warnings)
 	}
 }
+
+func TestBoundedToolInputJSON_UnknownOversizedUsesPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	huge := map[string]any{
+		"payload": strings.Repeat("x", schema.ToolInputMaxBytesV1*3),
+	}
+	got, truncated, warnings, err := boundedToolInputJSON(huge, schema.ToolInputMaxBytesV1)
+	if err != nil {
+		t.Fatalf("boundedToolInputJSON: %v", err)
+	}
+	if !truncated {
+		t.Fatalf("expected truncated=true")
+	}
+	if len(got) == 0 || !json.Valid(got) {
+		t.Fatalf("expected non-empty valid json placeholder input, got=%q", string(got))
+	}
+	containsWarning := false
+	for _, w := range warnings {
+		if w.Code == "ZCL_W_INPUT_TRUNCATED" {
+			containsWarning = true
+			break
+		}
+	}
+	if !containsWarning {
+		t.Fatalf("expected ZCL_W_INPUT_TRUNCATED warning, got=%+v", warnings)
+	}
+}

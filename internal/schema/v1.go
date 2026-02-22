@@ -48,6 +48,8 @@ type AttemptJSONV1 struct {
 	ScratchDir string `json:"scratchDir,omitempty"`
 	// AttemptEnvSH is a ready-to-source shell env file path relative to attemptDir.
 	AttemptEnvSH string `json:"attemptEnvSh,omitempty"`
+	// NativeResult captures native codex_app_server final-answer extraction provenance.
+	NativeResult *NativeResultProvenanceV1 `json:"nativeResult,omitempty"`
 }
 
 // FeedbackJSONV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/feedback.json
@@ -92,6 +94,8 @@ type AttemptReportJSONV1 struct {
 
 	Classification string   `json:"classification,omitempty"`
 	DecisionTags   []string `json:"decisionTags,omitempty"`
+	// NativeResult mirrors attempt-native result extraction provenance.
+	NativeResult *NativeResultProvenanceV1 `json:"nativeResult,omitempty"`
 
 	Metrics AttemptMetricsV1 `json:"metrics"`
 	// FailureCodeHistogram mirrors metrics.failuresByCode at the top-level
@@ -144,6 +148,18 @@ type AttemptSignalsV1 struct {
 	NoProgressSuspected bool `json:"noProgressSuspected,omitempty"`
 	// CommandNamesSeen is a best-effort list of distinct command names (argv[0]) observed for CLI exec calls.
 	CommandNamesSeen []string `json:"commandNamesSeen,omitempty"`
+}
+
+type NativeResultProvenanceV1 struct {
+	// ResultSource identifies how native codex_app_server extracted the final answer.
+	// Allowed values: task_complete_last_agent_message|phase_final_answer|delta_fallback
+	ResultSource string `json:"resultSource"`
+	// PhaseAware indicates whether phase metadata (commentary/final_answer) was observed.
+	PhaseAware bool `json:"phaseAware"`
+	// CommentaryMessagesObserved counts assistant messages marked with phase=commentary.
+	CommentaryMessagesObserved int64 `json:"commentaryMessagesObserved"`
+	// ReasoningItemsObserved counts reasoning items observed during the turn.
+	ReasoningItemsObserved int64 `json:"reasoningItemsObserved"`
 }
 
 type ExpectationResultV1 struct {

@@ -233,6 +233,9 @@ func validateAttempt(attemptDir string, strict bool) Result {
 			return finalize(res)
 		}
 	}
+	if !validateNativeResultProvenance(attempt.NativeResult, strict, &res, attemptJSONPath, "attempt.json") {
+		return finalize(res)
+	}
 	if strict {
 		if ids.SanitizeComponent(attempt.SuiteID) != attempt.SuiteID {
 			addErr(&res, "ZCL_E_CONTRACT", "attempt suiteId is not canonicalized", attemptJSONPath)
@@ -367,9 +370,41 @@ func validateAttempt(attemptDir string, strict bool) Result {
 			}
 			addWarn(&res, "ZCL_W_CONTRACT", "attempt.report.json artifacts missing pointers", reportPath)
 		}
+		if !validateNativeResultProvenance(rep.NativeResult, enforce, &res, reportPath, "attempt.report.json") {
+			return finalize(res)
+		}
 	}
 
 	return finalize(res)
+}
+
+func validateNativeResultProvenance(v *schema.NativeResultProvenanceV1, strict bool, res *Result, path string, label string) bool {
+	if v == nil {
+		return true
+	}
+	if src := strings.TrimSpace(v.ResultSource); src != "" && !schema.IsValidNativeResultSourceV1(src) {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", label+" nativeResult.resultSource is invalid", path)
+			return false
+		}
+		addWarn(res, "ZCL_W_CONTRACT", label+" nativeResult.resultSource is invalid", path)
+	}
+	if v.CommentaryMessagesObserved < 0 {
+		addErr(res, "ZCL_E_CONTRACT", label+" nativeResult.commentaryMessagesObserved must be >= 0", path)
+		return false
+	}
+	if v.ReasoningItemsObserved < 0 {
+		addErr(res, "ZCL_E_CONTRACT", label+" nativeResult.reasoningItemsObserved must be >= 0", path)
+		return false
+	}
+	if strings.TrimSpace(v.ResultSource) == schema.NativeResultSourcePhaseFinalAnswerV1 && !v.PhaseAware {
+		if strict {
+			addErr(res, "ZCL_E_CONTRACT", label+" nativeResult.phaseAware must be true when resultSource=phase_final_answer", path)
+			return false
+		}
+		addWarn(res, "ZCL_W_CONTRACT", label+" nativeResult.phaseAware should be true when resultSource=phase_final_answer", path)
+	}
+	return true
 }
 
 func validateTrace(path string, attemptDir string, attempt schema.AttemptJSONV1, strict bool, res *Result) {

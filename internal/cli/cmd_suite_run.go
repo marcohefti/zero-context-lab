@@ -1480,23 +1480,20 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		return true
 	}
 
-	var finalResult strings.Builder
+	resultCollector := newNativeResultCollector()
 	completed := false
 	for !completed {
 		select {
 		case ev := <-events:
+			resultCollector.Observe(ev)
+			if nativeEventIsTurnCompleted(ev, turn.TurnID) {
+				emitNativeState(nativeStateTurnCompleted, false, map[string]any{
+					"turnId": turn.TurnID,
+				})
+				completed = true
+				continue
+			}
 			switch ev.Name {
-			case "codex/event/item_agentMessage_delta":
-				if delta := extractNativeEventDelta(ev.Payload); delta != "" {
-					finalResult.WriteString(delta)
-				}
-			case "codex/event/turn_completed":
-				if ev.TurnID == "" || turn.TurnID == "" || ev.TurnID == turn.TurnID {
-					emitNativeState(nativeStateTurnCompleted, false, map[string]any{
-						"turnId": turn.TurnID,
-					})
-					completed = true
-				}
 			case "codex/event/turn_failed":
 				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
 				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
@@ -1559,6 +1556,28 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		})
 		return true
 	}
+	finalResult, resultSource, foundFinalResult := resultCollector.ResolveFinalResult()
+	if err := writeNativeResultProvenance(pm.OutDirAbs, resultCollector.Provenance(resultSource)); err != nil {
+		ar.RunnerErrorCode = codeIO
+		ec := 1
+		ar.RunnerExitCode = &ec
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "attempt_metadata_write_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
+	if ar.RunnerErrorCode == "" && !foundFinalResult {
+		ar.RunnerErrorCode = codeRuntimeFinalAnswerNotFound
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason":                     "final_answer_not_found",
+			"code":                       ar.RunnerErrorCode,
+			"phaseAware":                 resultCollector.PhaseAware(),
+			"commentaryMessagesObserved": resultCollector.CommentaryMessagesObserved(),
+			"reasoningItemsObserved":     resultCollector.ReasoningItemsObserved(),
+		})
+	}
 
 	if ar.RunnerErrorCode == "" {
 		ec := 0
@@ -1573,10 +1592,7 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		return false
 	}
 	if ar.RunnerErrorCode == "" {
-		result := strings.TrimSpace(finalResult.String())
-		if result == "" {
-			result = "NATIVE_TURN_COMPLETED"
-		}
+		result := strings.TrimSpace(finalResult)
 		if err := feedback.Write(now, envTrace, feedback.WriteOpts{OK: true, Result: result}); err != nil {
 			ar.RunnerErrorCode = codeIO
 			ec := 1
@@ -1591,6 +1607,7 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		ar.AutoFeedback = true
 		emitNativeState(nativeStateFinalized, false, map[string]any{
 			"feedbackAuto": true,
+			"resultSource": resultSource,
 			"state":        string(supervisor.State()),
 		})
 		return false
@@ -1764,16 +1781,357 @@ func recordNativeFailureHealth(strategy native.StrategyID, code string) {
 	}
 }
 
+type nativeResultCollector struct {
+	taskCompleteLastAgentMessage string
+	lastPhaseFinalAnswer         string
+	deltaFallback                strings.Builder
+	phaseAware                   bool
+	commentaryByItemID           map[string]bool
+	reasoningByItemID            map[string]bool
+	commentaryWithoutItemID      int64
+	reasoningWithoutItemID       int64
+}
+
+func newNativeResultCollector() *nativeResultCollector {
+	return &nativeResultCollector{
+		commentaryByItemID: map[string]bool{},
+		reasoningByItemID:  map[string]bool{},
+	}
+}
+
+func (c *nativeResultCollector) Observe(ev native.Event) {
+	if c == nil {
+		return
+	}
+	payload := nativePayloadObject(ev.Payload)
+	if len(payload) == 0 {
+		return
+	}
+	c.observePayload(ev.Name, payload)
+	if msg := nativeFirstMap(payload, "msg"); len(msg) > 0 {
+		c.observePayload(ev.Name, msg)
+	}
+}
+
+func (c *nativeResultCollector) observePayload(eventName string, payload map[string]any) {
+	if len(payload) == 0 {
+		return
+	}
+	if nativePayloadIsTaskComplete(eventName, payload) {
+		if last := nativeFirstString(payload, "last_agent_message", "lastAgentMessage"); last != "" {
+			c.taskCompleteLastAgentMessage = last
+		}
+	}
+	if delta := extractNativeEventDeltaFromPayload(payload); delta != "" && nativePayloadIsAssistantDelta(eventName, payload) {
+		c.deltaFallback.WriteString(delta)
+	}
+
+	text, phase, itemID, ok := nativeAssistantMessageFromPayload(eventName, payload)
+	if ok {
+		if phase != "" {
+			c.phaseAware = true
+		}
+		switch phase {
+		case "commentary":
+			if itemID != "" {
+				if !c.commentaryByItemID[itemID] {
+					c.commentaryByItemID[itemID] = true
+				}
+			} else {
+				c.commentaryWithoutItemID++
+			}
+		case "final_answer":
+			if strings.TrimSpace(text) != "" {
+				c.lastPhaseFinalAnswer = strings.TrimSpace(text)
+			}
+		}
+	}
+	if itemID, ok := nativeReasoningItemFromPayload(payload); ok {
+		if itemID != "" {
+			if !c.reasoningByItemID[itemID] {
+				c.reasoningByItemID[itemID] = true
+			}
+		} else {
+			c.reasoningWithoutItemID++
+		}
+	}
+}
+
+func (c *nativeResultCollector) ResolveFinalResult() (result string, source string, ok bool) {
+	if c == nil {
+		return "", "", false
+	}
+	if last := strings.TrimSpace(c.taskCompleteLastAgentMessage); last != "" {
+		return last, schema.NativeResultSourceTaskCompleteLastAgentMessageV1, true
+	}
+	if msg := strings.TrimSpace(c.lastPhaseFinalAnswer); msg != "" {
+		return msg, schema.NativeResultSourcePhaseFinalAnswerV1, true
+	}
+	if !c.phaseAware {
+		if delta := strings.TrimSpace(c.deltaFallback.String()); delta != "" {
+			return delta, schema.NativeResultSourceDeltaFallbackV1, true
+		}
+	}
+	return "", "", false
+}
+
+func (c *nativeResultCollector) ProvenanceResultSourceOrEmpty(source string) string {
+	source = strings.TrimSpace(source)
+	if schema.IsValidNativeResultSourceV1(source) {
+		return source
+	}
+	return ""
+}
+
+func (c *nativeResultCollector) Provenance(source string) *schema.NativeResultProvenanceV1 {
+	if c == nil {
+		return nil
+	}
+	return &schema.NativeResultProvenanceV1{
+		ResultSource:               c.ProvenanceResultSourceOrEmpty(source),
+		PhaseAware:                 c.phaseAware,
+		CommentaryMessagesObserved: c.CommentaryMessagesObserved(),
+		ReasoningItemsObserved:     c.ReasoningItemsObserved(),
+	}
+}
+
+func (c *nativeResultCollector) CommentaryMessagesObserved() int64 {
+	if c == nil {
+		return 0
+	}
+	return int64(len(c.commentaryByItemID)) + c.commentaryWithoutItemID
+}
+
+func (c *nativeResultCollector) ReasoningItemsObserved() int64 {
+	if c == nil {
+		return 0
+	}
+	return int64(len(c.reasoningByItemID)) + c.reasoningWithoutItemID
+}
+
+func (c *nativeResultCollector) PhaseAware() bool {
+	if c == nil {
+		return false
+	}
+	return c.phaseAware
+}
+
 func extractNativeEventDelta(raw json.RawMessage) string {
-	if len(raw) == 0 {
+	payload := nativePayloadObject(raw)
+	if len(payload) == 0 {
 		return ""
+	}
+	if delta := extractNativeEventDeltaFromPayload(payload); delta != "" {
+		return delta
+	}
+	if msg := nativeFirstMap(payload, "msg"); len(msg) > 0 {
+		return extractNativeEventDeltaFromPayload(msg)
+	}
+	return ""
+}
+
+func extractNativeEventDeltaFromPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	delta := nativeFirstString(payload, "delta")
+	return strings.TrimSpace(delta)
+}
+
+func nativeEventIsTurnCompleted(ev native.Event, expectedTurnID string) bool {
+	switch ev.Name {
+	case "codex/event/turn_completed", "codex/event/task_complete", "codex/event/turn_complete":
+		return nativeTurnIDMatches(expectedTurnID, ev.TurnID, nativePayloadTurnID(ev.Payload))
+	}
+	payload := nativePayloadObject(ev.Payload)
+	if nativePayloadIsTaskComplete(ev.Name, payload) {
+		return nativeTurnIDMatches(expectedTurnID, ev.TurnID, nativePayloadTurnID(ev.Payload))
+	}
+	if msg := nativeFirstMap(payload, "msg"); nativePayloadIsTaskComplete(ev.Name, msg) {
+		return nativeTurnIDMatches(expectedTurnID, ev.TurnID, nativeFirstString(msg, "turn_id", "turnId"))
+	}
+	return false
+}
+
+func nativeTurnIDMatches(expected string, candidates ...string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || c == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func nativePayloadTurnID(raw json.RawMessage) string {
+	payload := nativePayloadObject(raw)
+	if len(payload) == 0 {
+		return ""
+	}
+	if turnID := nativeFirstString(payload, "turnId", "turn_id"); turnID != "" {
+		return turnID
+	}
+	if msg := nativeFirstMap(payload, "msg"); len(msg) > 0 {
+		return nativeFirstString(msg, "turnId", "turn_id")
+	}
+	return ""
+}
+
+func nativePayloadObject(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	return payload
+}
+
+func nativePayloadIsTaskComplete(eventName string, payload map[string]any) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	switch strings.TrimSpace(eventName) {
+	case "codex/event/task_complete", "codex/event/turn_complete":
+		return true
+	}
+	typ := strings.ToLower(strings.TrimSpace(nativeFirstString(payload, "type")))
+	return typ == "task_complete" || typ == "turn_complete"
+}
+
+func nativePayloadIsAssistantDelta(eventName string, payload map[string]any) bool {
+	switch strings.TrimSpace(eventName) {
+	case "codex/event/item_agentMessage_delta", "codex/event/agent_message_delta", "codex/event/agent_message_content_delta":
+		return true
+	}
+	typ := strings.ToLower(strings.TrimSpace(nativeFirstString(payload, "type")))
+	return typ == "agent_message_delta" || typ == "agent_message_content_delta"
+}
+
+func nativeAssistantMessageFromPayload(eventName string, payload map[string]any) (text string, phase string, itemID string, ok bool) {
+	if item := nativeFirstMap(payload, "item"); len(item) > 0 {
+		return nativeAssistantMessageFromItem(item)
+	}
+
+	typ := strings.ToLower(strings.TrimSpace(nativeFirstString(payload, "type")))
+	if typ == "agent_message" || strings.TrimSpace(eventName) == "codex/event/agent_message" {
+		msg := strings.TrimSpace(nativeFirstString(payload, "message"))
+		return msg, nativeNormalizePhase(nativeFirstString(payload, "phase")), nativeFirstString(payload, "item_id", "itemId", "id"), msg != ""
+	}
+	return "", "", "", false
+}
+
+func nativeAssistantMessageFromItem(item map[string]any) (text string, phase string, itemID string, ok bool) {
+	typ := strings.ToLower(strings.TrimSpace(nativeFirstString(item, "type")))
+	switch typ {
+	case "agentmessage", "agent_message", "message":
+	default:
+		return "", "", "", false
+	}
+	if typ == "message" {
+		role := strings.ToLower(strings.TrimSpace(nativeFirstString(item, "role")))
+		if role != "" && role != "assistant" {
+			return "", "", "", false
+		}
+	}
+	phase = nativeNormalizePhase(nativeFirstString(item, "phase"))
+	itemID = nativeFirstString(item, "id", "item_id", "itemId")
+	text = nativeExtractAssistantText(item)
+	if strings.TrimSpace(text) == "" && phase == "" {
+		return "", "", "", false
+	}
+	return strings.TrimSpace(text), phase, strings.TrimSpace(itemID), true
+}
+
+func nativeExtractAssistantText(item map[string]any) string {
+	if len(item) == 0 {
 		return ""
 	}
-	delta, _ := payload["delta"].(string)
-	return strings.TrimSpace(delta)
+	if msg := nativeFirstString(item, "message", "text"); msg != "" {
+		return msg
+	}
+	parts, _ := item["content"].([]any)
+	if len(parts) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range parts {
+		switch p := part.(type) {
+		case string:
+			sb.WriteString(p)
+		case map[string]any:
+			sb.WriteString(nativeFirstString(p, "text"))
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func nativeNormalizePhase(phase string) string {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	phase = strings.ReplaceAll(phase, "-", "_")
+	switch phase {
+	case "commentary":
+		return "commentary"
+	case "finalanswer":
+		return "final_answer"
+	default:
+		return phase
+	}
+}
+
+func nativeReasoningItemFromPayload(payload map[string]any) (itemID string, ok bool) {
+	if item := nativeFirstMap(payload, "item"); len(item) > 0 {
+		typ := strings.ToLower(strings.TrimSpace(nativeFirstString(item, "type")))
+		if typ == "reasoning" {
+			return nativeFirstString(item, "id", "item_id", "itemId"), true
+		}
+	}
+	typ := strings.ToLower(strings.TrimSpace(nativeFirstString(payload, "type")))
+	switch typ {
+	case "agent_reasoning", "reasoning":
+		return nativeFirstString(payload, "item_id", "itemId", "id"), true
+	default:
+		return "", false
+	}
+}
+
+func nativeFirstString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := payload[key].(string); ok {
+			v = strings.TrimSpace(v)
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func nativeFirstMap(payload map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if v, ok := payload[key].(map[string]any); ok {
+			return v
+		}
+	}
+	return nil
+}
+
+func writeNativeResultProvenance(attemptDir string, provenance *schema.NativeResultProvenanceV1) error {
+	if strings.TrimSpace(attemptDir) == "" || provenance == nil {
+		return nil
+	}
+	meta, err := attempt.ReadAttempt(attemptDir)
+	if err != nil {
+		return err
+	}
+	cloned := *provenance
+	meta.NativeResult = &cloned
+	return store.WriteJSONAtomic(filepath.Join(attemptDir, "attempt.json"), meta)
 }
 
 func buildNativeRuntimeRegistry() *native.Registry {

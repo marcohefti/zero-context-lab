@@ -196,6 +196,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		ResultJSON:                  fb.ResultJSON,
 		Classification:              fb.Classification,
 		DecisionTags:                decisionTags,
+		NativeResult:                cloneNativeResultProvenance(attempt.NativeResult),
 		Metrics:                     metrics,
 		FailureCodeHistogram:        failureCodeHistogram,
 		TimedOutBeforeFirstToolCall: timedOutBeforeFirstToolCall,
@@ -349,6 +350,14 @@ func cloneCountMap(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneNativeResultProvenance(in *schema.NativeResultProvenanceV1) *schema.NativeResultProvenanceV1 {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func deriveDecisionTags(fromFeedback []string, okPtr *bool, metrics schema.AttemptMetricsV1, integrity *schema.AttemptIntegrityV1, timedOutBeforeFirst bool) []string {
