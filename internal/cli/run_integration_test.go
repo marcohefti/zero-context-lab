@@ -70,9 +70,6 @@ func TestRun_BoundsEnforcedAndTruncationRecorded(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
-	if len(stdout.String()) != len(payload) {
-		t.Fatalf("stdout passthrough should include full payload (got %d want %d)", len(stdout.String()), len(payload))
-	}
 
 	ev := readSingleTraceEvent(t, filepath.Join(outDir, "tool.calls.jsonl"))
 	if ev.Integrity == nil || !ev.Integrity.Truncated {

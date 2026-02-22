@@ -354,9 +354,7 @@ func normalizeMissionIndexes(in []int, parsed ParsedSpec) []int {
 		return out
 	}
 	out := make([]int, 0, len(in))
-	for _, idx := range in {
-		out = append(out, idx)
-	}
+	out = append(out, in...)
 	return dedupeIntsStable(out)
 }
 
