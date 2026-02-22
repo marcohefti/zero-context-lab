@@ -1,0 +1,61 @@
+# Recommended native Codex campaign profile:
+# - codex_app_server runner (no shell adapter script)
+# - ordered runtime strategy fallback chain
+# - mission_only prompt mode with 3-turn result-channel finalization
+schemaVersion: 1
+campaignId: native-codex-advanced
+outRoot: .zcl
+promptMode: mission_only
+
+missionSource:
+  path: ./missions
+  selection:
+    mode: range
+    range:
+      start: 0
+      end: 3
+
+execution:
+  flowMode: parallel
+
+pairGate:
+  enabled: true
+  stopOnFirstMissionFailure: true
+  traceProfile: mcp_required
+
+semantic:
+  enabled: true
+  rulesPath: ./semantic.rulepack.yaml
+
+timeouts:
+  campaignGlobalTimeoutMs: 1800000
+  defaultAttemptTimeoutMs: 180000
+  cleanupHookTimeoutMs: 10000
+  timeoutStart: first_tool_call
+
+output:
+  progressJsonl: .zcl/campaigns/native-codex-advanced/campaign.progress.jsonl
+
+flows:
+  - flowId: codex-native-primary
+    runner:
+      type: codex_app_server
+      sessionIsolation: native
+      runtimeStrategies: ["codex_app_server", "provider_stub"]
+      feedbackPolicy: strict
+      mode: discovery
+      freshAgentPerAttempt: true
+      toolDriver:
+        kind: mcp_proxy
+      finalization:
+        mode: auto_from_result_json
+        minResultTurn: 3
+        resultChannel:
+          kind: file_json
+          path: mission.result.json
+      mcp:
+        maxToolCalls: 80
+        idleTimeoutMs: 45000
+        shutdownOnComplete: true
+      env:
+        ZCL_MIN_VERSION: "0.0.0-dev"

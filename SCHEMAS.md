@@ -116,6 +116,8 @@ Example:
   "sessionIsolationRequested": "process",
   "sessionIsolation": "process_runner",
   "hostNativeSpawnCapable": false,
+  "runtimeStrategyChain": ["codex_app_server"],
+  "runtimeStrategySelected": "",
   "feedbackPolicy": "auto_fail",
   "campaignId": "heftiweb-smoke",
   "campaignStatePath": ".zcl/campaigns/heftiweb-smoke/campaign.state.json",
@@ -142,6 +144,8 @@ Example:
 ```
 
 Notes:
+- `runtimeStrategyChain` is the ordered fallback chain considered for native mode.
+- `runtimeStrategySelected` is set when native mode selects a strategy.
 - `campaignProfile.finalization` records attempt finalization policy (`strict|auto_fail|auto_from_result_json`).
 - `campaignProfile.resultChannel` records mission result channel (`none|file_json|stdout_json`).
 - `campaignProfile.resultMinTurn` records minimum mission result payload turn accepted for auto finalization.
@@ -222,6 +226,8 @@ Notes:
 - `input`/`enrichment` are stored as bounded/canonicalized JSON when possible; inputs may be truncated with a warning when they exceed bounds.
 - `result.code` is a typed ZCL code when ZCL can classify; otherwise a normalized tool error code.
 - `redactionsApplied` lists the redaction rules applied to this event (informational only; scoring must not depend on it).
+- Native runtime events use `tool: "native"` and carry runtime/session/thread/turn correlation fields in `input`.
+- Native stream failures/crashes mark `integrity.truncated=true` and surface typed `ZCL_E_RUNTIME_*` codes.
 
 ## `feedback.json` (v1)
 
@@ -452,8 +458,9 @@ Core enforced fields:
 - `timeouts` (`campaignGlobalTimeoutMs`, `defaultAttemptTimeoutMs`, `cleanupHookTimeoutMs`, `timeoutStart`)
 - `invalidRunPolicy` (`statuses`, `publishRequiresValid`, `forceFlag`)
 - `flows[].runner`:
-  - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent`
-  - `command`, `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
+  - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent|codex_app_server`
+  - `command` (required except `codex_app_server`), `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
+  - `runtimeStrategies`: ordered strategy fallback chain for native execution (for example `["codex_app_server","provider_stub"]`)
   - `toolDriver.kind`: `shell|cli_funnel|mcp_proxy|http_proxy`
   - `finalization.mode`: `strict|auto_fail|auto_from_result_json`
   - `finalization.minResultTurn`: integer >= 1 (supports non-finalizable intermediate turns)
@@ -466,7 +473,7 @@ Mission-only guardrails:
 - `flows[].runner.finalization.minResultTurn` can enforce 3-turn workflows by requiring mission result payload field `"turn"` to be >= configured value.
 
 Contract discoverability:
-- `zcl contract --json` includes `campaignSchema` with campaign field paths, enums, defaults, trace profiles, and policy error codes.
+- `zcl contract --json` includes `campaignSchema` (campaign fields) and `runtimeSchema` (strategy IDs, capabilities, health metrics, defaults).
 
 ## `campaign.state.json` (optional; v1)
 
@@ -723,12 +730,16 @@ Example:
 ```json
 {
   "schemaVersion": 1,
-  "runner": "codex",
+  "runner": "codex_app_server",
   "runId": "20260215-180012Z-09c5a6",
   "suiteId": "heftiweb-smoke",
   "missionId": "latest-blog-title",
   "attemptId": "001-latest-blog-title-r1",
   "agentId": "optional-runner-agent-id",
+  "runtimeId": "codex_app_server",
+  "sessionId": "pid:92314",
+  "threadId": "thr_abc123",
+  "transport": "stdio",
   "rolloutPath": "/path/to/rollout.jsonl"
 }
 ```

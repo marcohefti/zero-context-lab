@@ -10,6 +10,8 @@ specs=(
   "examples/campaign.no-context.codex-exec.yaml"
   "examples/campaign.no-context.codex-subagent.yaml"
   "examples/campaign.no-context.claude-subagent.yaml"
+  "examples/campaign.native.codex.minimal.yaml"
+  "examples/campaign.native.codex.advanced.yaml"
 )
 
 for spec in "${specs[@]}"; do

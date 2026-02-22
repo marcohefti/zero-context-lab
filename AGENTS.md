@@ -23,16 +23,21 @@ Canonical operator templates:
 - `examples/campaign.no-context.codex-exec.yaml`
 - `examples/campaign.no-context.codex-subagent.yaml`
 - `examples/campaign.no-context.claude-subagent.yaml`
+- `examples/campaign.native.codex.minimal.yaml`
+- `examples/campaign.native.codex.advanced.yaml`
 - `examples/semantic.rulepack.yaml`
+- `docs/migration/shell-adapter-to-native-codex.md`
 - `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
-- `zcl contract --json` now includes `campaignSchema` for promptMode/toolDriver/finalization field discovery.
+- `zcl contract --json` now includes `campaignSchema` + `runtimeSchema` for promptMode/toolDriver/finalization/runtime field discovery.
 
 Campaign capability status (operator truth source):
 - `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks (`beforeMission/afterMission/onFailure`), campaign lock, traceability profiles, campaign summary outputs (`campaign.summary.json`, `RESULTS.md`).
+- `implemented+enforced`: native runtime strategy architecture (`internal/native`) with ordered fallback chains, capability gates, typed runtime errors, and provider onboarding stub (`provider_stub`).
+- `implemented+enforced`: Codex native runtime adapter (`runner.type=codex_app_server`) for suite/campaign orchestration without per-flow shell adapter scripts.
 - `implemented+enforced`: minimal campaign mode (`missionSource.path` + flows without `suiteFile`) for mission-pack ingestion.
 - `implemented+enforced`: mission-only campaign mode (`promptMode: mission_only`) with lint/publish-check prompt-leak guardrails.
 - `implemented+enforced`: flow-level driver and finalization contracts (`runner.toolDriver`, `runner.finalization.mode`, `runner.finalization.resultChannel`, `runner.finalization.minResultTurn`), including auto finalization from mission result JSON channels and 3-turn no-context loops.
-- `implemented+partial`: runner adapter types are normalized through suite-run orchestration (native per-runner lifecycle internals still evolving), with conformance coverage for campaign-level parity and hidden session reuse blocked (`freshAgentPerAttempt` defaults/enforced true).
+- `implemented+enforced`: runtime health diagnostics (`zcl doctor` `runtime_health`) and native scheduler controls (`ZCL_NATIVE_MAX_INFLIGHT_PER_STRATEGY`, `ZCL_NATIVE_MIN_START_INTERVAL_MS`) for deterministic backpressure behavior.
 
 ## Non-Negotiables (Keep This Boring)
 
@@ -58,6 +63,7 @@ Campaign capability status (operator truth source):
    - `zcl update status --json` (manual update policy; no auto-update)
    - Set `ZCL_MIN_VERSION=<semver>` in harness env to fail fast on old installs.
 3. Start attempt (JSON output is required for automation):
+   - Preferred Codex-native orchestration path: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation native --runtime-strategies codex_app_server --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --result-min-turn 3 --campaign-id <campaignId> --progress-jsonl <path|-> --json`
    - Native-spawn path (preferred when host supports it): `zcl attempt start --suite <suiteId> --mission <missionId> --prompt <text> --isolation-model native_spawn --json`
    - Batch-plan a full suite for native host orchestration: `zcl suite plan --file <suite.(yaml|yml|json)> --json`
    - Process-runner fallback: `zcl suite run --file <suite.(yaml|yml|json)> --session-isolation process --feedback-policy auto_fail --finalization-mode auto_from_result_json --result-channel file_json --campaign-id <campaignId> --progress-jsonl <path|-> --json -- <runner-cmd> [args...]`
@@ -149,6 +155,13 @@ If you’re changing first-class campaign orchestration:
 - `internal/cli/cmd_campaign.go`
 - `SCHEMAS.md` (campaign artifacts) + contract snapshot
 
+If you’re changing native runtime strategy behavior/adapters:
+- `internal/native/`
+- `internal/integrations/codex_app_server/`
+- `internal/integrations/provider_stub/`
+- `internal/cli/cmd_suite_run.go`
+- `ARCHITECTURE.md` + `SCHEMAS.md` + contract snapshot
+
 If you’re changing trace emission:
 - CLI funnel exec: `internal/funnel/cli_funnel/exec.go`
 - MCP proxy funnel: `internal/funnel/mcp_proxy/proxy.go`
@@ -186,7 +199,7 @@ What it runs:
 - gofmt check
 - `go test ./...`, `go vet ./...`
 - `scripts/campaign-e2e.sh` (campaign orchestration regression path)
-- `scripts/no-context-examples-check.sh` (campaign no-context examples lint from repo root)
+- `scripts/no-context-examples-check.sh` (campaign no-context + native examples lint from repo root)
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
 - `scripts/docs-contract-check.sh` (docs mention commands + SCHEMAS matches contract artifacts)
 

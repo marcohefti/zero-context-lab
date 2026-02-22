@@ -19,7 +19,7 @@ Read order:
 ## Non-goals (core)
 - ZCL is not an LLM runner, model router, or agent framework.
 - ZCL does not score "thought quality" beyond what boundary evidence can support.
-- No plugin runtime in v1 (compile-time packages, optional enrichments).
+- No dynamic plugin loading in v1. Native runtime strategies are compile-time adapters.
 
 ## High-Level System Model
 - Runner/orchestrator allocates an attempt (or a suite of attempts).
@@ -39,7 +39,7 @@ Orchestrator-facing commands should prefer stable `--json` output.
 - `zcl update status [--cached] [--json]`
 - `zcl contract --json`
 - `zcl suite plan --file <suite.(yaml|yml|json)> --json`
-- `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] --json -- <runner-cmd> [args...]`
+- `zcl suite run --file <suite.(yaml|yml|json)> [--session-isolation auto|process|native] [--runtime-strategies <csv>] [--feedback-policy strict|auto_fail] [--campaign-id <id>] [--campaign-state <path>] [--progress-jsonl <path|->] --json [-- <runner-cmd> [args...]]`
 - `zcl campaign lint --spec <campaign.(yaml|yml|json)> [--json]`
 - `zcl campaign run --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]`
 - `zcl campaign canary --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]`
@@ -80,6 +80,28 @@ Stdout/stderr contract (operator UX + automation):
 ## Contracts (v1)
 Exact shapes are in `SCHEMAS.md` and `zcl contract --json`.
 
+Runtime selection contract:
+- Strategy chain source order: CLI `--runtime-strategies` -> `ZCL_RUNTIME_STRATEGIES` -> merged config default.
+- Strategy resolution is deterministic and ordered.
+- Required capabilities for native suite execution: `supports_thread_start`, `supports_event_stream`, `supports_interrupt`.
+- Resolver returns typed strategy failures (`unsupported`, `unavailable`, `capability_unsupported`) with per-strategy diagnostics.
+
+Native scheduler controls:
+- `ZCL_NATIVE_MAX_INFLIGHT_PER_STRATEGY` (bounded parallel sessions per strategy).
+- `ZCL_NATIVE_MIN_START_INTERVAL_MS` (deterministic minimum spacing between native session starts).
+
+Native failure taxonomy (`ZCL_E_RUNTIME_*`):
+- `..._COMPATIBILITY`, `..._STARTUP`, `..._TRANSPORT`, `..._PROTOCOL`, `..._TIMEOUT`
+- `..._STREAM_DISCONNECT`, `..._CRASH`, `..._AUTH`, `..._RATE_LIMIT`, `..._LISTENER_FAILURE`, `..._ENV_POLICY`
+
+Provider onboarding checklist:
+1. Implement `internal/native.Runtime` + `Session` lifecycle methods.
+2. Declare capabilities truthfully and enforce unsupported operations with typed errors.
+3. Pass conformance tests (`internal/native/conformance`) plus adapter integration tests.
+4. Map provider-native failures to `ZCL_E_RUNTIME_*` taxonomy.
+5. Ensure event stream mapping preserves canonical trace contract and redaction/bounds policies.
+6. Document unsupported API gaps in contract/docs (see `provider_stub` strategy).
+
 Attempt context is provided to runners as env vars:
 - `ZCL_RUN_ID`, `ZCL_SUITE_ID`, `ZCL_MISSION_ID`, `ZCL_ATTEMPT_ID`
 - `ZCL_OUT_DIR` (attempt directory; identity boundary)
@@ -116,3 +138,9 @@ See `docs/architecture.md`, starting with:
 - `docs/architecture/suite-run.md`
 - `docs/architecture/evidence-pipeline.md`
 - `docs/architecture/write-safety.md`
+- `docs/architecture/native-runtime.md`
+
+Recommendation thresholds (Codex native runtime):
+- Reliability: 20-attempt parallel native smoke success rate >= 95%.
+- Throughput: same run completes in <= 30 seconds on CI baseline.
+- Guarded by integration tests in `internal/cli/suite_run_integration_test.go`.
