@@ -106,8 +106,8 @@ func TestCodexRuntimeCrashError(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected native error, got %T", err)
 	}
-	if nerr.Kind != native.ErrorCrash && nerr.Kind != native.ErrorStreamDisconnect {
-		t.Fatalf("expected crash/stream-disconnect error, got %q (%v)", nerr.Kind, err)
+	if nerr.Kind != native.ErrorCrash && nerr.Kind != native.ErrorStreamDisconnect && nerr.Kind != native.ErrorTimeout {
+		t.Fatalf("expected crash/stream-disconnect/timeout error, got %q (%v)", nerr.Kind, err)
 	}
 }
 

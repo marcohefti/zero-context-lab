@@ -1645,7 +1645,7 @@ func firstFailureAny(payload map[string]any, key string) any {
 	if len(payload) == 0 {
 		return nil
 	}
-	v, _ := payload[key]
+	v := payload[key]
 	return v
 }
 
