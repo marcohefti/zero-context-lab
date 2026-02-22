@@ -95,7 +95,7 @@ func (r Runner) runAttemptList(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	filter := attemptIndexFilter{
@@ -115,7 +115,7 @@ func (r Runner) runAttemptList(args []string) int {
 
 	rows, err := collectAttemptRows(filter)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	total := len(rows)
@@ -165,7 +165,7 @@ func (r Runner) runAttemptLatest(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	filter := attemptIndexFilter{
@@ -182,7 +182,7 @@ func (r Runner) runAttemptLatest(args []string) int {
 
 	rows, err := collectAttemptRows(filter)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if len(rows) == 0 {
@@ -225,7 +225,7 @@ func (r Runner) runRunsList(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	statusFilter := normalizeAttemptStatus(*status)
@@ -238,7 +238,7 @@ func (r Runner) runRunsList(args []string) int {
 
 	rows, err := collectRunRows(m.OutRoot, strings.TrimSpace(*suiteID))
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if statusFilter != attemptStatusAny {

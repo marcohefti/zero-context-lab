@@ -52,12 +52,12 @@ func (r Runner) runAttemptEnv(args []string) int {
 	}
 	attemptDirAbs, err := filepath.Abs(attemptDir)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	info, err := os.Stat(attemptDirAbs)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if !info.IsDir() {
@@ -70,7 +70,7 @@ func (r Runner) runAttemptEnv(args []string) int {
 	}
 	env, err := attempt.EnvForAttempt(attemptDirAbs, a)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	envPath, err := attempt.AttemptEnvSHPath(attemptDirAbs, a)
@@ -80,7 +80,7 @@ func (r Runner) runAttemptEnv(args []string) int {
 	if !fileExists(envPath) {
 		// Backfill for older attempts that predate attempt.env.sh.
 		if err := attempt.WriteEnvSh(envPath, env); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 	}

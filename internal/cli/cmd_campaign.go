@@ -72,7 +72,7 @@ func (r Runner) runCampaign(args []string) int {
 	case "publish-check":
 		return r.runCampaignPublishCheck(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown campaign subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown campaign subcommand %q\n", args[0])
 		printCampaignHelp(r.Stderr)
 		return 2
 	}
@@ -103,7 +103,7 @@ func (r Runner) runCampaignLint(args []string) int {
 		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
 			return exit
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	out := map[string]any{
@@ -178,7 +178,7 @@ func (r Runner) runCampaignRun(args []string) int {
 		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
 			return exit
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	total := *missions
@@ -248,7 +248,7 @@ func (r Runner) runCampaignCanary(args []string) int {
 		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
 			return exit
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	total := *missions
@@ -314,14 +314,14 @@ func (r Runner) runCampaignResume(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	resolvedOutRoot := m.OutRoot
 	statePath := campaign.RunStatePath(resolvedOutRoot, cid)
 	st, err := campaign.LoadRunState(statePath)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if strings.TrimSpace(st.OutRoot) != "" && strings.TrimSpace(*outRoot) == "" {
@@ -329,7 +329,7 @@ func (r Runner) runCampaignResume(args []string) int {
 		statePath = campaign.RunStatePath(resolvedOutRoot, cid)
 		st, err = campaign.LoadRunState(statePath)
 		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 	}
@@ -341,7 +341,7 @@ func (r Runner) runCampaignResume(args []string) int {
 		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
 			return exit
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if parsed.Spec.CampaignID != cid {
@@ -400,12 +400,12 @@ func (r Runner) runCampaignStatus(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
@@ -441,18 +441,18 @@ func (r Runner) runCampaignReport(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	rep := campaign.BuildReport(st)
 	sum := campaign.BuildSummary(st)
 	if err := r.persistCampaignArtifacts(st); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -461,7 +461,7 @@ func (r Runner) runCampaignReport(args []string) int {
 		if *jsonOut {
 			_ = r.writeJSON(rep)
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: campaign report: status=%s (use --force to export)\n", st.Status)
+		fmt.Fprintf(r.Stderr, codeUsage+": campaign report: status=%s (use --force to export)\n", st.Status)
 		return 2
 	}
 
@@ -502,12 +502,12 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	policy := resolveCampaignInvalidRunPolicy(st)
@@ -551,7 +551,7 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 					toolDriverCompliance["error"] = policyPayload["error"]
 				}
 			} else {
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", perr.Error())
+				fmt.Fprintf(r.Stderr, codeIO+": %s\n", perr.Error())
 				return 1
 			}
 		} else {
@@ -619,7 +619,7 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 	now := r.Now()
 	runID, err := ids.NewRunID(now)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return campaign.RunStateV1{}, 1
 	}
 
@@ -627,7 +627,7 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		outRoot = ".zcl"
 	}
 	if len(parsed.MissionIndexes) == 0 {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: campaign requires at least one mission\n")
+		fmt.Fprintf(r.Stderr, codeUsage+": campaign requires at least one mission\n")
 		return campaign.RunStateV1{}, 2
 	}
 	missionIndexes := in.MissionIndexes
@@ -648,7 +648,7 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 				MissionIndex: missionIndex,
 				MissionID:    missionID,
 				Status:       campaign.AttemptStatusInvalid,
-				Errors:       []string{"ZCL_E_CAMPAIGN_MISSING_ATTEMPT"},
+				Errors:       []string{codeCampaignMissingAttempt},
 			}}
 		} else {
 			for i := range fr.Attempts {
@@ -661,7 +661,7 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		return fr, runErr
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return campaign.RunStateV1{}, 1
 	}
 	engineResult, err := campaign.ExecuteMissionEngine(
@@ -684,11 +684,11 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		},
 	)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return campaign.RunStateV1{}, 1
 	}
 	if err := r.persistCampaignArtifacts(engineResult.State); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return engineResult.State, 1
 	}
 	return engineResult.State, engineResult.Exit
@@ -801,10 +801,10 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 			OK:     false,
 		}
 		if len(fr.Attempts) == 0 {
-			ma.Errors = []string{"ZCL_E_CAMPAIGN_MISSING_ATTEMPT"}
+			ma.Errors = []string{codeCampaignMissingAttempt}
 			mg.Attempts = append(mg.Attempts, ma)
 			if parsed.Spec.PairGateEnabled() {
-				mg.Reasons = append(mg.Reasons, "ZCL_E_CAMPAIGN_MISSING_ATTEMPT")
+				mg.Reasons = append(mg.Reasons, codeCampaignMissingAttempt)
 				mg.OK = false
 			}
 			continue
@@ -817,27 +817,27 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 
 		gateErrors := make([]string, 0, 8)
 		if parsed.Spec.PairGateEnabled() && ar.Status != campaign.AttemptStatusValid {
-			gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_ATTEMPT_NOT_VALID")
+			gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
 		}
 		if strings.TrimSpace(ar.AttemptDir) == "" {
 			if parsed.Spec.PairGateEnabled() {
-				gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_ARTIFACT_GATE")
+				gateErrors = append(gateErrors, codeCampaignArtifactGate)
 			}
 		} else {
 			rep, err := readAttemptReport(ar.AttemptDir)
 			if err != nil {
 				if parsed.Spec.PairGateEnabled() {
-					gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_ARTIFACT_GATE")
+					gateErrors = append(gateErrors, codeCampaignArtifactGate)
 				}
 			} else if parsed.Spec.PairGateEnabled() {
 				if rep.Integrity == nil || !rep.Integrity.TracePresent || !rep.Integrity.TraceNonEmpty || !rep.Integrity.FeedbackPresent {
-					gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_TRACE_GATE")
+					gateErrors = append(gateErrors, codeCampaignTraceGate)
 				}
 				if rep.TimedOutBeforeFirstToolCall {
-					gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_TIMEOUT_GATE")
+					gateErrors = append(gateErrors, codeCampaignTimeoutGate)
 				}
-				if rep.FailureCodeHistogram["ZCL_E_TIMEOUT"] > 0 {
-					gateErrors = append(gateErrors, "ZCL_E_CAMPAIGN_TIMEOUT_GATE")
+				if rep.FailureCodeHistogram[codeTimeout] > 0 {
+					gateErrors = append(gateErrors, codeCampaignTimeoutGate)
 				}
 			}
 			if parsed.Spec.PairGateEnabled() {
@@ -871,7 +871,7 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 			ma.OK = false
 			ma.Errors = dedupeSortedStrings(append(ma.Errors, gateErrors...))
 			ar.Errors = dedupeSortedStrings(append(ar.Errors, gateErrors...))
-			if containsString(gateErrors, "ZCL_E_CAMPAIGN_TIMEOUT_GATE") {
+			if containsString(gateErrors, codeCampaignTimeoutGate) {
 				ma.Status = campaign.AttemptStatusInfraFailed
 				ar.Status = campaign.AttemptStatusInfraFailed
 			} else if ar.Status == campaign.AttemptStatusSkipped {
@@ -991,14 +991,14 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		ErrorOutput: trimText(stderr.String(), 4096),
 	}
 	if exit != 0 {
-		fr.Errors = append(fr.Errors, fmt.Sprintf("ZCL_E_CAMPAIGN_FLOW_EXIT_%d", exit))
+		fr.Errors = append(fr.Errors, campaignFlowExitCode(exit))
 	}
 
 	var sum suiteRunSummary
 	if strings.TrimSpace(stdout.String()) != "" {
 		if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
 			fr.OK = false
-			fr.Errors = append(fr.Errors, "ZCL_E_CAMPAIGN_SUMMARY_PARSE")
+			fr.Errors = append(fr.Errors, codeCampaignSummaryParse)
 			return fr, nil, fmt.Errorf("flow %s summary parse: %w", flow.FlowID, err)
 		}
 		fr.RunID = sum.RunID
@@ -1019,7 +1019,7 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 			switch {
 			case a.Skipped:
 				ar.Status = campaign.AttemptStatusSkipped
-				ar.Errors = append(ar.Errors, "ZCL_E_CAMPAIGN_SKIPPED")
+				ar.Errors = append(ar.Errors, codeCampaignSkipped)
 			case a.RunnerErrorCode != "" || a.AutoFeedbackCode != "":
 				ar.Status = campaign.AttemptStatusInfraFailed
 			case a.OK && a.Finish.OK:
@@ -1245,7 +1245,7 @@ func (r Runner) runMission(args []string) int {
 	case "prompts":
 		return r.runMissionPrompts(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown mission subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown mission subcommand %q\n", args[0])
 		printMissionHelp(r.Stderr)
 		return 2
 	}
@@ -1260,7 +1260,7 @@ func (r Runner) runMissionPrompts(args []string) int {
 	case "build":
 		return r.runMissionPromptsBuild(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown mission prompts subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown mission prompts subcommand %q\n", args[0])
 		printMissionPromptsHelp(r.Stderr)
 		return 2
 	}
@@ -1295,12 +1295,12 @@ func (r Runner) runMissionPromptsBuild(args []string) int {
 
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	templateRaw, err := os.ReadFile(*template)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	tpl := string(templateRaw)
@@ -1357,7 +1357,7 @@ func (r Runner) runMissionPromptsBuild(args []string) int {
 		Prompts:       prompts,
 	}
 	if err := store.WriteJSONAtomic(outPath, result); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {

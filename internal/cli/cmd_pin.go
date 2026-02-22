@@ -34,13 +34,13 @@ func (r Runner) runPin(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
 	res, err := pin.Set(pin.Opts{OutRoot: m.OutRoot, RunID: *runID, Pinned: *on})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2
 	}
 	if *jsonOut {

@@ -49,7 +49,7 @@ func (r Runner) runAttemptFinish(args []string) int {
 
 	info, err := os.Stat(attemptDir)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if !info.IsDir() {
@@ -63,18 +63,18 @@ func (r Runner) runAttemptFinish(args []string) int {
 		return r.printReportErr(err)
 	}
 	if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
 	valRes, err := validate.ValidatePath(attemptDir, *strict)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	expRes, err := expect.ExpectPath(attemptDir, *strictExpect)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -105,7 +105,7 @@ func (r Runner) runAttemptFinish(args []string) int {
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)
 		if err := enc.Encode(out); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to encode json\n")
+			fmt.Fprintf(r.Stderr, codeIO+": failed to encode json\n")
 			return 1
 		}
 		if ok {

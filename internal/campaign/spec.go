@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/marcohefti/zero-context-lab/internal/codes"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/suite"
@@ -28,13 +29,13 @@ const (
 	RunStatusInvalid       = "invalid"
 	RunStatusAborted       = "aborted"
 	RunStatusRunning       = "running"
-	ReasonGateFailed       = "ZCL_E_CAMPAIGN_GATE_FAILED"
-	ReasonFirstMissionGate = "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED"
-	ReasonFlowFailed       = "ZCL_E_CAMPAIGN_FLOW_FAILED"
-	ReasonAborted          = "ZCL_E_CAMPAIGN_ABORTED"
-	ReasonSemanticFailed   = "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
-	ReasonPromptModePolicy = "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION"
-	ReasonToolDriverShim   = "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED"
+	ReasonGateFailed       = codes.CampaignGateFailed
+	ReasonFirstMissionGate = codes.CampaignFirstMissionGateFailed
+	ReasonFlowFailed       = codes.CampaignFlowFailed
+	ReasonAborted          = codes.CampaignAborted
+	ReasonSemanticFailed   = codes.CampaignSemanticFailed
+	ReasonPromptModePolicy = codes.CampaignPromptModeViolation
+	ReasonToolDriverShim   = codes.CampaignToolDriverShimRequired
 
 	SelectionModeAll       = "all"
 	SelectionModeMissionID = "mission_id"

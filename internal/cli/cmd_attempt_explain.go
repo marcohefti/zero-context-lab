@@ -56,7 +56,7 @@ func (r Runner) runAttemptExplain(args []string) int {
 
 	info, err := os.Stat(attemptDir)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if !info.IsDir() {
@@ -91,7 +91,7 @@ func (r Runner) runAttemptExplain(args []string) int {
 
 	tail, tailErr := tailTraceEvents(filepath.Join(attemptDir, "tool.calls.jsonl"), *tailN)
 	if tailErr != nil && *strict {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", tailErr.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", tailErr.Error())
 		return 1
 	}
 

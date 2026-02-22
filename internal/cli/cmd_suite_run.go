@@ -248,13 +248,13 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
 	parsed, err := suite.ParseFile(strings.TrimSpace(*file))
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2
 	}
 
@@ -413,7 +413,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 
 	progress, err := newSuiteRunProgressEmitter(strings.TrimSpace(*progressJSONL), r.Stderr)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	defer func() {
@@ -492,7 +492,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 				"failFast":       *failFast,
 			},
 		}); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
 			return 1
 		}
 	}
@@ -541,8 +541,8 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 
 				if err != nil {
 					harnessErr.Store(true)
-					fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
-					results[idx].RunnerErrorCode = "ZCL_E_USAGE"
+					fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
+					results[idx].RunnerErrorCode = codeUsage
 					results[idx].OK = false
 					return
 				}
@@ -570,7 +570,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 						},
 					}); err != nil {
 						harnessErr.Store(true)
-						fmt.Fprintf(errWriter, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+						fmt.Fprintf(errWriter, codeIO+": suite run progress: %s\n", err.Error())
 					}
 				}
 				ar, hard := r.executeSuiteRunMission(pm, execOpts)
@@ -621,7 +621,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		}); err != nil {
 			harnessErr.Store(true)
 			summary.OK = false
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run campaign state: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": suite run campaign state: %s\n", err.Error())
 		}
 	}
 	if progress != nil {
@@ -640,7 +640,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		}); err != nil {
 			harnessErr.Store(true)
 			summary.OK = false
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: suite run progress: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
 		}
 	}
 
@@ -648,7 +648,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(summary); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to encode json\n")
+		fmt.Fprintf(r.Stderr, codeIO+": failed to encode json\n")
 		return 1
 	}
 
@@ -745,8 +745,8 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		dir, err := installAttemptShims(pm.OutDirAbs, opts.Shims)
 		if err != nil {
 			harnessErr = true
-			ar.RunnerErrorCode = "ZCL_E_USAGE"
-			fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
+			ar.RunnerErrorCode = codeUsage
+			fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
 		} else {
 			shimBinDir = dir
 			env["ZCL_SHIM_BIN_DIR"] = shimBinDir
@@ -773,8 +773,8 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			if logErrCh != nil {
 				if lerr := <-logErrCh; lerr != nil {
 					harnessErr = true
-					ar.RunnerErrorCode = "ZCL_E_IO"
-					fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", lerr.Error())
+					ar.RunnerErrorCode = codeIO
+					fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", lerr.Error())
 				}
 			}
 		})
@@ -782,8 +782,8 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	if opts.CaptureRunnerIO {
 		if opts.RunnerIOMaxBytes <= 0 {
 			harnessErr = true
-			ar.RunnerErrorCode = "ZCL_E_USAGE"
-			fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: --runner-io-max-bytes must be > 0\n")
+			ar.RunnerErrorCode = codeUsage
+			fmt.Fprintf(errWriter, codeUsage+": suite run: --runner-io-max-bytes must be > 0\n")
 		} else {
 			stdoutTB = newTailBuffer(opts.RunnerIOMaxBytes)
 			stderrTB = newTailBuffer(opts.RunnerIOMaxBytes)
@@ -797,8 +797,8 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			// Create initial log artifacts so post-mortems always have the files.
 			if err := logW.Flush(true); err != nil {
 				harnessErr = true
-				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
+				ar.RunnerErrorCode = codeIO
+				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
 			} else {
 				stopLogs = make(chan struct{})
 				logErrCh = make(chan error, 1)
@@ -838,13 +838,13 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 
 	if err := verifyAttemptMatchesEnv(pm.OutDirAbs, env); err != nil {
 		harnessErr = true
-		ar.RunnerErrorCode = "ZCL_E_USAGE"
-		fmt.Fprintf(errWriter, "ZCL_E_USAGE: suite run: %s\n", err.Error())
+		ar.RunnerErrorCode = codeUsage
+		fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
 		stopRunnerLogs()
 	} else if opts.Blind {
 		found := promptContamination(pm.OutDirAbs, opts.BlindTerms)
 		if len(found) > 0 {
-			ar.RunnerErrorCode = "ZCL_E_CONTAMINATED_PROMPT"
+			ar.RunnerErrorCode = codeContaminatedPrompt
 			msg := "prompt contamination detected: " + strings.Join(found, ",")
 			envTrace := trace.Env{
 				RunID:     env["ZCL_RUN_ID"],
@@ -856,15 +856,15 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 				TmpDirAbs: env["ZCL_TMP_DIR"],
 			}
 			if err := trace.AppendCLIRunEvent(r.Now(), envTrace, []string{"zcl", "blind-check"}, trace.ResultForTrace{
-				SpawnError: "ZCL_E_CONTAMINATED_PROMPT",
+				SpawnError: codeContaminatedPrompt,
 				DurationMs: 0,
 				OutBytes:   0,
 				ErrBytes:   int64(len(msg)),
 				ErrPreview: msg,
 			}); err != nil {
 				harnessErr = true
-				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
+				ar.RunnerErrorCode = codeIO
+				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
 			} else if err := feedback.Write(r.Now(), envTrace, feedback.WriteOpts{
 				OK:                   false,
 				Result:               "CONTAMINATED_PROMPT",
@@ -872,8 +872,8 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 				SkipSuiteResultShape: true,
 			}); err != nil {
 				harnessErr = true
-				ar.RunnerErrorCode = "ZCL_E_IO"
-				fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
+				ar.RunnerErrorCode = codeIO
+				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
 			}
 			stopRunnerLogs()
 		} else {
@@ -886,7 +886,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	}
 	if err := maybeFinalizeSuiteFeedback(r.Now(), env, &ar, opts.FinalizationMode, opts.FeedbackPolicy, opts.ResultChannel, stdoutTB); err != nil {
 		harnessErr = true
-		fmt.Fprintf(errWriter, "ZCL_E_IO: suite run: %s\n", err.Error())
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
 	}
 
 	ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
@@ -934,7 +934,7 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 		defer cancel()
 	}
 	if timedOut {
-		ar.RunnerErrorCode = "ZCL_E_TIMEOUT"
+		ar.RunnerErrorCode = codeTimeout
 		return false
 	}
 
@@ -962,11 +962,11 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			ar.RunnerErrorCode = "ZCL_E_TIMEOUT"
+			ar.RunnerErrorCode = codeTimeout
 			return true
 		}
 		if isStartFailure(err) {
-			ar.RunnerErrorCode = "ZCL_E_SPAWN"
+			ar.RunnerErrorCode = codeSpawn
 			return true
 		}
 		// Process exited non-zero: treat as harness error (runner is expected to encode mission outcome in feedback.json).
@@ -974,7 +974,7 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 	}
 	if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		// Defensive: CommandContext can return nil error while ctx is done in some edge cases.
-		ar.RunnerErrorCode = "ZCL_E_TIMEOUT"
+		ar.RunnerErrorCode = codeTimeout
 		return true
 	}
 	return false
@@ -1086,15 +1086,15 @@ func maybeWriteAutoResultFeedback(now time.Time, env map[string]string, ar *suit
 
 	raw, err := readSuiteResultChannel(outDir, resultChannel, stdoutTB)
 	if err != nil {
-		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_MISSING", err)
+		return maybeWriteResultChannelFailureFeedback(now, env, ar, codeMissionResultMissing, err)
 	}
 	writeOpts, err := decodeSuiteResultFeedback(raw, resultChannel.MinFinalTurn)
 	if err != nil {
 		var turnErr *missionResultTurnTooEarlyError
 		if errors.As(err, &turnErr) {
-			return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY", err)
+			return maybeWriteResultChannelFailureFeedback(now, env, ar, codeMissionResultTurnTooEarly, err)
 		}
-		return maybeWriteResultChannelFailureFeedback(now, env, ar, "ZCL_E_MISSION_RESULT_INVALID", err)
+		return maybeWriteResultChannelFailureFeedback(now, env, ar, codeMissionResultInvalid, err)
 	}
 
 	envTrace := trace.Env{
@@ -1446,7 +1446,7 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 	}
 
 	decisionTags := []string{schema.DecisionTagBlocked}
-	if code == "ZCL_E_TIMEOUT" || ar.RunnerErrorCode == "ZCL_E_TIMEOUT" {
+	if code == codeTimeout || ar.RunnerErrorCode == codeTimeout {
 		decisionTags = append(decisionTags, schema.DecisionTagTimeout)
 	}
 	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
@@ -1467,12 +1467,12 @@ func autoFailureCode(ar suiteRunAttemptResult) string {
 		return ar.RunnerErrorCode
 	}
 	if ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0 {
-		return "ZCL_E_MISSING_ARTIFACT"
+		return codeMissingArtifact
 	}
 	if ar.RunnerExitCode != nil && *ar.RunnerExitCode != 0 {
-		return "ZCL_E_TOOL_FAILED"
+		return codeToolFailed
 	}
-	return "ZCL_E_MISSING_ARTIFACT"
+	return codeMissingArtifact
 }
 
 func suiteRunComparabilityKey(p suiteRunCampaignProfile) string {

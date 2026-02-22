@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcohefti/zero-context-lab/internal/codes"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
 
@@ -412,9 +413,9 @@ func BuildSummary(st RunStateV1) SummaryV1 {
 				ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
 					FlowID: fr.FlowID,
 					Status: AttemptStatusInvalid,
-					Errors: []string{"ZCL_E_CAMPAIGN_MISSING_ATTEMPT"},
+					Errors: []string{codes.CampaignMissingAttempt},
 				})
-				failures["ZCL_E_CAMPAIGN_MISSING_ATTEMPT"]++
+				failures[codes.CampaignMissingAttempt]++
 				continue
 			}
 			if a.Status != AttemptStatusValid {

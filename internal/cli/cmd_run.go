@@ -87,31 +87,31 @@ func (r Runner) runRun(args []string) int {
 		tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 		streak, err := trailingFailedRepeatStreak(tracePath, argv)
 		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to inspect repeat guard state: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": failed to inspect repeat guard state: %s\n", err.Error())
 			return 1
 		}
 		if streak >= threshold {
 			now := r.Now()
 			msg := fmt.Sprintf("no-progress guard: refusing repeated failed command after streak=%d (max=%d)", streak, threshold)
 			traceRes := trace.ResultForTrace{
-				SpawnError: "ZCL_E_TOOL_FAILED",
+				SpawnError: codeToolFailed,
 				DurationMs: 0,
 				OutBytes:   0,
 				ErrBytes:   int64(len(msg)),
 				ErrPreview: msg,
 			}
 			if err := trace.AppendCLIRunEvent(now, env, argv, traceRes); err != nil {
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
+				fmt.Fprintf(r.Stderr, codeIO+": failed to append tool.calls.jsonl: %s\n", err.Error())
 				return 1
 			}
-			fmt.Fprintf(r.Stderr, "ZCL_E_TOOL_FAILED: %s\n", msg)
+			fmt.Fprintf(r.Stderr, codeToolFailed+": %s\n", msg)
 			return 1
 		}
 	}
 
 	now := r.Now()
 	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
@@ -171,7 +171,7 @@ func (r Runner) runRun(args []string) int {
 	if outBuf != nil || errBuf != nil {
 		dir := filepath.Join(env.OutDirAbs, "captures", "cli")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 		id := fmt.Sprintf("%d", now.UTC().UnixNano())
@@ -205,12 +205,12 @@ func (r Runner) runRun(args []string) int {
 			path := filepath.Join(env.OutDirAbs, rel)
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err != nil {
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 				return 0, "", false, nil, false
 			}
 			if _, err := f.Write(b); err != nil {
 				_ = f.Close()
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 				return 0, "", false, nil, false
 			}
 			_ = f.Sync()
@@ -248,16 +248,16 @@ func (r Runner) runRun(args []string) int {
 		captureRedactionsApplied = capApplied
 	}
 	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		traceRes.SpawnError = "ZCL_E_TIMEOUT"
+		traceRes.SpawnError = codeTimeout
 	} else if runErr != nil {
-		traceRes.SpawnError = "ZCL_E_SPAWN"
+		traceRes.SpawnError = codeSpawn
 	}
 	resultCode := traceRes.SpawnError
 	if resultCode == "" && res.ExitCode != 0 {
-		resultCode = "ZCL_E_TOOL_FAILED"
+		resultCode = codeToolFailed
 	}
 	if err := trace.AppendCLIRunEvent(now, env, argv, traceRes); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append tool.calls.jsonl: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": failed to append tool.calls.jsonl: %s\n", err.Error())
 		return 1
 	}
 
@@ -293,16 +293,16 @@ func (r Runner) runRun(args []string) int {
 			MaxBytes:          *captureMaxBytes,
 		}
 		if err := store.AppendJSONL(filepath.Join(env.OutDirAbs, "captures.jsonl"), ev); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to append captures.jsonl: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": failed to append captures.jsonl: %s\n", err.Error())
 			return 1
 		}
 	}
 	if timedOut || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 		return 1
 	}
 	if runErr != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: run failed: %s\n", runErr.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": run failed: %s\n", runErr.Error())
 		return 1
 	}
 

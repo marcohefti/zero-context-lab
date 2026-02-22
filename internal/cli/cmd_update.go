@@ -20,7 +20,7 @@ func (r Runner) runUpdate(args []string) int {
 	case "status":
 		return r.runUpdateStatus(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown update subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown update subcommand %q\n", args[0])
 		printUpdateHelp(r.Stderr)
 		return 2
 	}
@@ -48,7 +48,7 @@ func (r Runner) runUpdateStatus(args []string) int {
 		Timeout:   3 * time.Second,
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -89,14 +89,14 @@ func (r Runner) enforceVersionFloor(args []string) (int, bool) {
 
 	ok, msg, err := update.CheckMinimum(r.Version, min)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2, true
 	}
 	if ok {
 		return 0, false
 	}
-	fmt.Fprintf(r.Stderr, "ZCL_E_VERSION_FLOOR: %s\n", msg)
-	fmt.Fprintf(r.Stderr, "ZCL_E_VERSION_FLOOR: run `zcl update status --json` then update via your package manager.\n")
+	fmt.Fprintf(r.Stderr, codeVersionFloor+": %s\n", msg)
+	fmt.Fprintf(r.Stderr, codeVersionFloor+": run `zcl update status --json` then update via your package manager.\n")
 	return 2, true
 }
 

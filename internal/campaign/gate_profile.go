@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcohefti/zero-context-lab/internal/codes"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
 const (
-	ReasonTraceProfileRequiredFamily = "ZCL_E_CAMPAIGN_TRACE_PROFILE_REQUIRED_EVENT_FAMILY"
-	ReasonTraceProfileMCPRequired    = "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED"
-	ReasonTraceProfileBootstrapOnly  = "ZCL_E_CAMPAIGN_TRACE_PROFILE_BOOTSTRAP_ONLY"
+	ReasonTraceProfileRequiredFamily = codes.CampaignTraceProfileRequiredEventFamily
+	ReasonTraceProfileMCPRequired    = codes.CampaignTraceProfileMCPRequired
+	ReasonTraceProfileBootstrapOnly  = codes.CampaignTraceProfileBootstrapOnly
 )
 
 func EvaluateTraceProfile(profile string, attemptDir string) ([]string, error) {

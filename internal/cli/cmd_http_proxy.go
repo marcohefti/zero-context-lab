@@ -23,7 +23,7 @@ func (r Runner) runHTTP(args []string) int {
 	case "proxy":
 		return r.runHTTPProxy(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown http subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown http subcommand %q\n", args[0])
 		printHTTPHelp(r.Stderr)
 		return 2
 	}
@@ -62,7 +62,7 @@ func (r Runner) runHTTPProxy(args []string) int {
 
 	now := r.Now()
 	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
@@ -70,13 +70,13 @@ func (r Runner) runHTTPProxy(args []string) int {
 		defer cancel()
 	}
 	if timedOut {
-		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 		return 1
 	}
 
 	h, err := httpproxy.Start(ctx, env, strings.TrimSpace(*listen), strings.TrimSpace(*upstream), schema.PreviewMaxBytesV1, *maxRequests)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	defer func() { _ = h.Close() }()
@@ -100,10 +100,10 @@ func (r Runner) runHTTPProxy(args []string) int {
 
 	if err := h.Wait(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+			fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 			return 1
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	return 0

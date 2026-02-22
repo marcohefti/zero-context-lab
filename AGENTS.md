@@ -180,9 +180,12 @@ Single entrypoint:
 
 What it runs:
 - `scripts/skills-check.sh` (skill pack sanity)
+- `scripts/mod-tidy-check.sh` (module graph cleanliness)
 - `scripts/docs-check.sh` (doc cross-links exist)
+- `scripts/error-codes-check.sh` (blocks raw `ZCL_E_*` literals in core runtime paths)
 - gofmt check
 - `go test ./...`, `go vet ./...`
+- `scripts/campaign-e2e.sh` (campaign orchestration regression path)
 - `scripts/no-context-examples-check.sh` (campaign no-context examples lint from repo root)
 - `scripts/contract-snapshot.sh --check` (contract drift is a failing test)
 - `scripts/docs-contract-check.sh` (docs mention commands + SCHEMAS matches contract artifacts)

@@ -1,0 +1,61 @@
+package codes
+
+import "fmt"
+
+const (
+	Usage              = "ZCL_E_USAGE"
+	IO                 = "ZCL_E_IO"
+	MissingArtifact    = "ZCL_E_MISSING_ARTIFACT"
+	MissingEvidence    = "ZCL_E_MISSING_EVIDENCE"
+	InvalidJSON        = "ZCL_E_INVALID_JSON"
+	InvalidJSONL       = "ZCL_E_INVALID_JSONL"
+	SchemaUnsupported  = "ZCL_E_SCHEMA_UNSUPPORTED"
+	IDMismatch         = "ZCL_E_ID_MISMATCH"
+	Bounds             = "ZCL_E_BOUNDS"
+	UnsafeEvidence     = "ZCL_E_UNSAFE_EVIDENCE"
+	Contract           = "ZCL_E_CONTRACT"
+	Containment        = "ZCL_E_CONTAINMENT"
+	Spawn              = "ZCL_E_SPAWN"
+	ToolFailed         = "ZCL_E_TOOL_FAILED"
+	Timeout            = "ZCL_E_TIMEOUT"
+	MCPMaxToolCalls    = "ZCL_E_MCP_MAX_TOOL_CALLS"
+	ContaminatedPrompt = "ZCL_E_CONTAMINATED_PROMPT"
+	VersionFloor       = "ZCL_E_VERSION_FLOOR"
+	FunnelBypass       = "ZCL_E_FUNNEL_BYPASS"
+	ExpectationFailed  = "ZCL_E_EXPECTATION_FAILED"
+	Semantic           = "ZCL_E_SEMANTIC"
+
+	MissionResultMissing      = "ZCL_E_MISSION_RESULT_MISSING"
+	MissionResultInvalid      = "ZCL_E_MISSION_RESULT_INVALID"
+	MissionResultTurnTooEarly = "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY"
+
+	CampaignGateFailed             = "ZCL_E_CAMPAIGN_GATE_FAILED"
+	CampaignFirstMissionGateFailed = "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED"
+	CampaignFlowFailed             = "ZCL_E_CAMPAIGN_FLOW_FAILED"
+	CampaignAborted                = "ZCL_E_CAMPAIGN_ABORTED"
+	CampaignSemanticFailed         = "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
+	CampaignPromptModeViolation    = "ZCL_E_CAMPAIGN_PROMPT_MODE_VIOLATION"
+	CampaignToolDriverShimRequired = "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED"
+	CampaignLockTimeout            = "ZCL_E_CAMPAIGN_LOCK_TIMEOUT"
+	CampaignHookFailed             = "ZCL_E_CAMPAIGN_HOOK_FAILED"
+	CampaignGlobalTimeout          = "ZCL_E_CAMPAIGN_GLOBAL_TIMEOUT"
+	CampaignDuplicateAttempt       = "ZCL_E_CAMPAIGN_DUPLICATE_ATTEMPT"
+	CampaignMissingAttempt         = "ZCL_E_CAMPAIGN_MISSING_ATTEMPT"
+	CampaignAttemptNotValid        = "ZCL_E_CAMPAIGN_ATTEMPT_NOT_VALID"
+	CampaignArtifactGate           = "ZCL_E_CAMPAIGN_ARTIFACT_GATE"
+	CampaignTraceGate              = "ZCL_E_CAMPAIGN_TRACE_GATE"
+	CampaignTimeoutGate            = "ZCL_E_CAMPAIGN_TIMEOUT_GATE"
+	CampaignSummaryParse           = "ZCL_E_CAMPAIGN_SUMMARY_PARSE"
+	CampaignSkipped                = "ZCL_E_CAMPAIGN_SKIPPED"
+	CampaignFlowExitPrefix         = "ZCL_E_CAMPAIGN_FLOW_EXIT_"
+
+	CampaignTraceProfileRequiredEventFamily = "ZCL_E_CAMPAIGN_TRACE_PROFILE_REQUIRED_EVENT_FAMILY"
+	CampaignTraceProfileMCPRequired         = "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED"
+	CampaignTraceProfileBootstrapOnly       = "ZCL_E_CAMPAIGN_TRACE_PROFILE_BOOTSTRAP_ONLY"
+
+	Shim = "ZCL_E_SHIM"
+)
+
+func CampaignFlowExit(exitCode int) string {
+	return fmt.Sprintf("%s%d", CampaignFlowExitPrefix, exitCode)
+}

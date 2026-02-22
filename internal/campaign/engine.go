@@ -10,13 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcohefti/zero-context-lab/internal/codes"
 	"github.com/marcohefti/zero-context-lab/internal/store"
 )
 
 const (
-	ReasonLockTimeout   = "ZCL_E_CAMPAIGN_LOCK_TIMEOUT"
-	ReasonHookFailed    = "ZCL_E_CAMPAIGN_HOOK_FAILED"
-	ReasonGlobalTimeout = "ZCL_E_CAMPAIGN_GLOBAL_TIMEOUT"
+	ReasonLockTimeout   = codes.CampaignLockTimeout
+	ReasonHookFailed    = codes.CampaignHookFailed
+	ReasonGlobalTimeout = codes.CampaignGlobalTimeout
 )
 
 type MissionExecutor interface {
@@ -252,7 +253,7 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			for j := range result.Attempts {
 				idempotency := progressKey(parsed.Spec.CampaignID, flow.FlowID, missionIndex)
 				if seenKeys[idempotency] {
-					result.Attempts[j].Errors = normalizeReasonCodes(append(result.Attempts[j].Errors, "ZCL_E_CAMPAIGN_DUPLICATE_ATTEMPT"))
+					result.Attempts[j].Errors = normalizeReasonCodes(append(result.Attempts[j].Errors, codes.CampaignDuplicateAttempt))
 					if result.Attempts[j].Status == AttemptStatusValid {
 						result.Attempts[j].Status = AttemptStatusInvalid
 					}

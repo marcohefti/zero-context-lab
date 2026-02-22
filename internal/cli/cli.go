@@ -120,7 +120,7 @@ func (r Runner) Run(args []string) int {
 		fmt.Fprintf(r.Stdout, "%s\n", r.Version)
 		return 0
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown command %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown command %q\n", args[0])
 		printRootHelp(r.Stderr)
 		return 2
 	}
@@ -168,12 +168,12 @@ func (r Runner) runInit(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	res, err := config.InitProject(*configPath, m.OutRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -203,7 +203,7 @@ func (r Runner) runAttempt(args []string) int {
 	case "latest":
 		return r.runAttemptLatest(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown attempt subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown attempt subcommand %q\n", args[0])
 		printAttemptHelp(r.Stderr)
 		return 2
 	}
@@ -218,7 +218,7 @@ func (r Runner) runRuns(args []string) int {
 	case "list":
 		return r.runRunsList(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown runs subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown runs subcommand %q\n", args[0])
 		printRunsHelp(r.Stderr)
 		return 2
 	}
@@ -235,7 +235,7 @@ func (r Runner) runSuite(args []string) int {
 	case "run":
 		return r.runSuiteRun(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown suite subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown suite subcommand %q\n", args[0])
 		printSuiteHelp(r.Stderr)
 		return 2
 	}
@@ -270,7 +270,7 @@ func (r Runner) runSuitePlan(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -284,7 +284,7 @@ func (r Runner) runSuitePlan(args []string) int {
 			v := false
 			blindPtr = &v
 		default:
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: suite plan: invalid --blind (expected on|off)\n")
+			fmt.Fprintf(r.Stderr, codeUsage+": suite plan: invalid --blind (expected on|off)\n")
 			return 2
 		}
 	}
@@ -300,7 +300,7 @@ func (r Runner) runSuitePlan(args []string) int {
 		BlindTerms:   blind.ParseTermsCSV(*blindTerms),
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2
 	}
 	return r.writeJSON(res)
@@ -351,7 +351,7 @@ func (r Runner) runReplay(args []string) int {
 		UseStdin:  *useStdin,
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	return r.writeJSON(res)
@@ -385,7 +385,7 @@ func (r Runner) runExpect(args []string) int {
 
 	res, err := expect.ExpectPath(paths[0], *strict)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	exit := r.writeJSON(res)
@@ -448,7 +448,7 @@ func (r Runner) runFeedback(args []string) int {
 		DecisionTags:   []string(decisionTags),
 	}); err != nil {
 		msg := err.Error()
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", msg)
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", msg)
 		if hint := feedbackHint(msg); hint != "" {
 			fmt.Fprintf(r.Stderr, "hint: %s\n", hint)
 		}
@@ -498,7 +498,7 @@ func (r Runner) runNote(args []string) int {
 		DataJSON: *dataJSON,
 		Tags:     tags,
 	}); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2
 	}
 
@@ -544,14 +544,14 @@ func (r Runner) runAttemptStart(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	var suiteSnap any
 	if strings.TrimSpace(*suiteFile) != "" {
 		snap, err := planner.ParseSuiteSnapshot(*suiteFile, *suite)
 		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 			return 2
 		}
 		suiteSnap = snap
@@ -574,7 +574,7 @@ func (r Runner) runAttemptStart(args []string) int {
 		SuiteSnapshot:  suiteSnap,
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
 		return 2
 	}
 
@@ -586,11 +586,11 @@ func (r Runner) runAttemptStart(args []string) int {
 	if strings.TrimSpace(*envFile) != "" {
 		envOut, envOutOK = formatEnv(res.Env, *envFormat)
 		if !envOutOK {
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: attempt start: invalid --env-format (expected sh|dotenv)\n")
+			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --env-format (expected sh|dotenv)\n")
 			return 2
 		}
 		if err := store.WriteFileAtomic(*envFile, []byte(envOut)); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 		envOutUsed = true
@@ -598,7 +598,7 @@ func (r Runner) runAttemptStart(args []string) int {
 	if strings.TrimSpace(*printEnv) != "" {
 		envOut, envOutOK = formatEnv(res.Env, *printEnv)
 		if !envOutOK {
-			fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: attempt start: invalid --print-env (expected sh|dotenv)\n")
+			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --print-env (expected sh|dotenv)\n")
 			return 2
 		}
 		fmt.Fprint(r.Stderr, envOut)
@@ -644,13 +644,13 @@ func (r Runner) runReport(args []string) int {
 	target := paths[0]
 	targetAbs, err := filepath.Abs(target)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	target = targetAbs
 	info, err := os.Stat(target)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if !info.IsDir() {
@@ -664,7 +664,7 @@ func (r Runner) runReport(args []string) int {
 		attemptsDir := filepath.Join(target, "attempts")
 		entries, err := os.ReadDir(attemptsDir)
 		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 		var reports []schema.AttemptReportJSONV1
@@ -678,14 +678,14 @@ func (r Runner) runReport(args []string) int {
 				return r.printReportErr(err)
 			}
 			if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
-				fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+				fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 				return 1
 			}
 			reports = append(reports, rep)
 		}
 		out := buildRunReportJSON(target, reports)
 		if err := store.WriteJSONAtomic(filepath.Join(target, "run.report.json"), out); err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 		if *jsonOut {
@@ -699,7 +699,7 @@ func (r Runner) runReport(args []string) int {
 		return r.printReportErr(err)
 	}
 	if err := report.WriteAttemptReportAtomic(filepath.Join(target, "attempt.report.json"), rep); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
@@ -738,7 +738,7 @@ func (r Runner) runValidate(args []string) int {
 	if *semanticMode {
 		res, err := semantic.ValidatePath(paths[0], semantic.Options{RulesPath: strings.TrimSpace(*semanticRules)})
 		if err != nil {
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 		if *jsonOut {
@@ -768,7 +768,7 @@ func (r Runner) runValidate(args []string) int {
 
 	res, err := validate.ValidatePath(paths[0], *strict)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
@@ -781,7 +781,7 @@ func (r Runner) runValidate(args []string) int {
 		}
 		// Distinguish I/O-ish failures vs contract/usage failures for automation.
 		for _, f := range res.Errors {
-			if f.Code == "ZCL_E_IO" {
+			if f.Code == codeIO {
 				return 1
 			}
 		}
@@ -807,7 +807,7 @@ func (r Runner) runValidate(args []string) int {
 		}
 	}
 	for _, f := range res.Errors {
-		if f.Code == "ZCL_E_IO" {
+		if f.Code == codeIO {
 			return 1
 		}
 	}
@@ -832,7 +832,7 @@ func (r Runner) runDoctor(args []string) int {
 
 	res, err := doctor.Run(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
@@ -872,7 +872,7 @@ func (r Runner) runGC(args []string) int {
 
 	m, err := config.LoadMerged(*outRoot)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 
@@ -884,7 +884,7 @@ func (r Runner) runGC(args []string) int {
 		DryRun:        *dryRun,
 	})
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	if *jsonOut {
@@ -938,7 +938,7 @@ func (r Runner) runEnrich(args []string) int {
 				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
 				return 2
 			}
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 	case string(runners.ClaudeRunner):
@@ -948,7 +948,7 @@ func (r Runner) runEnrich(args []string) int {
 				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
 				return 2
 			}
-			fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return 1
 		}
 	default:
@@ -968,7 +968,7 @@ func (r Runner) runMCP(args []string) int {
 	case "proxy":
 		return r.runMCPProxy(args[1:])
 	default:
-		fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: unknown mcp subcommand %q\n", args[0])
+		fmt.Fprintf(r.Stderr, codeUsage+": unknown mcp subcommand %q\n", args[0])
 		printMCPHelp(r.Stderr)
 		return 2
 	}
@@ -1041,7 +1041,7 @@ func (r Runner) runMCPProxy(args []string) int {
 
 	now := r.Now()
 	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
@@ -1049,7 +1049,7 @@ func (r Runner) runMCPProxy(args []string) int {
 		defer cancel()
 	}
 	if timedOut {
-		fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 		return 1
 	}
 	if err := mcpproxy.ProxyWithOptions(ctx, env, argv, os.Stdin, r.Stdout, mcpproxy.Options{
@@ -1059,10 +1059,10 @@ func (r Runner) runMCPProxy(args []string) int {
 		ShutdownOnComplete: *shutdownOnComplete,
 	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			fmt.Fprintf(r.Stderr, "ZCL_E_TIMEOUT: attempt deadline exceeded\n")
+			fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 			return 1
 		}
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
 	return 0
@@ -1075,7 +1075,7 @@ func (r Runner) printReportErr(err error) int {
 		// Strict/validation-like errors should be non-zero and typed.
 		return 2
 	}
-	fmt.Fprintf(r.Stderr, "ZCL_E_IO: %s\n", err.Error())
+	fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 	return 1
 }
 
@@ -1254,7 +1254,7 @@ func reportEvidenceComplete(rep schema.AttemptReportJSONV1) bool {
 
 func isOrchestrationInfraCode(code string) bool {
 	switch strings.TrimSpace(code) {
-	case "ZCL_E_TIMEOUT", "ZCL_E_SPAWN", "ZCL_E_IO":
+	case codeTimeout, codeSpawn, codeIO:
 		return true
 	default:
 		return false
@@ -1280,14 +1280,14 @@ func (r Runner) writeJSON(v any) int {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		fmt.Fprintf(r.Stderr, "ZCL_E_IO: failed to encode json\n")
+		fmt.Fprintf(r.Stderr, codeIO+": failed to encode json\n")
 		return 1
 	}
 	return 0
 }
 
 func (r Runner) failUsage(msg string) int {
-	fmt.Fprintf(r.Stderr, "ZCL_E_USAGE: %s\n", msg)
+	fmt.Fprintf(r.Stderr, codeUsage+": %s\n", msg)
 	return 2
 }
 
