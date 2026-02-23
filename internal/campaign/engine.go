@@ -2,6 +2,7 @@ package campaign
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,6 +231,21 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 				res, err := exec.RunMission(runCtx, flow, missionIndex, mission.MissionID)
 				done <- runOutcome{result: res, err: err}
 			}()
+			timeoutFlowRun := func() FlowRunV1 {
+				return FlowRunV1{
+					FlowID:     flow.FlowID,
+					RunnerType: flow.Runner.Type,
+					SuiteFile:  flow.SuiteFile,
+					OK:         false,
+					Errors:     []string{codes.CampaignTimeoutGate},
+					Attempts: []AttemptStatusV1{{
+						MissionIndex: missionIndex,
+						MissionID:    mission.MissionID,
+						Status:       AttemptStatusInfraFailed,
+						Errors:       []string{codes.CampaignTimeoutGate},
+					}},
+				}
+			}
 
 			var heartbeat <-chan time.Time
 			var heartbeatTicker *time.Ticker
@@ -245,6 +261,10 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			for {
 				select {
 				case out := <-done:
+					if out.err != nil && opts.WatchdogHardKillContinue &&
+						(errors.Is(out.err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded)) {
+						return timeoutFlowRun()
+					}
 					result := out.result
 					if out.err != nil {
 						result.FlowID = flow.FlowID
@@ -272,19 +292,7 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 						runCtxDone = nil
 						continue
 					}
-					return FlowRunV1{
-						FlowID:     flow.FlowID,
-						RunnerType: flow.Runner.Type,
-						SuiteFile:  flow.SuiteFile,
-						OK:         false,
-						Errors:     []string{codes.CampaignTimeoutGate},
-						Attempts: []AttemptStatusV1{{
-							MissionIndex: missionIndex,
-							MissionID:    mission.MissionID,
-							Status:       AttemptStatusInfraFailed,
-							Errors:       []string{codes.CampaignTimeoutGate},
-						}},
-					}
+					return timeoutFlowRun()
 				}
 			}
 		}

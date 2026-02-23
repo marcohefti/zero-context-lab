@@ -23,6 +23,10 @@ func init() {
 func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
+	payloadPath := filepath.Join(outDir, "stdout.txt")
+	if err := os.WriteFile(payloadPath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -33,7 +37,7 @@ func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=hello\n", "stderr=oops\n", "exit=7"})
+	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout-file=" + payloadPath, "stderr=oops\n", "exit=7"})
 	if code != 7 {
 		t.Fatalf("expected exit code 7, got %d (stderr=%q)", code, stderr.String())
 	}
