@@ -68,6 +68,8 @@ type CampaignSchemaDefaults struct {
 	OracleVisibility            string   `json:"oracleVisibility,omitempty"`
 	EvaluationMode              string   `json:"evaluationMode,omitempty"`
 	EvaluatorKind               string   `json:"evaluatorKind,omitempty"`
+	OraclePolicyMode            string   `json:"oraclePolicyMode,omitempty"`
+	OracleFormatMismatchPolicy  string   `json:"oracleFormatMismatchPolicy,omitempty"`
 	FlowMode                    string   `json:"flowMode"`
 	TraceProfile                string   `json:"traceProfile"`
 	ToolDriverKind              string   `json:"toolDriverKind"`
@@ -564,6 +566,8 @@ func Build(version string) Contract {
 				OracleVisibility:            campaign.OracleVisibilityWorkspace,
 				EvaluationMode:              campaign.EvaluationModeNone,
 				EvaluatorKind:               campaign.EvaluatorKindScript,
+				OraclePolicyMode:            campaign.OraclePolicyModeStrict,
+				OracleFormatMismatchPolicy:  campaign.OracleFormatMismatchFail,
 				FlowMode:                    campaign.FlowModeSequence,
 				TraceProfile:                campaign.TraceProfileNone,
 				ToolDriverKind:              campaign.ToolDriverShell,
@@ -636,7 +640,7 @@ func Build(version string) Contract {
 					Path:        "evaluation.evaluator.kind",
 					Type:        "string",
 					Required:    false,
-					Enum:        []string{campaign.EvaluatorKindScript},
+					Enum:        []string{campaign.EvaluatorKindScript, campaign.EvaluatorKindBuiltin},
 					Default:     campaign.EvaluatorKindScript,
 					Description: "Host-side evaluator kind for oracle mode.",
 				},
@@ -644,7 +648,41 @@ func Build(version string) Contract {
 					Path:        "evaluation.evaluator.command",
 					Type:        "string[]",
 					Required:    false,
-					Description: "Host-side evaluator argv invoked per attempt in exam mode.",
+					Description: "Host-side evaluator argv invoked per attempt in exam mode when evaluator.kind=script.",
+				},
+				{
+					Path:        "evaluation.oraclePolicy.mode",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.OraclePolicyModeStrict, campaign.OraclePolicyModeNormalized, campaign.OraclePolicyModeSemantic},
+					Default:     campaign.OraclePolicyModeStrict,
+					Description: "Campaign oracle grading mode for eq-style comparisons: strict|normalized|semantic.",
+				},
+				{
+					Path:        "evaluation.oraclePolicy.formatMismatch",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.OracleFormatMismatchFail, campaign.OracleFormatMismatchWarn, campaign.OracleFormatMismatchIgnore},
+					Default:     campaign.OracleFormatMismatchFail,
+					Description: "Campaign gate policy for format-only oracle mismatches.",
+				},
+				{
+					Path:        "timeouts.missionEnvelopeMs",
+					Type:        "integer",
+					Required:    false,
+					Description: "Optional watchdog envelope for each mission flow run; used for timeout/continue handling.",
+				},
+				{
+					Path:        "timeouts.watchdogHeartbeatMs",
+					Type:        "integer",
+					Required:    false,
+					Description: "Optional campaign watchdog heartbeat cadence while a mission flow run is in-flight.",
+				},
+				{
+					Path:        "timeouts.watchdogHardKillContinue",
+					Type:        "boolean",
+					Required:    false,
+					Description: "When true, mission envelope expiry marks flow infra_failed and continues the campaign.",
 				},
 				{
 					Path:        "pairGate.traceProfile",

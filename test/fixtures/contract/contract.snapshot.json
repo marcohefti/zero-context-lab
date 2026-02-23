@@ -914,6 +914,8 @@
       "oracleVisibility": "workspace",
       "evaluationMode": "none",
       "evaluatorKind": "script",
+      "oraclePolicyMode": "strict",
+      "oracleFormatMismatchPolicy": "fail",
       "flowMode": "sequence",
       "traceProfile": "none",
       "toolDriverKind": "shell",
@@ -1009,7 +1011,8 @@
         "type": "string",
         "required": false,
         "enum": [
-          "script"
+          "script",
+          "builtin_rules"
         ],
         "default": "script",
         "description": "Host-side evaluator kind for oracle mode."
@@ -1018,7 +1021,49 @@
         "path": "evaluation.evaluator.command",
         "type": "string[]",
         "required": false,
-        "description": "Host-side evaluator argv invoked per attempt in exam mode."
+        "description": "Host-side evaluator argv invoked per attempt in exam mode when evaluator.kind=script."
+      },
+      {
+        "path": "evaluation.oraclePolicy.mode",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "strict",
+          "normalized",
+          "semantic"
+        ],
+        "default": "strict",
+        "description": "Campaign oracle grading mode for eq-style comparisons: strict|normalized|semantic."
+      },
+      {
+        "path": "evaluation.oraclePolicy.formatMismatch",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "fail",
+          "warn",
+          "ignore"
+        ],
+        "default": "fail",
+        "description": "Campaign gate policy for format-only oracle mismatches."
+      },
+      {
+        "path": "timeouts.missionEnvelopeMs",
+        "type": "integer",
+        "required": false,
+        "description": "Optional watchdog envelope for each mission flow run; used for timeout/continue handling."
+      },
+      {
+        "path": "timeouts.watchdogHeartbeatMs",
+        "type": "integer",
+        "required": false,
+        "description": "Optional campaign watchdog heartbeat cadence while a mission flow run is in-flight."
+      },
+      {
+        "path": "timeouts.watchdogHardKillContinue",
+        "type": "boolean",
+        "required": false,
+        "description": "When true, mission envelope expiry marks flow infra_failed and continues the campaign."
       },
       {
         "path": "pairGate.traceProfile",

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/integrations/codex_app_server"
+	"github.com/marcohefti/zero-context-lab/internal/oracle"
 	"github.com/marcohefti/zero-context-lab/internal/runners"
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 	"github.com/marcohefti/zero-context-lab/internal/semantic"
@@ -55,27 +57,38 @@ type missionPromptArtifactV1 struct {
 const oracleVerdictFileName = "oracle.verdict.json"
 
 type oracleEvaluatorOutput struct {
-	OK          bool     `json:"ok"`
-	ReasonCodes []string `json:"reasonCodes,omitempty"`
-	Message     string   `json:"message,omitempty"`
+	OK                bool              `json:"ok"`
+	ReasonCodes       []string          `json:"reasonCodes,omitempty"`
+	Message           string            `json:"message,omitempty"`
+	Mismatches        []oracle.Mismatch `json:"mismatches,omitempty"`
+	PolicyDisposition string            `json:"policyDisposition,omitempty"` // fail|warn|ignore
+	Warnings          []string          `json:"warnings,omitempty"`
+	Expected          any               `json:"expected,omitempty"`
+	Actual            any               `json:"actual,omitempty"`
+	Details           any               `json:"details,omitempty"`
 }
 
 type oracleVerdictArtifact struct {
-	SchemaVersion int      `json:"schemaVersion"`
-	CampaignID    string   `json:"campaignId"`
-	FlowID        string   `json:"flowId"`
-	MissionID     string   `json:"missionId"`
-	AttemptID     string   `json:"attemptId"`
-	AttemptDir    string   `json:"attemptDir"`
-	OraclePath    string   `json:"oraclePath"`
-	EvaluatorKind string   `json:"evaluatorKind"`
-	EvaluatorCmd  []string `json:"evaluatorCommand"`
-	PromptMode    string   `json:"promptMode"`
-	OK            bool     `json:"ok"`
-	ReasonCodes   []string `json:"reasonCodes,omitempty"`
-	Message       string   `json:"message,omitempty"`
-	ExecutedAt    string   `json:"executedAt"`
+	SchemaVersion     int               `json:"schemaVersion"`
+	CampaignID        string            `json:"campaignId"`
+	FlowID            string            `json:"flowId"`
+	MissionID         string            `json:"missionId"`
+	AttemptID         string            `json:"attemptId"`
+	AttemptDir        string            `json:"attemptDir"`
+	OraclePath        string            `json:"oraclePath"`
+	EvaluatorKind     string            `json:"evaluatorKind"`
+	EvaluatorCmd      []string          `json:"evaluatorCommand"`
+	PromptMode        string            `json:"promptMode"`
+	OK                bool              `json:"ok"`
+	ReasonCodes       []string          `json:"reasonCodes,omitempty"`
+	Message           string            `json:"message,omitempty"`
+	Mismatches        []oracle.Mismatch `json:"mismatches,omitempty"`
+	PolicyDisposition string            `json:"policyDisposition,omitempty"`
+	Warnings          []string          `json:"warnings,omitempty"`
+	ExecutedAt        string            `json:"executedAt"`
 }
+
+var oracleExpectedGotRE = regexp.MustCompile(`^\s*([A-Za-z0-9_./-]+)\s+expected\s+(.+)\s+got\s+(.+)\s*$`)
 
 func (r Runner) runCampaign(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -166,6 +179,10 @@ func (r Runner) runCampaignLint(args []string) int {
 			"evaluator": map[string]any{
 				"kind":    parsed.Spec.Evaluation.Evaluator.Kind,
 				"command": parsed.Spec.Evaluation.Evaluator.Command,
+			},
+			"oraclePolicy": map[string]any{
+				"mode":           parsed.Spec.Evaluation.OraclePolicy.Mode,
+				"formatMismatch": parsed.Spec.Evaluation.OraclePolicy.FormatMismatch,
 			},
 		},
 		"pairGate": map[string]any{
@@ -974,8 +991,8 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		missionIndexes = parsed.MissionIndexes
 	}
 	stderrMu := &sync.Mutex{}
-	execAdapter, err := runners.NewCampaignExecutor(func(_ context.Context, flow campaign.FlowSpec, missionIndex int, missionID string) (campaign.FlowRunV1, error) {
-		fr, _, runErr := r.runCampaignFlowSuite(parsed, outRoot, flow, campaignSegment{MissionOffset: missionIndex, TotalMissions: 1}, stderrMu)
+	execAdapter, err := runners.NewCampaignExecutor(func(ctx context.Context, flow campaign.FlowSpec, missionIndex int, missionID string) (campaign.FlowRunV1, error) {
+		fr, _, runErr := r.runCampaignFlowSuite(ctx, parsed, outRoot, flow, campaignSegment{MissionOffset: missionIndex, TotalMissions: 1}, stderrMu)
 		if len(fr.Attempts) == 0 {
 			fr.Attempts = []campaign.AttemptStatusV1{{
 				MissionIndex: missionIndex,
@@ -1003,16 +1020,19 @@ func (r Runner) executeCampaign(parsed campaign.ParsedSpec, outRoot string, in c
 		r.evaluateCampaignGateForMission,
 		r.runCampaignHook,
 		campaign.EngineOptions{
-			OutRoot:              outRoot,
-			RunID:                runID,
-			Canary:               in.Canary,
-			ResumedFromRunID:     strings.TrimSpace(in.ResumedFromRunID),
-			MissionIndexes:       missionIndexes,
-			MissionOffset:        in.MissionOffset,
-			GlobalTimeoutMs:      parsed.Spec.Timeouts.CampaignGlobalTimeoutMs,
-			CleanupHookTimeoutMs: parsed.Spec.Timeouts.CleanupHookTimeoutMs,
-			LockWait:             750 * time.Millisecond,
-			Now:                  r.Now,
+			OutRoot:                  outRoot,
+			RunID:                    runID,
+			Canary:                   in.Canary,
+			ResumedFromRunID:         strings.TrimSpace(in.ResumedFromRunID),
+			MissionIndexes:           missionIndexes,
+			MissionOffset:            in.MissionOffset,
+			GlobalTimeoutMs:          parsed.Spec.Timeouts.CampaignGlobalTimeoutMs,
+			CleanupHookTimeoutMs:     parsed.Spec.Timeouts.CleanupHookTimeoutMs,
+			MissionEnvelopeMs:        parsed.Spec.Timeouts.MissionEnvelopeMs,
+			WatchdogHeartbeatMs:      parsed.Spec.Timeouts.WatchdogHeartbeatMs,
+			WatchdogHardKillContinue: parsed.Spec.Timeouts.WatchdogHardKillContinue,
+			LockWait:                 750 * time.Millisecond,
+			Now:                      r.Now,
 		},
 	)
 	if err != nil {
@@ -1210,11 +1230,10 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 			if oracleErr != nil {
 				gateErrors = append(gateErrors, campaign.ReasonOracleEvalError)
 				_ = oracleVerdict
-			} else if !oracleVerdict.OK {
-				if len(oracleVerdict.ReasonCodes) == 0 {
-					gateErrors = append(gateErrors, campaign.ReasonOracleEvalFailed)
-				} else {
-					gateErrors = append(gateErrors, oracleVerdict.ReasonCodes...)
+			} else {
+				oracleGateFailures := oracleFailureReasonCodes(parsed.Spec.Evaluation.OraclePolicy, oracleVerdict)
+				if len(oracleGateFailures) > 0 {
+					gateErrors = append(gateErrors, oracleGateFailures...)
 				}
 			}
 		}
@@ -1264,6 +1283,25 @@ func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID stri
 		out.Message = fmt.Sprintf("missing oracle path for mission %q", missionID)
 		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
 		return out, nil
+	}
+	if parsed.Spec.Evaluation.Evaluator.Kind == campaign.EvaluatorKindBuiltin {
+		verdict, err := r.evaluateBuiltinOracle(parsed, missionID, ar, oraclePath)
+		if err != nil {
+			out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+			out.Message = trimText(err.Error(), 1024)
+			_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+			return out, nil
+		}
+		verdict.PolicyDisposition = parsed.Spec.Evaluation.OraclePolicy.FormatMismatch
+		if !verdict.OK && oracle.AllMismatchesClass(verdict.Mismatches, oracle.MismatchFormat) && parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
+			verdict.Warnings = dedupeSortedStrings(append(verdict.Warnings, "format_only_oracle_mismatch"))
+		}
+		verdict.ReasonCodes = dedupeSortedStrings(verdict.ReasonCodes)
+		verdict.Warnings = dedupeSortedStrings(verdict.Warnings)
+		if _, err := r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, verdict); err != nil {
+			return verdict, err
+		}
+		return verdict, nil
 	}
 	cmdArgs := make([]string, 0, len(parsed.Spec.Evaluation.Evaluator.Command))
 	for _, part := range parsed.Spec.Evaluation.Evaluator.Command {
@@ -1322,6 +1360,11 @@ func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID stri
 	}
 	evaluatorOut.ReasonCodes = dedupeSortedStrings(evaluatorOut.ReasonCodes)
 	evaluatorOut.Message = trimText(strings.TrimSpace(evaluatorOut.Message), 1024)
+	evaluatorOut.PolicyDisposition = parsed.Spec.Evaluation.OraclePolicy.FormatMismatch
+	normalizeOracleEvaluatorOutput(&evaluatorOut, parsed.Spec.Evaluation.OraclePolicy.Mode)
+	if !evaluatorOut.OK && oracle.AllMismatchesClass(evaluatorOut.Mismatches, oracle.MismatchFormat) && parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
+		evaluatorOut.Warnings = dedupeSortedStrings(append(evaluatorOut.Warnings, "format_only_oracle_mismatch"))
+	}
 	if !evaluatorOut.OK && len(evaluatorOut.ReasonCodes) == 0 {
 		evaluatorOut.ReasonCodes = []string{campaign.ReasonOracleEvalFailed}
 	}
@@ -1329,6 +1372,144 @@ func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID stri
 		return evaluatorOut, err
 	}
 	return evaluatorOut, nil
+}
+
+func (r Runner) evaluateBuiltinOracle(parsed campaign.ParsedSpec, missionID string, ar *campaign.AttemptStatusV1, oraclePath string) (oracleEvaluatorOutput, error) {
+	out := oracleEvaluatorOutput{
+		OK:                false,
+		PolicyDisposition: parsed.Spec.Evaluation.OraclePolicy.FormatMismatch,
+	}
+	file, err := oracle.LoadFile(oraclePath)
+	if err != nil {
+		out.Message = "invalid oracle file"
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		return out, err
+	}
+	proof, err := loadOracleProofFromAttempt(ar.AttemptDir)
+	if err != nil {
+		out.Message = trimText(err.Error(), 1024)
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		return out, nil
+	}
+	verdict := oracle.EvaluateProof(file, proof, parsed.Spec.Evaluation.OraclePolicy.Mode)
+	out.OK = verdict.OK
+	out.Message = trimText(strings.TrimSpace(verdict.Message), 1024)
+	out.Mismatches = verdict.Mismatches
+	if verdict.OK {
+		out.ReasonCodes = nil
+		return out, nil
+	}
+	out.ReasonCodes = []string{campaign.ReasonOracleEvalFailed}
+	return out, nil
+}
+
+func loadOracleProofFromAttempt(attemptDir string) (map[string]any, error) {
+	raw, err := os.ReadFile(filepath.Join(strings.TrimSpace(attemptDir), "feedback.json"))
+	if err != nil {
+		return nil, err
+	}
+	var fb struct {
+		Result     string          `json:"result"`
+		ResultJSON json.RawMessage `json:"resultJson"`
+	}
+	if err := json.Unmarshal(raw, &fb); err != nil {
+		return nil, fmt.Errorf("feedback json is invalid")
+	}
+	if len(fb.ResultJSON) > 0 {
+		var proof map[string]any
+		if err := json.Unmarshal(fb.ResultJSON, &proof); err != nil {
+			return nil, fmt.Errorf("feedback.resultJson must be valid json object")
+		}
+		return proof, nil
+	}
+	trimmed := strings.TrimSpace(fb.Result)
+	if trimmed == "" {
+		return nil, fmt.Errorf("feedback.result is empty")
+	}
+	var proof map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &proof); err != nil {
+		return nil, fmt.Errorf("feedback.result must resolve to a JSON object")
+	}
+	return proof, nil
+}
+
+func normalizeOracleEvaluatorOutput(out *oracleEvaluatorOutput, policyMode string) {
+	if out == nil {
+		return
+	}
+	out.Message = trimText(strings.TrimSpace(out.Message), 1024)
+	out.ReasonCodes = dedupeSortedStrings(out.ReasonCodes)
+	out.Warnings = dedupeSortedStrings(out.Warnings)
+	if len(out.Mismatches) == 0 {
+		// Backward compatibility: legacy script evaluators emit a single message.
+		if mm := parseOracleMessageMismatch(out.Message); mm != nil {
+			out.Mismatches = []oracle.Mismatch{*mm}
+		} else if (out.Expected != nil || out.Actual != nil) && !out.OK {
+			field := "value"
+			mm := oracle.InferMismatch(field, oracle.OpEQ, out.Expected, out.Actual, oracle.PolicyModeStrict)
+			if mm != nil {
+				out.Mismatches = []oracle.Mismatch{*mm}
+			}
+		}
+	}
+}
+
+func parseOracleMessageMismatch(message string) *oracle.Mismatch {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return nil
+	}
+	m := oracleExpectedGotRE.FindStringSubmatch(trimmed)
+	if len(m) != 4 {
+		return nil
+	}
+	field := strings.TrimSpace(m[1])
+	expected := parseOracleMessageLiteral(m[2])
+	actual := parseOracleMessageLiteral(m[3])
+	mm := oracle.InferMismatch(field, oracle.OpEQ, expected, actual, oracle.PolicyModeStrict)
+	if mm == nil {
+		return nil
+	}
+	mm.Message = trimmed
+	return mm
+}
+
+func parseOracleMessageLiteral(raw string) any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		return decoded
+	}
+	if strings.HasPrefix(raw, "\"") && strings.HasSuffix(raw, "\"") {
+		if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+			return decoded
+		}
+	}
+	return strings.Trim(raw, "\"")
+}
+
+func oracleFailureReasonCodes(policy campaign.OraclePolicySpec, verdict oracleEvaluatorOutput) []string {
+	if verdict.OK {
+		return nil
+	}
+	reasonCodes := dedupeSortedStrings(verdict.ReasonCodes)
+	if len(reasonCodes) == 0 {
+		reasonCodes = []string{campaign.ReasonOracleEvalFailed}
+	}
+	if !oracle.AllMismatchesClass(verdict.Mismatches, oracle.MismatchFormat) {
+		return reasonCodes
+	}
+	switch strings.TrimSpace(strings.ToLower(policy.FormatMismatch)) {
+	case campaign.OracleFormatMismatchWarn:
+		return nil
+	case campaign.OracleFormatMismatchIgnore:
+		return nil
+	default:
+		return reasonCodes
+	}
 }
 
 func (r Runner) writeOracleVerdict(parsed campaign.ParsedSpec, flowID string, missionID string, ar *campaign.AttemptStatusV1, oraclePath string, out oracleEvaluatorOutput) (string, error) {
@@ -1340,20 +1521,23 @@ func (r Runner) writeOracleVerdict(parsed campaign.ParsedSpec, flowID string, mi
 		now = r.Now().UTC()
 	}
 	artifact := oracleVerdictArtifact{
-		SchemaVersion: 1,
-		CampaignID:    parsed.Spec.CampaignID,
-		FlowID:        flowID,
-		MissionID:     missionID,
-		AttemptID:     ar.AttemptID,
-		AttemptDir:    ar.AttemptDir,
-		OraclePath:    oraclePath,
-		EvaluatorKind: parsed.Spec.Evaluation.Evaluator.Kind,
-		EvaluatorCmd:  append([]string{}, parsed.Spec.Evaluation.Evaluator.Command...),
-		PromptMode:    parsed.Spec.PromptMode,
-		OK:            out.OK,
-		ReasonCodes:   dedupeSortedStrings(out.ReasonCodes),
-		Message:       trimText(strings.TrimSpace(out.Message), 1024),
-		ExecutedAt:    now.Format(time.RFC3339Nano),
+		SchemaVersion:     1,
+		CampaignID:        parsed.Spec.CampaignID,
+		FlowID:            flowID,
+		MissionID:         missionID,
+		AttemptID:         ar.AttemptID,
+		AttemptDir:        ar.AttemptDir,
+		OraclePath:        oraclePath,
+		EvaluatorKind:     parsed.Spec.Evaluation.Evaluator.Kind,
+		EvaluatorCmd:      append([]string{}, parsed.Spec.Evaluation.Evaluator.Command...),
+		PromptMode:        parsed.Spec.PromptMode,
+		OK:                out.OK,
+		ReasonCodes:       dedupeSortedStrings(out.ReasonCodes),
+		Message:           trimText(strings.TrimSpace(out.Message), 1024),
+		Mismatches:        out.Mismatches,
+		PolicyDisposition: strings.TrimSpace(strings.ToLower(out.PolicyDisposition)),
+		Warnings:          dedupeSortedStrings(out.Warnings),
+		ExecutedAt:        now.Format(time.RFC3339Nano),
 	}
 	path := filepath.Join(ar.AttemptDir, oracleVerdictFileName)
 	if err := store.WriteJSONAtomic(path, artifact); err != nil {
@@ -1362,7 +1546,7 @@ func (r Runner) writeOracleVerdict(parsed campaign.ParsedSpec, flowID string, mi
 	return path, nil
 }
 
-func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment, sharedStderrMu *sync.Mutex) (campaign.FlowRunV1, *suiteRunSummary, error) {
+func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec, seg campaignSegment, sharedStderrMu *sync.Mutex) (campaign.FlowRunV1, *suiteRunSummary, error) {
 	suiteFile, err := materializeCampaignFlowSuite(parsed, outRoot, flow)
 	if err != nil {
 		return campaign.FlowRunV1{}, nil, err
@@ -1475,7 +1659,7 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		Stdout:  &stdout,
 		Stderr:  io.MultiWriter(stderrTarget, &stderr),
 	}
-	exit := sub.runSuiteRunWithEnv(args, env)
+	exit, timedOut := runCampaignSuiteInvocation(ctx, sub, args, env, parsed.Spec.Timeouts.WatchdogHardKillContinue)
 
 	fr := campaign.FlowRunV1{
 		FlowID:      flow.FlowID,
@@ -1484,6 +1668,16 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		ExitCode:    exit,
 		OK:          exit == 0,
 		ErrorOutput: trimText(stderr.String(), 4096),
+	}
+	if timedOut {
+		fr.OK = false
+		fr.Errors = dedupeSortedStrings(append(fr.Errors, codeCampaignTimeoutGate))
+		fr.Attempts = []campaign.AttemptStatusV1{{
+			MissionIndex: seg.MissionOffset,
+			Status:       campaign.AttemptStatusInfraFailed,
+			Errors:       []string{codeCampaignTimeoutGate},
+		}}
+		return fr, nil, nil
 	}
 	if exit != 0 {
 		fr.Errors = append(fr.Errors, campaignFlowExitCode(exit))
@@ -1547,6 +1741,29 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		return fr, nil, fmt.Errorf("flow %s failed before emitting suite summary", flow.FlowID)
 	}
 	return fr, nil, nil
+}
+
+func runCampaignSuiteInvocation(ctx context.Context, sub Runner, args []string, env map[string]string, hardKillContinue bool) (int, bool) {
+	if ctx == nil {
+		return sub.runSuiteRunWithEnv(args, env), false
+	}
+	type result struct {
+		exit int
+	}
+	done := make(chan result, 1)
+	go func() {
+		done <- result{exit: sub.runSuiteRunWithEnv(args, env)}
+	}()
+	select {
+	case out := <-done:
+		return out.exit, false
+	case <-ctx.Done():
+		if hardKillContinue {
+			return 1, true
+		}
+		out := <-done
+		return out.exit, false
+	}
 }
 
 func materializeCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, flow campaign.FlowSpec) (string, error) {

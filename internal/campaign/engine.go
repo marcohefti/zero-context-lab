@@ -31,16 +31,19 @@ type GateEvaluator func(parsed ParsedSpec, missionIndex int, missionID string, m
 type HookExecutor func(ctx context.Context, command string) error
 
 type EngineOptions struct {
-	OutRoot              string
-	RunID                string
-	Canary               bool
-	ResumedFromRunID     string
-	MissionIndexes       []int
-	MissionOffset        int
-	GlobalTimeoutMs      int64
-	CleanupHookTimeoutMs int64
-	LockWait             time.Duration
-	Now                  func() time.Time
+	OutRoot                  string
+	RunID                    string
+	Canary                   bool
+	ResumedFromRunID         string
+	MissionIndexes           []int
+	MissionOffset            int
+	GlobalTimeoutMs          int64
+	CleanupHookTimeoutMs     int64
+	MissionEnvelopeMs        int64
+	WatchdogHeartbeatMs      int64
+	WatchdogHardKillContinue bool
+	LockWait                 time.Duration
+	Now                      func() time.Time
 }
 
 type EngineResult struct {
@@ -211,17 +214,79 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 		}
 
 		runFlow := func(flow FlowSpec) FlowRunV1 {
-			result, runErr := exec.RunMission(context.Background(), flow, missionIndex, mission.MissionID)
-			if runErr != nil {
-				result.FlowID = flow.FlowID
-				result.RunnerType = flow.Runner.Type
-				result.SuiteFile = flow.SuiteFile
-				result.OK = false
-				if len(result.Errors) == 0 {
-					result.Errors = []string{ReasonFlowFailed}
+			runCtx := context.Background()
+			cancel := func() {}
+			if opts.MissionEnvelopeMs > 0 {
+				runCtx, cancel = context.WithTimeout(runCtx, time.Duration(opts.MissionEnvelopeMs)*time.Millisecond)
+			}
+			defer cancel()
+
+			type runOutcome struct {
+				result FlowRunV1
+				err    error
+			}
+			done := make(chan runOutcome, 1)
+			go func() {
+				res, err := exec.RunMission(runCtx, flow, missionIndex, mission.MissionID)
+				done <- runOutcome{result: res, err: err}
+			}()
+
+			var heartbeat <-chan time.Time
+			var heartbeatTicker *time.Ticker
+			if opts.WatchdogHeartbeatMs > 0 {
+				heartbeatTicker = time.NewTicker(time.Duration(opts.WatchdogHeartbeatMs) * time.Millisecond)
+				heartbeat = heartbeatTicker.C
+			}
+			if heartbeatTicker != nil {
+				defer heartbeatTicker.Stop()
+			}
+
+			runCtxDone := runCtx.Done()
+			for {
+				select {
+				case out := <-done:
+					result := out.result
+					if out.err != nil {
+						result.FlowID = flow.FlowID
+						result.RunnerType = flow.Runner.Type
+						result.SuiteFile = flow.SuiteFile
+						result.OK = false
+						if len(result.Errors) == 0 {
+							result.Errors = []string{ReasonFlowFailed}
+						}
+					}
+					return result
+				case <-heartbeat:
+					_ = AppendProgress(progressPath, ProgressEventV1{
+						SchemaVersion: 1,
+						CampaignID:    parsed.Spec.CampaignID,
+						RunID:         state.RunID,
+						MissionIndex:  missionIndex,
+						MissionID:     mission.MissionID,
+						FlowID:        flow.FlowID,
+						Status:        "watchdog_heartbeat",
+						CreatedAt:     opts.Now().Format(time.RFC3339Nano),
+					})
+				case <-runCtxDone:
+					if !opts.WatchdogHardKillContinue || runCtx.Err() != context.DeadlineExceeded {
+						runCtxDone = nil
+						continue
+					}
+					return FlowRunV1{
+						FlowID:     flow.FlowID,
+						RunnerType: flow.Runner.Type,
+						SuiteFile:  flow.SuiteFile,
+						OK:         false,
+						Errors:     []string{codes.CampaignTimeoutGate},
+						Attempts: []AttemptStatusV1{{
+							MissionIndex: missionIndex,
+							MissionID:    mission.MissionID,
+							Status:       AttemptStatusInfraFailed,
+							Errors:       []string{codes.CampaignTimeoutGate},
+						}},
+					}
 				}
 			}
-			return result
 		}
 		missionRuns := make([]FlowRunV1, len(parsed.Spec.Flows))
 		if parsed.Spec.Execution.FlowMode == FlowModeParallel {

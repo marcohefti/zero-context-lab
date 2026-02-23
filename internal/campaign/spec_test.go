@@ -720,6 +720,99 @@ flows:
 	}
 }
 
+func TestParseSpecFile_ExamModeBuiltinEvaluatorWithoutCommand(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	oracleDir := filepath.Join(dir, "oracles-host")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Complete the task and return JSON proof."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.json"), []byte(`{"schemaVersion":1,"missionId":"m1","rules":[{"field":"ok","op":"eq","value":true}]}`), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-builtin
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles-host
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: builtin_rules
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if ps.Spec.Evaluation.Evaluator.Kind != EvaluatorKindBuiltin {
+		t.Fatalf("expected builtin evaluator, got %q", ps.Spec.Evaluation.Evaluator.Kind)
+	}
+	if ps.Spec.Evaluation.OraclePolicy.Mode != OraclePolicyModeStrict {
+		t.Fatalf("expected default oracle policy mode strict, got %q", ps.Spec.Evaluation.OraclePolicy.Mode)
+	}
+	if ps.Spec.Evaluation.OraclePolicy.FormatMismatch != OracleFormatMismatchFail {
+		t.Fatalf("expected default format mismatch policy fail, got %q", ps.Spec.Evaluation.OraclePolicy.FormatMismatch)
+	}
+}
+
+func TestParseSpecFile_InvalidOraclePolicyAndWatchdogFields(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-invalid-policy
+evaluation:
+  mode: oracle
+  oraclePolicy:
+    mode: invalid
+timeouts:
+  missionEnvelopeMs: -1
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil {
+		t.Fatalf("expected parse error")
+	}
+}
+
 func TestParseSpecFile_ExamModeRejectsPromptOracleLeak(t *testing.T) {
 	dir := t.TempDir()
 	promptDir := filepath.Join(dir, "prompts")

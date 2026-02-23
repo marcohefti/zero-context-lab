@@ -58,8 +58,16 @@
         "evaluator": {
           "type": "object",
           "properties": {
-            "kind": { "type": "string", "enum": ["script"] },
+            "kind": { "type": "string", "enum": ["script", "builtin_rules"] },
             "command": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "oraclePolicy": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["strict", "normalized", "semantic"] },
+            "formatMismatch": { "type": "string", "enum": ["fail", "warn", "ignore"] }
           },
           "additionalProperties": false
         }
@@ -123,6 +131,9 @@
         "campaignGlobalTimeoutMs": { "type": "integer", "minimum": 0 },
         "defaultAttemptTimeoutMs": { "type": "integer", "minimum": 0 },
         "cleanupHookTimeoutMs": { "type": "integer", "minimum": 0 },
+        "missionEnvelopeMs": { "type": "integer", "minimum": 0 },
+        "watchdogHeartbeatMs": { "type": "integer", "minimum": 0 },
+        "watchdogHardKillContinue": { "type": "boolean" },
         "timeoutStart": { "type": "string", "enum": ["attempt_start", "first_tool_call"] }
       },
       "additionalProperties": false

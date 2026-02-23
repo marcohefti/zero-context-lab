@@ -88,6 +88,15 @@ const (
 	EvaluationModeNone   = "none"
 	EvaluationModeOracle = "oracle"
 	EvaluatorKindScript  = "script"
+	EvaluatorKindBuiltin = "builtin_rules"
+
+	OraclePolicyModeStrict     = "strict"
+	OraclePolicyModeNormalized = "normalized"
+	OraclePolicyModeSemantic   = "semantic"
+
+	OracleFormatMismatchFail   = "fail"
+	OracleFormatMismatchWarn   = "warn"
+	OracleFormatMismatchIgnore = "ignore"
 
 	DefaultResultChannelPath   = "mission.result.json"
 	DefaultResultChannelMarker = "ZCL_RESULT_JSON:"
@@ -139,13 +148,24 @@ type OracleSourceSpec struct {
 }
 
 type EvaluationSpec struct {
-	Mode      string        `json:"mode,omitempty" yaml:"mode,omitempty"` // none|oracle
-	Evaluator EvaluatorSpec `json:"evaluator,omitempty" yaml:"evaluator,omitempty"`
+	Mode         string           `json:"mode,omitempty" yaml:"mode,omitempty"` // none|oracle
+	Evaluator    EvaluatorSpec    `json:"evaluator,omitempty" yaml:"evaluator,omitempty"`
+	OraclePolicy OraclePolicySpec `json:"oraclePolicy,omitempty" yaml:"oraclePolicy,omitempty"`
 }
 
 type EvaluatorSpec struct {
-	Kind    string   `json:"kind,omitempty" yaml:"kind,omitempty"` // script
+	Kind    string   `json:"kind,omitempty" yaml:"kind,omitempty"` // script|builtin_rules
 	Command []string `json:"command,omitempty" yaml:"command,omitempty"`
+}
+
+type OraclePolicySpec struct {
+	// Mode controls built-in evaluator behavior.
+	// strict: exact unless per-rule tolerant ops/normalizers are configured.
+	// normalized: eq rules accept normalization-equivalent values.
+	// semantic: normalized + phrase-equivalent eq rules.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"` // strict|normalized|semantic
+	// FormatMismatch controls gate disposition when mismatches are format-only.
+	FormatMismatch string `json:"formatMismatch,omitempty" yaml:"formatMismatch,omitempty"` // fail|warn|ignore
 }
 
 type MissionSelectionSpec struct {
@@ -186,10 +206,13 @@ type CleanupSpec struct {
 }
 
 type TimeoutsSpec struct {
-	CampaignGlobalTimeoutMs int64  `json:"campaignGlobalTimeoutMs,omitempty" yaml:"campaignGlobalTimeoutMs,omitempty"`
-	DefaultAttemptTimeoutMs int64  `json:"defaultAttemptTimeoutMs,omitempty" yaml:"defaultAttemptTimeoutMs,omitempty"`
-	CleanupHookTimeoutMs    int64  `json:"cleanupHookTimeoutMs,omitempty" yaml:"cleanupHookTimeoutMs,omitempty"`
-	TimeoutStart            string `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"`
+	CampaignGlobalTimeoutMs  int64  `json:"campaignGlobalTimeoutMs,omitempty" yaml:"campaignGlobalTimeoutMs,omitempty"`
+	DefaultAttemptTimeoutMs  int64  `json:"defaultAttemptTimeoutMs,omitempty" yaml:"defaultAttemptTimeoutMs,omitempty"`
+	CleanupHookTimeoutMs     int64  `json:"cleanupHookTimeoutMs,omitempty" yaml:"cleanupHookTimeoutMs,omitempty"`
+	MissionEnvelopeMs        int64  `json:"missionEnvelopeMs,omitempty" yaml:"missionEnvelopeMs,omitempty"`
+	WatchdogHeartbeatMs      int64  `json:"watchdogHeartbeatMs,omitempty" yaml:"watchdogHeartbeatMs,omitempty"`
+	WatchdogHardKillContinue bool   `json:"watchdogHardKillContinue,omitempty" yaml:"watchdogHardKillContinue,omitempty"`
+	TimeoutStart             string `json:"timeoutStart,omitempty" yaml:"timeoutStart,omitempty"`
 }
 
 type NoContextSpec struct {
@@ -489,9 +512,23 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		spec.Evaluation.Evaluator.Kind = EvaluatorKindScript
 	}
 	if spec.Evaluation.Evaluator.Kind != "" && !isValidEvaluatorKind(spec.Evaluation.Evaluator.Kind) {
-		return ParsedSpec{}, fmt.Errorf("invalid evaluation.evaluator.kind (expected %s)", EvaluatorKindScript)
+		return ParsedSpec{}, fmt.Errorf("invalid evaluation.evaluator.kind (expected %s|%s)", EvaluatorKindScript, EvaluatorKindBuiltin)
 	}
 	spec.Evaluation.Evaluator.Command = normalizeCommand(spec.Evaluation.Evaluator.Command)
+	spec.Evaluation.OraclePolicy.Mode = strings.ToLower(strings.TrimSpace(spec.Evaluation.OraclePolicy.Mode))
+	if spec.Evaluation.OraclePolicy.Mode == "" {
+		spec.Evaluation.OraclePolicy.Mode = OraclePolicyModeStrict
+	}
+	if !isValidOraclePolicyMode(spec.Evaluation.OraclePolicy.Mode) {
+		return ParsedSpec{}, fmt.Errorf("invalid evaluation.oraclePolicy.mode (expected %s|%s|%s)", OraclePolicyModeStrict, OraclePolicyModeNormalized, OraclePolicyModeSemantic)
+	}
+	spec.Evaluation.OraclePolicy.FormatMismatch = strings.ToLower(strings.TrimSpace(spec.Evaluation.OraclePolicy.FormatMismatch))
+	if spec.Evaluation.OraclePolicy.FormatMismatch == "" {
+		spec.Evaluation.OraclePolicy.FormatMismatch = OracleFormatMismatchFail
+	}
+	if !isValidOracleFormatMismatchPolicy(spec.Evaluation.OraclePolicy.FormatMismatch) {
+		return ParsedSpec{}, fmt.Errorf("invalid evaluation.oraclePolicy.formatMismatch (expected %s|%s|%s)", OracleFormatMismatchFail, OracleFormatMismatchWarn, OracleFormatMismatchIgnore)
+	}
 	spec.Semantic.RulesPath = strings.TrimSpace(spec.Semantic.RulesPath)
 	if spec.Semantic.RulesPath != "" && !filepath.IsAbs(spec.Semantic.RulesPath) {
 		spec.Semantic.RulesPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Semantic.RulesPath))
@@ -512,7 +549,11 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 	if spec.Output.ProgressJSONL != "" && spec.Output.ProgressJSONL != "-" && !filepath.IsAbs(spec.Output.ProgressJSONL) {
 		spec.Output.ProgressJSONL = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ProgressJSONL))
 	}
-	if spec.Timeouts.CampaignGlobalTimeoutMs < 0 || spec.Timeouts.DefaultAttemptTimeoutMs < 0 || spec.Timeouts.CleanupHookTimeoutMs < 0 {
+	if spec.Timeouts.CampaignGlobalTimeoutMs < 0 ||
+		spec.Timeouts.DefaultAttemptTimeoutMs < 0 ||
+		spec.Timeouts.CleanupHookTimeoutMs < 0 ||
+		spec.Timeouts.MissionEnvelopeMs < 0 ||
+		spec.Timeouts.WatchdogHeartbeatMs < 0 {
 		return ParsedSpec{}, fmt.Errorf("timeouts fields must be >= 0")
 	}
 	if strings.TrimSpace(spec.Timeouts.TimeoutStart) != "" && !schema.IsValidTimeoutStartV1(spec.Timeouts.TimeoutStart) {
@@ -614,13 +655,23 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 				},
 			}
 		}
-		if spec.Evaluation.Evaluator.Kind != EvaluatorKindScript || len(spec.Evaluation.Evaluator.Command) == 0 {
+		if spec.Evaluation.Evaluator.Kind == "" {
+			return ParsedSpec{}, &OraclePolicyViolationError{
+				Code: ReasonOracleEvaluator,
+				Violation: OraclePolicyViolation{
+					Field:       "evaluation.evaluator.kind",
+					PromptMode:  spec.PromptMode,
+					Description: "promptMode=exam requires evaluation.evaluator.kind",
+				},
+			}
+		}
+		if spec.Evaluation.Evaluator.Kind == EvaluatorKindScript && len(spec.Evaluation.Evaluator.Command) == 0 {
 			return ParsedSpec{}, &OraclePolicyViolationError{
 				Code: ReasonOracleEvaluator,
 				Violation: OraclePolicyViolation{
 					Field:       "evaluation.evaluator.command",
 					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires evaluation.evaluator.kind=script and non-empty evaluation.evaluator.command",
+					Description: "promptMode=exam with evaluation.evaluator.kind=script requires non-empty evaluation.evaluator.command",
 				},
 			}
 		}
@@ -1603,7 +1654,25 @@ func isValidEvaluationMode(v string) bool {
 
 func isValidEvaluatorKind(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
-	case EvaluatorKindScript:
+	case EvaluatorKindScript, EvaluatorKindBuiltin:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidOraclePolicyMode(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case OraclePolicyModeStrict, OraclePolicyModeNormalized, OraclePolicyModeSemantic:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidOracleFormatMismatchPolicy(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case OracleFormatMismatchFail, OracleFormatMismatchWarn, OracleFormatMismatchIgnore:
 		return true
 	default:
 		return false

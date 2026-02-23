@@ -479,6 +479,19 @@ Example:
   "ok": false,
   "reasonCodes": ["ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED"],
   "message": "proof/title did not match oracle",
+  "mismatches": [
+    {
+      "field": "blogUrl",
+      "op": "eq",
+      "mismatchClass": "format",
+      "expected": "https://blog.heftiweb.ch",
+      "actual": "https://blog.heftiweb.ch/",
+      "normalizedExpected": "https://blog.heftiweb.ch",
+      "normalizedActual": "https://blog.heftiweb.ch"
+    }
+  ],
+  "policyDisposition": "warn",
+  "warnings": ["format_only_oracle_mismatch"],
   "executedAt": "2026-02-22T12:00:22.123456789Z"
 }
 ```
@@ -541,14 +554,16 @@ Core enforced fields:
   - `missionSource.selection` (`all|mission_id|index|range`)
 - `evaluation`:
   - `mode`: `none|oracle`
-  - `evaluator.kind`: `script`
-  - `evaluator.command`: argv (required in exam mode)
+  - `evaluator.kind`: `script|builtin_rules`
+  - `evaluator.command`: argv (required when `evaluator.kind=script` in exam mode)
+  - `oraclePolicy.mode`: `strict|normalized|semantic`
+  - `oraclePolicy.formatMismatch`: `fail|warn|ignore`
 - `execution.flowMode` (`sequence|parallel`)
 - `pairGate` (`enabled`, `stopOnFirstMissionFailure`, `traceProfile`)
 - `flowGate` alias of `pairGate` (for N-flow semantics; if both are set they must match)
 - `semantic` (`enabled`, `rulesPath`)
 - `cleanup` (`beforeMission`, `afterMission`, `onFailure`)
-- `timeouts` (`campaignGlobalTimeoutMs`, `defaultAttemptTimeoutMs`, `cleanupHookTimeoutMs`, `timeoutStart`)
+- `timeouts` (`campaignGlobalTimeoutMs`, `defaultAttemptTimeoutMs`, `cleanupHookTimeoutMs`, `missionEnvelopeMs`, `watchdogHeartbeatMs`, `watchdogHardKillContinue`, `timeoutStart`)
 - `invalidRunPolicy` (`statuses`, `publishRequiresValid`, `forceFlag`)
 - flow prompt controls:
   - `flows[].promptSource.path` (per-flow mission-pack prompt source override when `suiteFile` is omitted)
@@ -577,7 +592,8 @@ Mission-only guardrails:
 
 Exam-mode guardrails:
 - `promptMode: exam` requires split mission architecture (`missionSource.oracleSource.path`) and prompt sources via campaign-level `missionSource.promptSource.path` or per-flow `flows[].promptSource.path`; `missionSource.path` is rejected.
-- `promptMode: exam` requires `evaluation.mode=oracle`, `evaluation.evaluator.kind=script`, and non-empty `evaluation.evaluator.command`; missing/invalid config returns `ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED`.
+- `promptMode: exam` requires `evaluation.mode=oracle` and evaluator config: `evaluation.evaluator.kind=script` with non-empty `evaluation.evaluator.command`, or `evaluation.evaluator.kind=builtin_rules`; missing/invalid config returns `ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED`.
+- `evaluation.oraclePolicy.formatMismatch=warn|ignore` allows format-only oracle mismatches to be non-gating while preserving mismatch evidence in `oracle.verdict.json`.
 - `promptMode: exam` enforces prompt contamination checks against oracle-leak patterns; violations return `ZCL_E_CAMPAIGN_EXAM_PROMPT_VIOLATION`.
 - `promptMode: exam` with `missionSource.oracleSource.visibility=host_only` rejects oracle paths inside the detected agent-readable workspace root and returns `ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION`.
 - campaign gate writes `oracle.verdict.json` per attempt and merges oracle evaluator reason codes into mission gate validity.

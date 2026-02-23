@@ -1654,6 +1654,110 @@ flows:
 	}
 }
 
+func TestCampaignRun_ExamModeFormatOnlyMismatchCanWarnNonGating(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	promptDir := filepath.Join(specDir, "prompts")
+	oracleDir := filepath.Join(specDir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve the task and return proof JSON."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("expected"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-format-warn
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+    visibility: workspace
+evaluation:
+  mode: oracle
+  oraclePolicy:
+    mode: normalized
+    formatMismatch: warn
+  evaluator:
+    kind: script
+    command: ["`+os.Args[0]+`", "-test.run=TestHelperCampaignOracleEvaluator$", "--", "case=fail_format"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	t.Setenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 20, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0 for format-only warn, got %d stderr=%q", code, stderr.String())
+	}
+	var st struct {
+		Status   string `json:"status"`
+		FlowRuns []struct {
+			Attempts []struct {
+				AttemptDir string `json:"attemptDir"`
+			} `json:"attempts"`
+		} `json:"flowRuns"`
+		ReasonCodes []string `json:"reasonCodes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &st); err != nil {
+		t.Fatalf("unmarshal run json: %v stdout=%q", err, stdout.String())
+	}
+	if st.Status != "valid" {
+		t.Fatalf("expected valid status for non-gating format mismatch, got %+v", st)
+	}
+	attemptDir := st.FlowRuns[0].Attempts[0].AttemptDir
+	verdictRaw, err := os.ReadFile(filepath.Join(attemptDir, "oracle.verdict.json"))
+	if err != nil {
+		t.Fatalf("read oracle verdict artifact: %v", err)
+	}
+	var verdict struct {
+		OK                bool   `json:"ok"`
+		PolicyDisposition string `json:"policyDisposition"`
+		Mismatches        []struct {
+			MismatchClass string `json:"mismatchClass"`
+		} `json:"mismatches"`
+	}
+	if err := json.Unmarshal(verdictRaw, &verdict); err != nil {
+		t.Fatalf("unmarshal oracle verdict: %v", err)
+	}
+	if verdict.OK {
+		t.Fatalf("expected evaluator raw failure preserved")
+	}
+	if verdict.PolicyDisposition != "warn" {
+		t.Fatalf("expected warn policy disposition, got %+v", verdict)
+	}
+	if len(verdict.Mismatches) == 0 || verdict.Mismatches[0].MismatchClass != "format" {
+		t.Fatalf("expected format mismatch details, got %+v", verdict)
+	}
+}
+
 func TestHelperCampaignOracleEvaluator(t *testing.T) {
 	if os.Getenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL") != "1" {
 		return
@@ -1675,6 +1779,9 @@ func TestHelperCampaignOracleEvaluator(t *testing.T) {
 	switch kind {
 	case "fail":
 		_, _ = os.Stdout.WriteString(`{"ok":false,"reasonCodes":["ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED"],"message":"oracle mismatch"}` + "\n")
+		os.Exit(0)
+	case "fail_format":
+		_, _ = os.Stdout.WriteString(`{"ok":false,"reasonCodes":["ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED"],"message":"blogUrl expected \"https://blog.heftiweb.ch\" got \"https://blog.heftiweb.ch/\""}` + "\n")
 		os.Exit(0)
 	case "error":
 		os.Exit(9)
