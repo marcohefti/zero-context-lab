@@ -840,6 +840,12 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		env["ZCL_SHIM_ZCL_PATH"] = opts.ZCLExe
 	}
 	if opts.NativeMode {
+		if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts); err != nil {
+			harnessErr = true
+			ar.RunnerErrorCode = codeIO
+			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+			return ar, harnessErr
+		}
 		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, &ar, errWriter)
 		ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
 		runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
@@ -878,6 +884,12 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			// Prepend to PATH so the agent can type the tool name and still be traced.
 			env["PATH"] = shimBinDir + ":" + os.Getenv("PATH")
 		}
+	}
+	if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts); err != nil {
+		harnessErr = true
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return ar, harnessErr
 	}
 
 	// Runner IO capture buffers (tail) + paths.
@@ -1047,6 +1059,102 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func writeAttemptRuntimeEnvArtifact(now time.Time, pm planner.PlannedMission, explicitEnv map[string]string, opts suiteRunExecOpts) error {
+	outDir := strings.TrimSpace(pm.OutDirAbs)
+	if outDir == "" {
+		return fmt.Errorf("missing attempt out dir for runtime env artifact")
+	}
+	envPolicy := native.DefaultEnvPolicy()
+	explicit := copyStringMap(explicitEnv)
+	explicit = envPolicy.RedactForLog(explicit)
+
+	merged := mergeEnvironMap(os.Environ(), explicitEnv)
+	effective := merged
+	var blocked []string
+	if opts.NativeMode {
+		allowed, blockedKeys := envPolicy.Filter(merged)
+		effective = allowed
+		blocked = blockedKeys
+	}
+
+	promptRaw := strings.TrimSpace(pm.Prompt)
+	sum := sha256.Sum256([]byte(promptRaw))
+	promptSourceKind := strings.TrimSpace(explicitEnv["ZCL_PROMPT_SOURCE_KIND"])
+	if promptSourceKind == "" {
+		promptSourceKind = "suite_prompt"
+	}
+	artifact := schema.AttemptRuntimeEnvJSONV1{
+		SchemaVersion: schema.ArtifactSchemaV1,
+		RunID:         strings.TrimSpace(explicitEnv["ZCL_RUN_ID"]),
+		SuiteID:       strings.TrimSpace(explicitEnv["ZCL_SUITE_ID"]),
+		MissionID:     strings.TrimSpace(explicitEnv["ZCL_MISSION_ID"]),
+		AttemptID:     strings.TrimSpace(explicitEnv["ZCL_ATTEMPT_ID"]),
+		AgentID:       strings.TrimSpace(explicitEnv["ZCL_AGENT_ID"]),
+		CreatedAt:     now.UTC().Format(time.RFC3339Nano),
+		Runtime: schema.AttemptRuntimeContextV1{
+			IsolationModel: strings.TrimSpace(opts.IsolationModel),
+			ToolDriverKind: strings.TrimSpace(explicitEnv["ZCL_TOOL_DRIVER_KIND"]),
+			RuntimeID:      string(opts.NativeSelection.Selected),
+			NativeMode:     opts.NativeMode,
+		},
+		Prompt: schema.AttemptPromptMetadataV1{
+			SourceKind:   promptSourceKind,
+			SourcePath:   strings.TrimSpace(explicitEnv["ZCL_PROMPT_SOURCE_PATH"]),
+			TemplatePath: strings.TrimSpace(explicitEnv["ZCL_PROMPT_TEMPLATE_PATH"]),
+			SHA256:       hex.EncodeToString(sum[:]),
+			Bytes:        int64(len(pm.Prompt)),
+		},
+		Env: schema.AttemptRuntimeEnvironmentV1{
+			Explicit:      explicit,
+			EffectiveKeys: sortedEnvKeys(effective),
+			BlockedKeys:   append([]string(nil), blocked...),
+		},
+	}
+	return store.WriteJSONAtomic(filepath.Join(outDir, schema.AttemptRuntimeEnvFileNameV1), artifact)
+}
+
+func mergeEnvironMap(base []string, overrides map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range base {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			continue
+		}
+		out[key] = parts[1]
+	}
+	for k, v := range overrides {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		out[key] = v
+	}
+	return out
+}
+
+func sortedEnvKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
 }
 
 func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {

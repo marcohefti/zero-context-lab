@@ -57,6 +57,8 @@ const (
 	CampaignTraceProfileRequiredEventFamily = "ZCL_E_CAMPAIGN_TRACE_PROFILE_REQUIRED_EVENT_FAMILY"
 	CampaignTraceProfileMCPRequired         = "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED"
 	CampaignTraceProfileBootstrapOnly       = "ZCL_E_CAMPAIGN_TRACE_PROFILE_BOOTSTRAP_ONLY"
+	CampaignToolPolicyViolation             = "ZCL_E_CAMPAIGN_TOOL_POLICY_VIOLATION"
+	CampaignToolPolicyInvalid               = "ZCL_E_CAMPAIGN_TOOL_POLICY_INVALID"
 
 	Shim = "ZCL_E_SHIM"
 

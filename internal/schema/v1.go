@@ -114,12 +114,13 @@ type AttemptReportJSONV1 struct {
 }
 
 type AttemptArtifactsV1 struct {
-	AttemptJSON  string `json:"attemptJson"`
-	TraceJSONL   string `json:"toolCallsJsonl"`
-	FeedbackJSON string `json:"feedbackJson"`
-	AttemptEnvSH string `json:"attemptEnvSh,omitempty"`
-	NotesJSONL   string `json:"notesJsonl,omitempty"`
-	PromptTXT    string `json:"promptTxt,omitempty"`
+	AttemptJSON           string `json:"attemptJson"`
+	TraceJSONL            string `json:"toolCallsJsonl"`
+	FeedbackJSON          string `json:"feedbackJson"`
+	AttemptEnvSH          string `json:"attemptEnvSh,omitempty"`
+	AttemptRuntimeEnvJSON string `json:"attemptRuntimeEnvJson,omitempty"`
+	NotesJSONL            string `json:"notesJsonl,omitempty"`
+	PromptTXT             string `json:"promptTxt,omitempty"`
 	// Runner* are produced by suite orchestration when runner IO capture is enabled.
 	RunnerCommandTXT string `json:"runnerCommandTxt,omitempty"`
 	RunnerStdoutLOG  string `json:"runnerStdoutLog,omitempty"`

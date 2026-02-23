@@ -570,6 +570,63 @@ flows:
 	}
 }
 
+func TestCampaignLint_ToolPolicyConfigViolationStructured(t *testing.T) {
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-lint-tool-policy",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-lint-tool-policy
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    toolPolicy:
+      allow:
+        - {}
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 18, 7, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign lint expected 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK        bool   `json:"ok"`
+		Code      string `json:"code"`
+		Violation struct {
+			FlowID      string `json:"flowId"`
+			Description string `json:"description"`
+		} `json:"violation"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign lint output: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK || out.Code != "ZCL_E_CAMPAIGN_TOOL_POLICY_INVALID" {
+		t.Fatalf("unexpected campaign lint toolPolicy output: %+v", out)
+	}
+	if out.Violation.FlowID != "flow-a" || !strings.Contains(out.Violation.Description, "namespace and/or prefix") {
+		t.Fatalf("unexpected toolPolicy violation payload: %+v", out.Violation)
+	}
+}
+
 func TestCampaignLint_ExecutionModeAdapterScript(t *testing.T) {
 	specDir := t.TempDir()
 	suitePath := filepath.Join(specDir, "suite.json")
@@ -1013,6 +1070,116 @@ flows:
 	}
 }
 
+func TestCampaignRun_RuntimeEnvPromptMetadataPerFlow(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	missionDefault := filepath.Join(specDir, "missions-default")
+	missionFlow := filepath.Join(specDir, "missions-flow")
+	for _, p := range []string{missionDefault, missionFlow} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(missionDefault, "m1.md"), []byte("default prompt"), 0o644); err != nil {
+		t.Fatalf("write default prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(missionFlow, "m1.md"), []byte("flow prompt"), 0o644); err != nil {
+		t.Fatalf("write flow prompt: %v", err)
+	}
+	templatePath := filepath.Join(specDir, "prompt-template.txt")
+	if err := os.WriteFile(templatePath, []byte("flow={{flowId}} prompt={{prompt}}"), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-runtime-env-prompt-meta
+missionSource:
+  path: missions-default
+pairGate:
+  enabled: true
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-a
+    promptSource:
+      path: missions-flow
+    promptTemplate:
+      path: prompt-template.txt
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 15, 20, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 0 {
+		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-runtime-env-prompt-meta", "campaign.run.state.json"))
+	if err != nil {
+		t.Fatalf("read campaign state: %v", err)
+	}
+	var st struct {
+		Status   string `json:"status"`
+		FlowRuns []struct {
+			FlowID   string `json:"flowId"`
+			Attempts []struct {
+				AttemptDir string `json:"attemptDir"`
+			} `json:"attempts"`
+		} `json:"flowRuns"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal campaign state: %v", err)
+	}
+	if st.Status != "valid" || len(st.FlowRuns) != 1 || len(st.FlowRuns[0].Attempts) != 1 {
+		t.Fatalf("unexpected campaign state: %+v", st)
+	}
+	attemptDir := st.FlowRuns[0].Attempts[0].AttemptDir
+	if strings.TrimSpace(attemptDir) == "" {
+		t.Fatalf("expected attemptDir in campaign state")
+	}
+	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
+	if err != nil {
+		t.Fatalf("read attempt.runtime.env.json: %v", err)
+	}
+	var runtimeEnv struct {
+		Prompt struct {
+			SourceKind   string `json:"sourceKind"`
+			SourcePath   string `json:"sourcePath"`
+			TemplatePath string `json:"templatePath"`
+		} `json:"prompt"`
+		Env struct {
+			Explicit map[string]string `json:"explicit"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+	}
+	if runtimeEnv.Prompt.SourceKind != "flow_prompt_template" {
+		t.Fatalf("unexpected prompt source kind: %+v", runtimeEnv.Prompt)
+	}
+	if !strings.HasSuffix(runtimeEnv.Prompt.SourcePath, filepath.Join("missions-flow")) {
+		t.Fatalf("unexpected prompt source path: %+v", runtimeEnv.Prompt)
+	}
+	if !strings.HasSuffix(runtimeEnv.Prompt.TemplatePath, filepath.Join("prompt-template.txt")) {
+		t.Fatalf("unexpected prompt template path: %+v", runtimeEnv.Prompt)
+	}
+	if runtimeEnv.Env.Explicit["ZCL_FLOW_ID"] != "flow-a" {
+		t.Fatalf("expected ZCL_FLOW_ID in runtime env explicit payload, got %+v", runtimeEnv.Env.Explicit)
+	}
+}
+
 func TestCampaignRun_TraceProfileMCPRequiredFails(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()
@@ -1071,6 +1238,72 @@ flows:
 	}
 	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_TRACE_PROFILE_MCP_REQUIRED") {
 		t.Fatalf("expected mcp trace profile gate reason, got %+v", st.MissionGates[0].Reasons)
+	}
+}
+
+func TestCampaignRun_ToolPolicyViolationFailsWithoutPairGate(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-tool-policy-hard",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-tool-policy-hard
+pairGate:
+  enabled: false
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    toolPolicy:
+      allow:
+        - namespace: mcp
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 16, 5, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("expected invalid campaign exit 2, got %d stderr=%q", code, stderr.String())
+	}
+	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-tool-policy-hard", "campaign.run.state.json"))
+	if err != nil {
+		t.Fatalf("read campaign state: %v", err)
+	}
+	var st struct {
+		Status       string `json:"status"`
+		MissionGates []struct {
+			Reasons []string `json:"reasons"`
+		} `json:"missionGates"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal campaign state: %v", err)
+	}
+	if st.Status != "invalid" || len(st.MissionGates) == 0 {
+		t.Fatalf("unexpected campaign state: %+v", st)
+	}
+	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_TOOL_POLICY_VIOLATION") {
+		t.Fatalf("expected tool policy gate reason, got %+v", st.MissionGates[0].Reasons)
 	}
 }
 

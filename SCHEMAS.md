@@ -198,6 +198,52 @@ Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.env.sh`
 
 Shell export file containing canonical attempt `ZCL_*` env for sourcing.
 
+## `attempt.runtime.env.json` (optional; auto-written)
+
+Path: `.zcl/runs/<runId>/attempts/<attemptId>/attempt.runtime.env.json`
+
+Purpose:
+- durable postmortem snapshot of runtime-effective env visibility and prompt provenance
+- written by `zcl suite run` for both native and process execution paths
+
+Shape (v1):
+```json
+{
+  "schemaVersion": 1,
+  "runId": "20260215-180012Z-09c5a6",
+  "suiteId": "heftiweb-smoke",
+  "missionId": "latest-blog-title",
+  "attemptId": "001-latest-blog-title-r1",
+  "createdAt": "2026-02-15T18:00:14.123456789Z",
+  "runtime": {
+    "isolationModel": "process_runner",
+    "toolDriverKind": "shell",
+    "runtimeId": "",
+    "nativeMode": false
+  },
+  "prompt": {
+    "sourceKind": "suite_prompt",
+    "sourcePath": "/abs/path/to/suite.json",
+    "templatePath": "/abs/path/to/template.txt",
+    "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "bytes": 123
+  },
+  "env": {
+    "explicit": {
+      "ZCL_ATTEMPT_ID": "001-latest-blog-title-r1"
+    },
+    "effectiveKeys": ["HOME", "PATH", "ZCL_ATTEMPT_ID"],
+    "blockedKeys": []
+  }
+}
+```
+
+Notes:
+- `env.explicit` values are redacted with native env redaction policy.
+- `env.effectiveKeys` is key-only visibility after merge/filter (no values).
+- `env.blockedKeys` is populated for native runtime policy filtering.
+- `prompt.sourceKind` is `suite_prompt` for plain suite runs; campaign runs include flow-aware kinds such as `flow_prompt_source` and `flow_prompt_template`.
+
 ## `tool.calls.jsonl` trace events (v1)
 
 Path: `.zcl/runs/<runId>/attempts/<attemptId>/tool.calls.jsonl`
@@ -340,6 +386,7 @@ Required fields (metrics fields may be zero when computed from partial evidence 
     "toolCallsJsonl": "tool.calls.jsonl",
     "feedbackJson": "feedback.json",
     "attemptEnvSh": "attempt.env.sh",
+    "attemptRuntimeEnvJson": "attempt.runtime.env.json",
     "notesJsonl": "notes.jsonl",
     "promptTxt": "prompt.txt",
     "runnerCommandTxt": "runner.command.txt",
@@ -498,10 +545,18 @@ Core enforced fields:
   - `evaluator.command`: argv (required in exam mode)
 - `execution.flowMode` (`sequence|parallel`)
 - `pairGate` (`enabled`, `stopOnFirstMissionFailure`, `traceProfile`)
+- `flowGate` alias of `pairGate` (for N-flow semantics; if both are set they must match)
 - `semantic` (`enabled`, `rulesPath`)
 - `cleanup` (`beforeMission`, `afterMission`, `onFailure`)
 - `timeouts` (`campaignGlobalTimeoutMs`, `defaultAttemptTimeoutMs`, `cleanupHookTimeoutMs`, `timeoutStart`)
 - `invalidRunPolicy` (`statuses`, `publishRequiresValid`, `forceFlag`)
+- flow prompt controls:
+  - `flows[].promptSource.path` (per-flow mission-pack prompt source override when `suiteFile` is omitted)
+  - `flows[].promptTemplate.path` (flow-level prompt template materialized at campaign parse/runtime)
+  - `flows[].promptTemplate.allowRunnerEnvKeys` (allowlisted `runner.env` keys exposed as `{{runnerEnv.KEY}}`)
+- flow tool isolation policy:
+  - `flows[].toolPolicy.allow[]|deny[]` with `namespace` and/or `prefix`
+  - `flows[].toolPolicy.aliases` for deterministic prefix alias expansion
 - `flows[].runner`:
   - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent|codex_app_server`
   - `command` (required except `codex_app_server`), `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
@@ -521,11 +576,15 @@ Mission-only guardrails:
 - `flows[].runner.finalization.minResultTurn` can enforce 3-turn workflows by requiring mission result payload field `"turn"` to be >= configured value.
 
 Exam-mode guardrails:
-- `promptMode: exam` requires split mission architecture (`missionSource.promptSource.path` + `missionSource.oracleSource.path`) and rejects `missionSource.path`.
+- `promptMode: exam` requires split mission architecture (`missionSource.oracleSource.path`) and prompt sources via campaign-level `missionSource.promptSource.path` or per-flow `flows[].promptSource.path`; `missionSource.path` is rejected.
 - `promptMode: exam` requires `evaluation.mode=oracle`, `evaluation.evaluator.kind=script`, and non-empty `evaluation.evaluator.command`; missing/invalid config returns `ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED`.
 - `promptMode: exam` enforces prompt contamination checks against oracle-leak patterns; violations return `ZCL_E_CAMPAIGN_EXAM_PROMPT_VIOLATION`.
 - `promptMode: exam` with `missionSource.oracleSource.visibility=host_only` rejects oracle paths inside the detected agent-readable workspace root and returns `ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION`.
 - campaign gate writes `oracle.verdict.json` per attempt and merges oracle evaluator reason codes into mission gate validity.
+
+Tool-policy guardrails:
+- `flows[].toolPolicy` is enforced from `tool.calls.jsonl` with typed violation code `ZCL_E_CAMPAIGN_TOOL_POLICY_VIOLATION`.
+- invalid tool policy config fails lint/parse with `ZCL_E_CAMPAIGN_TOOL_POLICY_INVALID`.
 
 Contract discoverability:
 - `zcl contract --json` includes `campaignSchema` (campaign fields) and `runtimeSchema` (strategy IDs, capabilities, health metrics, defaults).

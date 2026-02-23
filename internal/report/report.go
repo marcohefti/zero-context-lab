@@ -115,6 +115,9 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 	if _, err := os.Stat(attemptEnvPath); err == nil {
 		artifacts.AttemptEnvSH = schema.AttemptEnvShFileNameV1
 	}
+	if _, err := os.Stat(filepath.Join(attemptDir, schema.AttemptRuntimeEnvFileNameV1)); err == nil {
+		artifacts.AttemptRuntimeEnvJSON = schema.AttemptRuntimeEnvFileNameV1
+	}
 	if _, err := os.Stat(runnerCmdPath); err == nil {
 		artifacts.RunnerCommandTXT = "runner.command.txt"
 	}

@@ -240,6 +240,26 @@
       "requiredFields": []
     },
     {
+      "id": "attempt.runtime.env.json",
+      "kind": "json",
+      "schemaVersions": [
+        1
+      ],
+      "required": false,
+      "pathPattern": ".zcl/runs/<runId>/attempts/<attemptId>/attempt.runtime.env.json",
+      "requiredFields": [
+        "schemaVersion",
+        "runId",
+        "suiteId",
+        "missionId",
+        "attemptId",
+        "createdAt",
+        "runtime",
+        "prompt",
+        "env"
+      ]
+    },
+    {
       "id": "tool.calls.jsonl",
       "kind": "jsonl",
       "schemaVersions": [
@@ -806,6 +826,16 @@
       "retryable": false
     },
     {
+      "code": "ZCL_E_CAMPAIGN_TOOL_POLICY_VIOLATION",
+      "summary": "Campaign flow tool policy gate detected disallowed tool namespace/prefix usage in trace evidence.",
+      "retryable": false
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_TOOL_POLICY_INVALID",
+      "summary": "Campaign flow tool policy configuration is invalid.",
+      "retryable": false
+    },
+    {
       "code": "ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION",
       "summary": "Campaign oracleSource host_only visibility policy violation.",
       "retryable": false
@@ -906,6 +936,8 @@
       "ZCL_E_CAMPAIGN_ORACLE_VISIBILITY_VIOLATION",
       "ZCL_E_CAMPAIGN_ORACLE_EVALUATOR_REQUIRED",
       "ZCL_E_CAMPAIGN_TOOL_DRIVER_SHIM_REQUIRED",
+      "ZCL_E_CAMPAIGN_TOOL_POLICY_VIOLATION",
+      "ZCL_E_CAMPAIGN_TOOL_POLICY_INVALID",
       "ZCL_E_CAMPAIGN_GATE_FAILED",
       "ZCL_E_CAMPAIGN_FIRST_MISSION_GATE_FAILED",
       "ZCL_E_CAMPAIGN_SEMANTIC_FAILED"
@@ -999,6 +1031,42 @@
         ],
         "default": "none",
         "description": "Built-in traceability gate profile applied per attempt in pair-gate evaluation."
+      },
+      {
+        "path": "flowGate.traceProfile",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "none",
+          "strict_browser_comparison",
+          "mcp_required"
+        ],
+        "default": "none",
+        "description": "Alias of pairGate for multi-flow campaign semantics (must match pairGate when both are set)."
+      },
+      {
+        "path": "flows[].promptSource.path",
+        "type": "string",
+        "required": false,
+        "description": "Per-flow mission prompt source override when suiteFile is omitted (exam/default mission-pack modes)."
+      },
+      {
+        "path": "flows[].promptTemplate.path",
+        "type": "string",
+        "required": false,
+        "description": "Flow-level prompt template file path applied at campaign runtime to each mission prompt."
+      },
+      {
+        "path": "flows[].promptTemplate.allowRunnerEnvKeys",
+        "type": "string[]",
+        "required": false,
+        "description": "Allowlisted runner.env keys exposed to prompt templates as {{runnerEnv.KEY}} tokens."
+      },
+      {
+        "path": "flows[].toolPolicy",
+        "type": "object",
+        "required": false,
+        "description": "Per-flow hard tool policy with allow/deny namespace/prefix rules and optional alias expansion."
       },
       {
         "path": "flows[].runner.toolDriver.kind",

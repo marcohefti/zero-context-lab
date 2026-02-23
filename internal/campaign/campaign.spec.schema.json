@@ -82,6 +82,15 @@
       },
       "additionalProperties": false
     },
+    "flowGate": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "stopOnFirstMissionFailure": { "type": "boolean" },
+        "traceProfile": { "type": "string", "enum": ["none", "strict_browser_comparison", "mcp_required"] }
+      },
+      "additionalProperties": false
+    },
     "semantic": {
       "type": "object",
       "properties": {
@@ -147,6 +156,56 @@
         "properties": {
           "flowId": { "type": "string", "minLength": 1 },
           "suiteFile": { "type": "string", "minLength": 1 },
+          "promptSource": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "promptTemplate": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "allowRunnerEnvKeys": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          },
+          "toolPolicy": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "namespace": { "type": "string" },
+                    "prefix": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "deny": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "namespace": { "type": "string" },
+                    "prefix": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "aliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "additionalProperties": false
+          },
           "runner": {
             "type": "object",
             "properties": {

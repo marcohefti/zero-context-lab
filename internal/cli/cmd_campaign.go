@@ -173,6 +173,11 @@ func (r Runner) runCampaignLint(args []string) int {
 			"stopOnFirstMissionFailure": parsed.Spec.PairGate.StopOnFirstMissionFailure,
 			"traceProfile":              parsed.Spec.PairGate.TraceProfile,
 		},
+		"flowGate": map[string]any{
+			"enabled":                   parsed.Spec.PairGateEnabled(),
+			"stopOnFirstMissionFailure": parsed.Spec.PairGate.StopOnFirstMissionFailure,
+			"traceProfile":              parsed.Spec.PairGate.TraceProfile,
+		},
 		"semantic": map[string]any{
 			"enabled":   parsed.Spec.Semantic.Enabled,
 			"rulesPath": parsed.Spec.Semantic.RulesPath,
@@ -1174,6 +1179,18 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 				}
 				gateErrors = append(gateErrors, profileFindings...)
 			}
+			flowPolicy := campaign.ToolPolicySpec{}
+			for _, flow := range parsed.Spec.Flows {
+				if flow.FlowID == fr.FlowID {
+					flowPolicy = flow.ToolPolicy
+					break
+				}
+			}
+			policyFindings, err := campaign.EvaluateToolPolicy(flowPolicy, ar.AttemptDir)
+			if err != nil {
+				return mg, err
+			}
+			gateErrors = append(gateErrors, policyFindings...)
 		}
 		if parsed.Spec.Semantic.Enabled {
 			if strings.TrimSpace(ar.AttemptDir) == "" {
@@ -1220,7 +1237,8 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 				ma.Status = campaign.AttemptStatusInvalid
 				ar.Status = campaign.AttemptStatusInvalid
 			}
-			if parsed.Spec.PairGateEnabled() || parsed.Spec.Semantic.Enabled {
+			hardPolicyFailure := containsString(gateErrors, campaign.ReasonToolPolicy)
+			if parsed.Spec.PairGateEnabled() || parsed.Spec.Semantic.Enabled || hardPolicyFailure {
 				mg.OK = false
 				mg.Reasons = append(mg.Reasons, gateErrors...)
 			}
@@ -1416,9 +1434,19 @@ func (r Runner) runCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string,
 		}
 		env[k] = v
 	}
+	env["ZCL_FLOW_ID"] = flow.FlowID
 	env["ZCL_CAMPAIGN_RUNNER_TYPE"] = strings.TrimSpace(flow.Runner.Type)
 	env["ZCL_FRESH_AGENT_PER_ATTEMPT"] = "1"
 	env["ZCL_TOOL_DRIVER_KIND"] = strings.TrimSpace(flow.Runner.ToolDriver.Kind)
+	if kind, sourcePath, templatePath := flowPromptMetadata(parsed, flow); kind != "" {
+		env["ZCL_PROMPT_SOURCE_KIND"] = kind
+		if sourcePath != "" {
+			env["ZCL_PROMPT_SOURCE_PATH"] = sourcePath
+		}
+		if templatePath != "" {
+			env["ZCL_PROMPT_TEMPLATE_PATH"] = templatePath
+		}
+	}
 	if strings.TrimSpace(parsed.Spec.PromptMode) != "" && parsed.Spec.PromptMode != campaign.PromptModeDefault {
 		env["ZCL_PROMPT_MODE"] = parsed.Spec.PromptMode
 	}
@@ -1538,6 +1566,34 @@ func materializeCampaignFlowSuite(parsed campaign.ParsedSpec, outRoot string, fl
 		return "", err
 	}
 	return path, nil
+}
+
+func flowPromptMetadata(parsed campaign.ParsedSpec, flow campaign.FlowSpec) (kind string, sourcePath string, templatePath string) {
+	sourcePath = strings.TrimSpace(flow.PromptSource.Path)
+	templatePath = strings.TrimSpace(flow.PromptTemplate.Path)
+	if sourcePath == "" {
+		switch {
+		case strings.TrimSpace(flow.SuiteFile) != "":
+			sourcePath = strings.TrimSpace(flow.SuiteFile)
+		case parsed.Spec.PromptMode == campaign.PromptModeExam:
+			sourcePath = strings.TrimSpace(parsed.Spec.MissionSource.PromptSource.Path)
+		default:
+			sourcePath = strings.TrimSpace(parsed.Spec.MissionSource.Path)
+		}
+	}
+	switch {
+	case templatePath != "":
+		kind = "flow_prompt_template"
+	case strings.TrimSpace(flow.PromptSource.Path) != "":
+		kind = "flow_prompt_source"
+	case strings.TrimSpace(flow.SuiteFile) != "":
+		kind = "suite_file"
+	case parsed.Spec.PromptMode == campaign.PromptModeExam:
+		kind = "campaign_prompt_source"
+	default:
+		kind = "campaign_mission_source"
+	}
+	return kind, sourcePath, templatePath
 }
 
 func readAttemptReport(attemptDir string) (schema.AttemptReportJSONV1, error) {
@@ -1665,6 +1721,19 @@ func campaignPolicyErrorPayload(err error) (map[string]any, bool) {
 			"code":      campaign.ReasonToolDriverShim,
 			"violation": shimErr.Violation,
 			"error":     shimErr.Error(),
+		}, true
+	}
+	var toolPolicyErr *campaign.ToolPolicyConfigError
+	if errors.As(err, &toolPolicyErr) {
+		code := strings.TrimSpace(toolPolicyErr.Code)
+		if code == "" {
+			code = campaign.ReasonToolPolicyConfig
+		}
+		return map[string]any{
+			"ok":        false,
+			"code":      code,
+			"violation": toolPolicyErr.Violation,
+			"error":     toolPolicyErr.Error(),
 		}, true
 	}
 	var oracleErr *campaign.OraclePolicyViolationError

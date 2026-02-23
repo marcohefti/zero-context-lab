@@ -838,3 +838,261 @@ flows:
 		t.Fatalf("expected visibility host_only, got %+v", policyErr.Violation)
 	}
 }
+
+func TestParseSpecFile_FlowGateAlias(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-flow-gate
+flowGate:
+  enabled: false
+  traceProfile: mcp_required
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if ps.Spec.PairGateEnabled() {
+		t.Fatalf("expected flowGate.enabled=false to disable pair gate")
+	}
+	if ps.Spec.PairGate.TraceProfile != TraceProfileMCPRequired {
+		t.Fatalf("expected trace profile from flowGate alias, got %q", ps.Spec.PairGate.TraceProfile)
+	}
+}
+
+func TestParseSpecFile_FlowGateAliasRejectsConflictingValues(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-flow-gate-conflict
+pairGate:
+  enabled: true
+flowGate:
+  enabled: false
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "pairGate and flowGate both set but differ") {
+		t.Fatalf("expected pairGate/flowGate conflict error, got %v", err)
+	}
+}
+
+func TestParseSpecFile_ExamModeFlowPromptSourceOverrides(t *testing.T) {
+	dir := t.TempDir()
+	promptA := filepath.Join(dir, "prompts-a")
+	promptB := filepath.Join(dir, "prompts-b")
+	oracleDir := filepath.Join(dir, "oracles")
+	for _, p := range []string{promptA, promptB, oracleDir} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(promptA, "m1.md"), []byte("prompt a"), 0o644); err != nil {
+		t.Fatalf("write prompt a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptB, "m1.md"), []byte("prompt b"), 0o644); err != nil {
+		t.Fatalf("write prompt b: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("oracle content"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-flow-prompts
+promptMode: exam
+missionSource:
+  oracleSource:
+    path: oracles
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["node", "./scripts/eval-mission.mjs"]
+flows:
+  - flowId: flow-a
+    promptSource:
+      path: prompts-a
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+  - flowId: flow-b
+    promptSource:
+      path: prompts-b
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	if got := strings.TrimSpace(ps.FlowSuites["flow-a"].Suite.Missions[0].Prompt); got != "prompt a" {
+		t.Fatalf("unexpected flow-a prompt: %q", got)
+	}
+	if got := strings.TrimSpace(ps.FlowSuites["flow-b"].Suite.Missions[0].Prompt); got != "prompt b" {
+		t.Fatalf("unexpected flow-b prompt: %q", got)
+	}
+	if ps.OracleByMissionID["m1"] == "" {
+		t.Fatalf("expected oracle mapping for mission m1")
+	}
+}
+
+func TestParseSpecFile_FlowPromptTemplateRendersAtParseTime(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	templatePath := filepath.Join(dir, "prompt-template.txt")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "base prompt" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	if err := os.WriteFile(templatePath, []byte("flow={{flowId}}\nmission={{missionId}}\nbase={{prompt}}\nroute={{runnerEnv.ZCL_ROUTER}}\n"), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-template
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    promptTemplate:
+      path: prompt-template.txt
+      allowRunnerEnvKeys: ["ZCL_ROUTER"]
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      env:
+        ZCL_ROUTER: chrome-mcp
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	want := "flow=flow-a\nmission=m1\nbase=base prompt\nroute=chrome-mcp"
+	if got := strings.TrimSpace(ps.FlowSuites["flow-a"].Suite.Missions[0].Prompt); got != want {
+		t.Fatalf("unexpected rendered prompt:\n%s", got)
+	}
+}
+
+func TestParseSpecFile_FlowPromptTemplateRejectsUnresolvedToken(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	templatePath := filepath.Join(dir, "prompt-template.txt")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "base prompt" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	if err := os.WriteFile(templatePath, []byte("{{flowId}} {{missingToken}}"), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-template
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    promptTemplate:
+      path: prompt-template.txt
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "unresolved token") {
+		t.Fatalf("expected unresolved token error, got %v", err)
+	}
+}
+
+func TestParseSpecFile_ToolPolicyRuleRequiresNamespaceOrPrefix(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-tool-policy
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    toolPolicy:
+      allow:
+        - {}
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), ReasonToolPolicyConfig) {
+		t.Fatalf("expected typed toolPolicy config error, got %v", err)
+	}
+}

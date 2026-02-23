@@ -90,6 +90,52 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 				t.Fatalf("expected runner artifact %s, got err=%v", p, err)
 			}
 		}
+		runtimeEnvRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.runtime.env.json"))
+		if err != nil {
+			t.Fatalf("read attempt.runtime.env.json: %v", err)
+		}
+		var runtimeEnv struct {
+			Runtime struct {
+				NativeMode bool `json:"nativeMode"`
+			} `json:"runtime"`
+			Prompt struct {
+				SourceKind string `json:"sourceKind"`
+				SHA256     string `json:"sha256"`
+				Bytes      int64  `json:"bytes"`
+			} `json:"prompt"`
+			Env struct {
+				Explicit      map[string]string `json:"explicit"`
+				EffectiveKeys []string          `json:"effectiveKeys"`
+			} `json:"env"`
+		}
+		if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+			t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+		}
+		if runtimeEnv.Runtime.NativeMode {
+			t.Fatalf("expected process-mode runtime env artifact for this test")
+		}
+		if runtimeEnv.Prompt.SourceKind != "suite_prompt" || runtimeEnv.Prompt.Bytes <= 0 || len(runtimeEnv.Prompt.SHA256) != 64 {
+			t.Fatalf("unexpected prompt metadata: %+v", runtimeEnv.Prompt)
+		}
+		if strings.TrimSpace(runtimeEnv.Env.Explicit["ZCL_ATTEMPT_ID"]) == "" || len(runtimeEnv.Env.EffectiveKeys) == 0 {
+			t.Fatalf("unexpected runtime env payload: %+v", runtimeEnv.Env)
+		}
+
+		repRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.report.json"))
+		if err != nil {
+			t.Fatalf("read attempt.report.json: %v", err)
+		}
+		var rep struct {
+			Artifacts struct {
+				AttemptRuntimeEnvJSON string `json:"attemptRuntimeEnvJson"`
+			} `json:"artifacts"`
+		}
+		if err := json.Unmarshal(repRaw, &rep); err != nil {
+			t.Fatalf("unmarshal attempt.report.json: %v", err)
+		}
+		if rep.Artifacts.AttemptRuntimeEnvJSON != "attempt.runtime.env.json" {
+			t.Fatalf("expected runtime env artifact in report, got %+v", rep.Artifacts)
+		}
 	}
 
 	// Runner output should be visible (but streamed to stderr, keeping stdout JSON clean).
@@ -573,6 +619,29 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	}
 	if attempt.NativeResult.ResultSource != "delta_fallback" || attempt.NativeResult.PhaseAware {
 		t.Fatalf("unexpected attempt nativeResult: %+v", attempt.NativeResult)
+	}
+	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
+	if err != nil {
+		t.Fatalf("read attempt.runtime.env.json: %v", err)
+	}
+	var runtimeEnv struct {
+		Runtime struct {
+			NativeMode bool   `json:"nativeMode"`
+			RuntimeID  string `json:"runtimeId"`
+		} `json:"runtime"`
+		Prompt struct {
+			SourceKind string `json:"sourceKind"`
+			SHA256     string `json:"sha256"`
+		} `json:"prompt"`
+	}
+	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+	}
+	if !runtimeEnv.Runtime.NativeMode || runtimeEnv.Runtime.RuntimeID != "codex_app_server" {
+		t.Fatalf("unexpected native runtime metadata: %+v", runtimeEnv.Runtime)
+	}
+	if runtimeEnv.Prompt.SourceKind != "suite_prompt" || len(runtimeEnv.Prompt.SHA256) != 64 {
+		t.Fatalf("unexpected native prompt metadata: %+v", runtimeEnv.Prompt)
 	}
 
 	repRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json"))

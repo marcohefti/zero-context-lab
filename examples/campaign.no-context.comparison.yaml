@@ -25,6 +25,10 @@ semantic:
 
 flows:
   - flowId: flow-a
+    toolPolicy:
+      allow:
+        - namespace: cli
+          prefix: tool-a
     runner:
       type: codex_subagent
       command: ["codex", "agent", "run", "--", "./scripts/runner_flow_a.sh"]
@@ -42,6 +46,10 @@ flows:
           path: mission.result.json
 
   - flowId: flow-b
+    toolPolicy:
+      allow:
+        - namespace: cli
+          prefix: tool-b
     runner:
       type: claude_subagent
       command: ["claude", "--", "./scripts/runner_flow_b.sh"]

@@ -6,13 +6,16 @@
 # - totalMissions, canaryMissions, failFast
 # - missionSource.path + missionSource.selection (all|mission_id|index|range)
 # - execution.flowMode (sequence|parallel)
-# - pairGate.enabled, pairGate.stopOnFirstMissionFailure, pairGate.traceProfile
+# - pairGate.enabled, pairGate.stopOnFirstMissionFailure, pairGate.traceProfile (or flowGate alias)
 # - semantic.enabled, semantic.rulesPath
 # - cleanup.beforeMission/afterMission/onFailure (executed with bounded timeout)
 # - timeouts.campaignGlobalTimeoutMs/defaultAttemptTimeoutMs/cleanupHookTimeoutMs/timeoutStart
 # - output.reportPath/summaryPath/resultsMdPath/publishCheck/progressJsonl
 # - invalidRunPolicy.statuses/publishRequiresValid/forceFlag
 # - flows[].flowId, flows[].runner.* (suiteFile optional when missionSource.path is set)
+# - flows[].promptSource.path (per-flow mission source override when suiteFile omitted)
+# - flows[].promptTemplate.path + allowRunnerEnvKeys (flow-aware template materialization)
+# - flows[].toolPolicy.allow/deny/aliases (hard tool namespace/prefix isolation)
 # - flows[].runner.model/modelReasoningEffort/modelReasoningPolicy (codex_app_server only)
 # - flows[].runner.toolDriver.kind/shims
 # - flows[].runner.finalization.mode/minResultTurn/resultChannel
@@ -83,6 +86,20 @@ invalidRunPolicy:
 
 flows:
   - flowId: flow-a
+    # Optional per-flow prompt controls for mission-pack mode:
+    # promptSource:
+    #   path: ./missions/flow-a
+    # promptTemplate:
+    #   path: ./prompts/flow-a.template.txt
+    #   allowRunnerEnvKeys: ["ZCL_MIN_VERSION"]
+    # toolPolicy:
+    #   allow:
+    #     - namespace: cli
+    #       prefix: tool-cli
+    #   deny:
+    #     - namespace: mcp
+    #   aliases:
+    #     chrome: ["chrome-devtools__", "chrome-mcp__"]
     runner:
       type: codex_exec
       command: ["codex", "exec", "--", "./scripts/run_flow_a.sh"]
