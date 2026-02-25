@@ -1360,7 +1360,7 @@ func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
 	var sawTimeout bool
 	var sawSuccess bool
 	for _, a := range sum.Attempts {
-		if a.RunnerErrorCode == "ZCL_E_TIMEOUT" {
+		if a.RunnerErrorCode == codeRuntimeStall {
 			sawTimeout = true
 		}
 		if a.OK {

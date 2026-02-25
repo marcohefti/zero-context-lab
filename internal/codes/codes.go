@@ -52,6 +52,7 @@ const (
 	CampaignTimeoutGate            = "ZCL_E_CAMPAIGN_TIMEOUT_GATE"
 	CampaignSummaryParse           = "ZCL_E_CAMPAIGN_SUMMARY_PARSE"
 	CampaignSkipped                = "ZCL_E_CAMPAIGN_SKIPPED"
+	CampaignStateDrift             = "ZCL_E_CAMPAIGN_STATE_DRIFT"
 	CampaignFlowExitPrefix         = "ZCL_E_CAMPAIGN_FLOW_EXIT_"
 
 	CampaignTraceProfileRequiredEventFamily = "ZCL_E_CAMPAIGN_TRACE_PROFILE_REQUIRED_EVENT_FAMILY"
@@ -76,6 +77,7 @@ const (
 	RuntimeRateLimit             = "ZCL_E_RUNTIME_RATE_LIMIT"
 	RuntimeListenerFailure       = "ZCL_E_RUNTIME_LISTENER_FAILURE"
 	RuntimeCrash                 = "ZCL_E_RUNTIME_CRASH"
+	RuntimeStall                 = "ZCL_E_RUNTIME_STALL"
 	RuntimeFinalAnswerNotFound   = "ZCL_E_RUNTIME_FINAL_ANSWER_NOT_FOUND"
 )
 

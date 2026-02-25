@@ -580,7 +580,7 @@
     },
     {
       "id": "campaign report",
-      "usage": "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]",
+      "usage": "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--allow-invalid] [--force] [--json]",
       "summary": "Export campaign aggregate reports with invalid-run publication guards."
     },
     {
@@ -756,6 +756,11 @@
       "retryable": true
     },
     {
+      "code": "ZCL_E_RUNTIME_STALL",
+      "summary": "Native runtime attempt stalled past deadline without terminal completion.",
+      "retryable": true
+    },
+    {
       "code": "ZCL_E_MCP_MAX_TOOL_CALLS",
       "summary": "MCP proxy stopped after configured max tool calls.",
       "retryable": true
@@ -854,6 +859,11 @@
       "code": "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR",
       "summary": "Campaign oracle evaluator execution or verdict parsing failed.",
       "retryable": true
+    },
+    {
+      "code": "ZCL_E_CAMPAIGN_STATE_DRIFT",
+      "summary": "Campaign run-state continuity drift detected (spec mission selection disagrees with persisted run-state).",
+      "retryable": false
     },
     {
       "code": "ZCL_E_CAMPAIGN_LOCK_TIMEOUT",

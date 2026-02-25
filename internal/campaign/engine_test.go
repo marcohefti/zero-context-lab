@@ -167,3 +167,79 @@ func TestExecuteMissionEngine_WatchdogTimeoutContinueAndHeartbeat(t *testing.T) 
 		t.Fatalf("expected watchdog heartbeat events in progress jsonl: %s", string(raw))
 	}
 }
+
+func TestExecuteMissionEngine_NoPendingMissionsRemainValid(t *testing.T) {
+	outRoot := t.TempDir()
+	parsed := ParsedSpec{
+		SpecPath: filepath.Join(outRoot, "campaign.yaml"),
+		Spec: SpecV1{
+			SchemaVersion: 1,
+			CampaignID:    "cmp-drift",
+			Execution:     ExecutionSpec{FlowMode: FlowModeSequence},
+			Flows: []FlowSpec{
+				{
+					FlowID: "flow-a",
+					Runner: RunnerAdapterSpec{Type: RunnerTypeProcessCmd},
+				},
+			},
+		},
+		BaseSuite: suite.ParsedSuite{
+			Suite: suite.SuiteFileV1{
+				Version: 1,
+				SuiteID: "suite-drift",
+				Missions: []suite.MissionV1{
+					{MissionID: "m1", Prompt: "p1"},
+				},
+			},
+		},
+		MissionIndexes: []int{0},
+	}
+	progressPath := ProgressPath(outRoot, parsed.Spec.CampaignID)
+	if err := AppendProgress(progressPath, ProgressEventV1{
+		SchemaVersion:  1,
+		CampaignID:     parsed.Spec.CampaignID,
+		RunID:          "run-old",
+		MissionIndex:   0,
+		MissionID:      "m1",
+		Status:         "gate_pass",
+		IdempotencyKey: gateProgressKey(parsed.Spec.CampaignID, 0),
+		CreatedAt:      "2026-02-22T14:15:00Z",
+	}); err != nil {
+		t.Fatalf("seed progress: %v", err)
+	}
+
+	now := time.Date(2026, 2, 22, 14, 30, 0, 0, time.UTC)
+	res, err := ExecuteMissionEngine(
+		parsed,
+		noopMissionExecutor{},
+		func(ParsedSpec, int, string, []FlowRunV1) (MissionGateV1, error) {
+			t.Fatalf("gate evaluator should not run when mission window is already complete")
+			return MissionGateV1{}, nil
+		},
+		nil,
+		EngineOptions{
+			OutRoot:        outRoot,
+			RunID:          "run-new",
+			MissionIndexes: []int{0},
+			Now: func() time.Time {
+				now = now.Add(5 * time.Millisecond)
+				return now
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("ExecuteMissionEngine: %v", err)
+	}
+	if res.Exit != 0 {
+		t.Fatalf("expected valid no-op exit=0, got %d", res.Exit)
+	}
+	if res.State.Status != RunStatusValid {
+		t.Fatalf("expected valid status, got %+v", res.State)
+	}
+	if len(res.State.ReasonCodes) != 0 {
+		t.Fatalf("expected no reason codes, got %+v", res.State.ReasonCodes)
+	}
+	if res.State.TotalMissions != 1 || res.State.MissionsCompleted != 0 {
+		t.Fatalf("expected selected-window counters for no-op run, got total=%d completed=%d", res.State.TotalMissions, res.State.MissionsCompleted)
+	}
+}

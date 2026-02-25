@@ -133,7 +133,9 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 			pending = append(pending, idx)
 		}
 	}
-	state.TotalMissions = len(pending)
+	// Keep totalMissions tied to the selected mission window for this run. Pending
+	// missions can legitimately be zero when prior progress already finalized them.
+	state.TotalMissions = len(selected)
 	if err := SaveRunState(statePath, state); err != nil {
 		return EngineResult{}, err
 	}

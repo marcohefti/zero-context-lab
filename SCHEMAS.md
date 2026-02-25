@@ -763,7 +763,7 @@ Example:
 }
 ```
 
-`zcl campaign report` refuses export when `status` is `invalid|aborted` unless `--force` is set.
+`zcl campaign report` refuses export when `status` is `invalid|aborted` unless `--allow-invalid` or `--force` is set.
 
 ## `campaign.summary.json` (optional; v1)
 

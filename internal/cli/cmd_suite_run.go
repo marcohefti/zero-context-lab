@@ -847,6 +847,10 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			return ar, harnessErr
 		}
 		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, &ar, errWriter)
+		if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar, schema.FeedbackPolicyAutoFailV1); err != nil {
+			harnessErr = true
+			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		}
 		ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
 		runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
 		ar.OK = runnerOK && ar.Finish.OK
@@ -1403,19 +1407,34 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 	emitNativeState(nativeStateQueued, true, nil)
 
 	now := r.Now()
+	if _, err := attempt.EnsureTimeoutAnchor(now, pm.OutDirAbs); err != nil {
+		ar.RunnerErrorCode = codeIO
+		ec := 1
+		ar.RunnerExitCode = &ec
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "timeout_anchor_failed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	}
 	ctx, cancel, timedOut := attemptCtxForDeadline(now, pm.OutDirAbs)
 	if cancel != nil {
 		defer cancel()
 	}
 	if timedOut {
-		ar.RunnerErrorCode = codeTimeout
+		ar.RunnerErrorCode = codeRuntimeStall
 		ec := 1
 		ar.RunnerExitCode = &ec
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "attempt_deadline_exceeded",
+			"code":   ar.RunnerErrorCode,
+		})
 		return false
 	}
 	if opts.NativeScheduler != nil {
 		if err := opts.NativeScheduler.Acquire(ctx); err != nil {
-			ar.RunnerErrorCode = codeTimeout
+			ar.RunnerErrorCode = codeRuntimeStall
 			ec := 1
 			ar.RunnerExitCode = &ec
 			emitNativeState(nativeStateFailed, false, map[string]any{
@@ -1637,14 +1656,14 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 				completed = true
 			}
 		case <-ctx.Done():
-			ar.RunnerErrorCode = codeTimeout
+			ar.RunnerErrorCode = codeRuntimeStall
 			recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 			native.RecordHealth(opts.NativeSelection.Selected, native.HealthInterrupted)
 			if strings.TrimSpace(turn.TurnID) != "" {
 				_ = sess.InterruptTurn(context.Background(), native.TurnInterruptRequest{ThreadID: thread.ThreadID, TurnID: turn.TurnID})
 			}
 			emitNativeState(nativeStateInterrupted, false, map[string]any{
-				"reason": "attempt_timeout",
+				"reason": "attempt_stall_timeout",
 				"code":   ar.RunnerErrorCode,
 			})
 			completed = true
@@ -2723,7 +2742,7 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 	}
 
 	decisionTags := []string{schema.DecisionTagBlocked}
-	if code == codeTimeout || ar.RunnerErrorCode == codeTimeout {
+	if code == codeTimeout || code == codeRuntimeStall || ar.RunnerErrorCode == codeTimeout || ar.RunnerErrorCode == codeRuntimeStall {
 		decisionTags = append(decisionTags, schema.DecisionTagTimeout)
 	}
 	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
@@ -2843,6 +2862,16 @@ func finishAttempt(now time.Time, attemptDir string, strict bool, strictExpect b
 		var ce *report.CliError
 		if errors.As(repErr, &ce) {
 			out.ReportError = &suiteRunReportErr{Code: ce.Code, Message: ce.Message}
+			// Even when strict report build fails (for example missing feedback.json),
+			// still emit a best-effort attempt.report.json so operators get a terminal
+			// artifact for debugging and aggregation.
+			if fallback, ferr := report.BuildAttemptReport(now, attemptDir, false); ferr == nil {
+				out.Report = fallback
+				if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), fallback); err != nil {
+					out.IOError = err.Error()
+					return out
+				}
+			}
 		} else {
 			out.IOError = repErr.Error()
 			return out

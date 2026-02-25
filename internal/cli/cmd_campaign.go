@@ -413,6 +413,9 @@ func (r Runner) runCampaignResume(args []string) int {
 	if parsed.Spec.CampaignID != cid {
 		return r.failUsage("campaign resume: campaign-id does not match stored spec")
 	}
+	if msg, drift := campaignStateDriftMessage(st); drift {
+		return r.writeCampaignStateDrift(*jsonOut, st.CampaignID, st.RunID, msg)
+	}
 	missionCount := len(parsed.MissionIndexes)
 	if missionCount == 0 {
 		return r.failUsage("campaign resume: spec has no missions")
@@ -467,6 +470,9 @@ func (r Runner) runCampaignStatus(args []string) int {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
+	if msg, drift := campaignStateDriftMessage(st); drift {
+		return r.writeCampaignStateDrift(*jsonOut, st.CampaignID, st.RunID, msg)
+	}
 	if *jsonOut {
 		return r.writeJSON(st)
 	}
@@ -483,6 +489,7 @@ func (r Runner) runCampaignReport(args []string) int {
 	outRoot := fs.String("out-root", "", "project output root (default from config/env, else .zcl)")
 	format := fs.String("format", "json", "output format list: json,md")
 	force := fs.Bool("force", false, "allow report export when campaign status is invalid|aborted")
+	allowInvalid := fs.Bool("allow-invalid", false, "export report and return exit 0 even when campaign status is invalid|aborted")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
 
@@ -505,11 +512,11 @@ func (r Runner) runCampaignReport(args []string) int {
 	}
 
 	policy := resolveCampaignInvalidRunPolicy(st)
-	if !*force && policy.PublishRequiresValid && (st.Status == campaign.RunStatusInvalid || st.Status == campaign.RunStatusAborted) {
+	if !*force && !*allowInvalid && policy.PublishRequiresValid && (st.Status == campaign.RunStatusInvalid || st.Status == campaign.RunStatusAborted) {
 		if *jsonOut {
 			_ = r.writeJSON(rep)
 		}
-		fmt.Fprintf(r.Stderr, codeUsage+": campaign report: status=%s (use --force to export)\n", st.Status)
+		fmt.Fprintf(r.Stderr, codeUsage+": campaign report: status=%s (use --allow-invalid or --force to export)\n", st.Status)
 		return 2
 	}
 
@@ -895,6 +902,9 @@ func (r Runner) resolveCampaignRunState(campaignID string, specPath string, outR
 			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return campaign.RunStateV1{}, 1, false
 		}
+		if msg, drift := campaignStateDriftMessage(st); drift {
+			return campaign.RunStateV1{}, r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg), false
+		}
 		return st, 0, true
 	default:
 		cid := ids.SanitizeComponent(rawCampaignID)
@@ -914,8 +924,53 @@ func (r Runner) resolveCampaignRunState(campaignID string, specPath string, outR
 			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return campaign.RunStateV1{}, 1, false
 		}
+		if msg, drift := campaignStateDriftMessage(st); drift {
+			return campaign.RunStateV1{}, r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg), false
+		}
 		return st, 0, true
 	}
+}
+
+func campaignStateDriftMessage(st campaign.RunStateV1) (string, bool) {
+	specPath := strings.TrimSpace(st.SpecPath)
+	if specPath == "" {
+		return "", false
+	}
+	parsed, err := campaign.ParseSpecFile(specPath)
+	if err != nil {
+		return "", false
+	}
+	expected := len(parsed.MissionIndexes)
+	if expected <= 0 {
+		return "", false
+	}
+	if st.Status == campaign.RunStatusValid && st.TotalMissions == 0 && st.MissionsCompleted == 0 {
+		msg := fmt.Sprintf("spec selects %d mission(s), but persisted campaign.run.state reports totalMissions=0 and missionsCompleted=0", expected)
+		return msg, true
+	}
+	return "", false
+}
+
+func (r Runner) writeCampaignStateDrift(jsonOut bool, campaignID string, runID string, msg string) int {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		msg = "campaign run-state drift detected"
+	}
+	if jsonOut {
+		out := map[string]any{
+			"ok":         false,
+			"code":       codeCampaignStateDrift,
+			"campaignId": strings.TrimSpace(campaignID),
+			"runId":      strings.TrimSpace(runID),
+			"error":      msg,
+		}
+		if exit := r.writeJSON(out); exit != 0 {
+			return exit
+		}
+	} else {
+		fmt.Fprintf(r.Stderr, "%s: %s\n", codeCampaignStateDrift, msg)
+	}
+	return 2
 }
 
 func campaignRunnerScriptPath(command []string) string {
@@ -1761,8 +1816,15 @@ func runCampaignSuiteInvocation(ctx context.Context, sub Runner, args []string, 
 		if hardKillContinue {
 			return 1, true
 		}
-		out := <-done
-		return out.exit, false
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case out := <-done:
+			return out.exit, false
+		case <-timer.C:
+			// Do not block mission scheduling forever on a non-responsive suite runner.
+			return 1, true
+		}
 	}
 }
 
@@ -2201,7 +2263,7 @@ func printCampaignHelp(w io.Writer) {
   zcl campaign canary --spec <campaign.(yaml|yml|json)> [--missions N] [--mission-offset N] [--json]
   zcl campaign resume --campaign-id <id> [--json]
   zcl campaign status --campaign-id <id> [--json]
-  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--format json,md] [--force] [--json]
+  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--format json,md] [--allow-invalid] [--force] [--json]
   zcl campaign publish-check [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--force] [--json]
   zcl campaign doctor --spec <campaign.(yaml|yml|json)> [--json]
 `)
@@ -2239,7 +2301,7 @@ func printCampaignStatusHelp(w io.Writer) {
 
 func printCampaignReportHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]
+  zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--allow-invalid] [--force] [--json]
 `)
 }
 

@@ -1256,7 +1256,7 @@ func reportEvidenceComplete(rep schema.AttemptReportJSONV1) bool {
 
 func isOrchestrationInfraCode(code string) bool {
 	switch strings.TrimSpace(code) {
-	case codeTimeout, codeSpawn, codeIO:
+	case codeTimeout, codeSpawn, codeIO, codeRuntimeStall:
 		return true
 	default:
 		return false

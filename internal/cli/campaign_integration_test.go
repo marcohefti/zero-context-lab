@@ -312,6 +312,101 @@ flows:
 	if check.OK {
 		t.Fatalf("expected publish-check ok=false for invalid campaign")
 	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = r.Run([]string{"campaign", "report", "--campaign-id", "cmp-invalid", "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign report expected 2 for invalid run without allow flag, got %d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = r.Run([]string{"campaign", "report", "--campaign-id", "cmp-invalid", "--out-root", outRoot, "--allow-invalid", "--json"})
+	if code != 0 {
+		t.Fatalf("campaign report --allow-invalid expected 0, got %d stderr=%q", code, stderr.String())
+	}
+	var rep struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+		t.Fatalf("unmarshal campaign report json: %v stdout=%q", err, stdout.String())
+	}
+	if rep.Status != "invalid" && rep.Status != "aborted" {
+		t.Fatalf("expected invalid/aborted report status, got %+v", rep)
+	}
+}
+
+func TestCampaignStatus_StateDriftFailsFast(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	suitePath := filepath.Join(specDir, "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "campaign-suite-drift",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`)
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-drift-status
+totalMissions: 1
+semantic:
+  enabled: false
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	stateDir := filepath.Join(outRoot, "campaigns", "cmp-drift-status")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	stateRaw := fmt.Sprintf(`{
+  "schemaVersion": 1,
+  "campaignId": "cmp-drift-status",
+  "runId": "run-drift-1",
+  "specPath": %q,
+  "outRoot": %q,
+  "status": "valid",
+  "startedAt": "2026-02-22T12:00:00Z",
+  "updatedAt": "2026-02-22T12:00:01Z",
+  "completedAt": "2026-02-22T12:00:01Z",
+  "totalMissions": 0,
+  "missionsCompleted": 0
+}`, specPath, outRoot)
+	if err := os.WriteFile(filepath.Join(stateDir, "campaign.run.state.json"), []byte(stateRaw), 0o644); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 12, 1, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "status", "--campaign-id", "cmp-drift-status", "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign status expected state drift exit 2, got %d stderr=%q", code, stderr.String())
+	}
+	var out struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal campaign status drift json: %v stdout=%q", err, stdout.String())
+	}
+	if out.OK || out.Code != codeCampaignStateDrift {
+		t.Fatalf("expected state drift code %s, got %+v", codeCampaignStateDrift, out)
+	}
 }
 
 func TestMissionPromptsBuild_MaterializesDeterministically(t *testing.T) {

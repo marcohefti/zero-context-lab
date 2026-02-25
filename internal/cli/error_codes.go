@@ -18,6 +18,7 @@ const (
 	codeRuntimeRateLimit           = codes.RuntimeRateLimit
 	codeRuntimeListenerFailure     = codes.RuntimeListenerFailure
 	codeRuntimeFinalAnswerNotFound = codes.RuntimeFinalAnswerNotFound
+	codeRuntimeStall               = codes.RuntimeStall
 
 	codeMissionResultMissing      = codes.MissionResultMissing
 	codeMissionResultInvalid      = codes.MissionResultInvalid
@@ -30,6 +31,7 @@ const (
 	codeCampaignTimeoutGate     = codes.CampaignTimeoutGate
 	codeCampaignSummaryParse    = codes.CampaignSummaryParse
 	codeCampaignSkipped         = codes.CampaignSkipped
+	codeCampaignStateDrift      = codes.CampaignStateDrift
 
 	codeShim = codes.Shim
 )

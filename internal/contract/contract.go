@@ -470,7 +470,7 @@ func Build(version string) Contract {
 			},
 			{
 				ID:      "campaign report",
-				Usage:   "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--force] [--json]",
+				Usage:   "zcl campaign report [--campaign-id <id> | --spec <campaign.(yaml|yml|json)>] [--out-root .zcl] [--format json,md] [--allow-invalid] [--force] [--json]",
 				Summary: "Export campaign aggregate reports with invalid-run publication guards.",
 			},
 			{
@@ -529,6 +529,7 @@ func Build(version string) Contract {
 			{Code: codes.RuntimeRateLimit, Summary: "Native runtime/provider rate limit exceeded.", Retryable: true},
 			{Code: codes.RuntimeListenerFailure, Summary: "Native runtime listener pipeline failed.", Retryable: true},
 			{Code: codes.RuntimeCrash, Summary: "Native runtime process crashed before turn completion.", Retryable: true},
+			{Code: codes.RuntimeStall, Summary: "Native runtime attempt stalled past deadline without terminal completion.", Retryable: true},
 			{Code: codes.MCPMaxToolCalls, Summary: "MCP proxy stopped after configured max tool calls.", Retryable: true},
 			{Code: codes.ContaminatedPrompt, Summary: "Blind mode rejected a prompt containing harness terms.", Retryable: false},
 			{Code: codes.VersionFloor, Summary: "Installed zcl version does not satisfy required minimum version.", Retryable: false},
@@ -549,6 +550,7 @@ func Build(version string) Contract {
 			{Code: campaign.ReasonOracleEvaluator, Summary: "Campaign oracle evaluator configuration is missing or invalid for exam mode.", Retryable: false},
 			{Code: campaign.ReasonOracleEvalFailed, Summary: "Campaign oracle evaluator returned a failing verdict for the attempt.", Retryable: false},
 			{Code: campaign.ReasonOracleEvalError, Summary: "Campaign oracle evaluator execution or verdict parsing failed.", Retryable: true},
+			{Code: codes.CampaignStateDrift, Summary: "Campaign run-state continuity drift detected (spec mission selection disagrees with persisted run-state).", Retryable: false},
 			{Code: codes.CampaignLockTimeout, Summary: "Campaign lock acquisition failed (another campaign run/resume likely owns the lock).", Retryable: true},
 		},
 		CampaignSchema: CampaignSchema{

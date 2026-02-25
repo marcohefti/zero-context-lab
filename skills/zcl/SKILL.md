@@ -24,7 +24,7 @@ This skill is for the orchestrator (you), not the spawned mission agent.
 | Native event trace mapping (`tool=native`) | yes | yes | Redaction + bounds + integrity flags preserved. |
 | Mission-only result-channel finalization | yes | yes | 3-turn workflows via `minResultTurn`. |
 | Provider onboarding structure | yes | partial | `provider_stub` demonstrates unsupported-capability behavior. |
-| Runtime failure taxonomy (auth/rate-limit/stream/crash/listener) | yes | yes | Typed `ZCL_E_RUNTIME_*` codes in summaries + feedback failure payloads. |
+| Runtime failure taxonomy (auth/rate-limit/stream/crash/listener/stall) | yes | yes | Typed `ZCL_E_RUNTIME_*` codes in summaries + feedback failure payloads. |
 
 Primary evidence:
 - `.zcl/.../tool.calls.jsonl`
@@ -50,7 +50,7 @@ When asked to "run this through ZCL", use this order:
    - `zcl campaign run --spec <campaign.(yaml|yml|json)> --json`
    - `zcl campaign resume --campaign-id <id> --json`
    - `zcl campaign status --campaign-id <id> --json`
-   - `zcl campaign report --campaign-id <id> --json`
+   - `zcl campaign report --campaign-id <id> --allow-invalid --json`
    - `zcl campaign publish-check --campaign-id <id> --json`
 7. Validate/report from artifacts:
    - `zcl report --strict <attemptDir|runDir>`
@@ -59,6 +59,13 @@ When asked to "run this through ZCL", use this order:
 
 Explicit finalization path for harness-aware prompts:
 - `zcl feedback --ok --result <text>` or `zcl feedback --fail --result-json <json>`
+
+## Operator Guardrails
+
+- Native suite attempts now anchor timeout windows before native turn execution; stalled native attempts classify as `ZCL_E_RUNTIME_STALL`.
+- Native suite orchestration now guarantees terminal artifacts on failure paths (`feedback.json` + best-effort `attempt.report.json`) for post-mortem continuity.
+- Campaign read/report/resume commands fail fast with `ZCL_E_CAMPAIGN_STATE_DRIFT` when persisted `campaign.run.state.json` disagrees with current spec mission selection (for example `totalMissions=0` on a non-empty selection).
+- For CI/automation, prefer `zcl campaign report --allow-invalid --json` to collect report payloads without branching on process exit codes; keep `zcl campaign publish-check` as the strict publish gate.
 
 ## Campaign Guidance
 
