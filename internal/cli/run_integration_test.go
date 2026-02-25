@@ -14,7 +14,14 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/schema"
 )
 
-const helperProcessEnv = "ZCL_TEST_HELPER_PROCESS"
+const (
+	helperProcessEnv       = "ZCL_TEST_HELPER_PROCESS"
+	helperStdoutEnv        = "ZCL_TEST_HELPER_STDOUT"
+	helperStderrEnv        = "ZCL_TEST_HELPER_STDERR"
+	helperStdoutFileEnv    = "ZCL_TEST_HELPER_STDOUT_FILE"
+	helperExitCodeEnv      = "ZCL_TEST_HELPER_EXIT"
+	helperProcessMarkerArg = "helper=1"
+)
 
 func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	outDir := t.TempDir()
@@ -33,7 +40,11 @@ func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout-file=" + payloadPath, "stderr=oops\n", "exit=7"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		OutFile: payloadPath,
+		Stderr:  "oops\n",
+		Exit:    7,
+	}))
 	if code != 7 {
 		t.Fatalf("expected exit code 7, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -76,7 +87,10 @@ func TestRun_BoundsEnforcedAndTruncationRecorded(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout-file=" + payloadPath, "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		OutFile: payloadPath,
+		Exit:    0,
+	}))
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -112,7 +126,11 @@ func TestRun_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=" + payloadOut, "stderr=" + payloadErr, "arg=" + openAIKey, "exit=0"})
+	code := r.Run(helperRunCommandWithArgs(t, helperProcessConfig{
+		Stdout: payloadOut,
+		Stderr: payloadErr,
+		Exit:   0,
+	}, []string{"arg=" + openAIKey}))
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -166,7 +184,10 @@ func TestRun_CaptureRedactsByDefault(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--capture", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=" + payloadOut, "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		Stdout: payloadOut,
+		Exit:   0,
+	}, "--capture", "--capture-max-bytes", "4096"))
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -200,7 +221,10 @@ func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=" + payloadOut, "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		Stdout: payloadOut,
+		Exit:   0,
+	}, "--capture", "--capture-raw", "--capture-max-bytes", "4096"))
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -229,7 +253,10 @@ func TestRun_CaptureRawBlockedInCIModeWithoutAllowFlag(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=hello\n", "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		Stdout: "hello\n",
+		Exit:   0,
+	}, "--capture", "--capture-raw", "--capture-max-bytes", "4096"))
 	if code != 2 {
 		t.Fatalf("expected usage exit code 2, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -253,7 +280,10 @@ func TestRun_CaptureRawAllowedInCIModeWithExplicitGuard(t *testing.T) {
 		Stderr:  &stderr,
 	}
 
-	code := r.Run([]string{"run", "--capture", "--capture-raw", "--capture-max-bytes", "4096", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=raw\n", "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		Stdout: "raw\n",
+		Exit:   0,
+	}, "--capture", "--capture-raw", "--capture-max-bytes", "4096"))
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -301,7 +331,10 @@ func TestRun_TimeoutStartFirstToolCall_DoesNotExpireBeforeFirstAction(t *testing
 	}
 
 	// First call should execute (not pre-expire).
-	code := r.Run([]string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=ok\n", "exit=0"})
+	code := r.Run(helperRunCommand(t, helperProcessConfig{
+		Stdout: "ok\n",
+		Exit:   0,
+	}))
 	if code != 0 {
 		t.Fatalf("expected first call to succeed, got %d (stderr=%q)", code, stderr.String())
 	}
@@ -328,7 +361,10 @@ func TestRun_RepeatGuardBlocksNoProgressLoops(t *testing.T) {
 	setAttemptEnv(t, outDir)
 	t.Setenv("ZCL_REPEAT_GUARD_MAX_STREAK", "2")
 
-	runCmd := []string{"run", "--", os.Args[0], "-test.run=TestHelperProcess", "--", "helper=1", "stdout=ran\n", "exit=7"}
+	runCmd := helperRunCommand(t, helperProcessConfig{
+		Stdout: "ran\n",
+		Exit:   7,
+	})
 	for i := 0; i < 2; i++ {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
@@ -392,6 +428,10 @@ func TestHelperProcess(t *testing.T) {
 func setAttemptEnv(t *testing.T, outDir string) {
 	t.Helper()
 	t.Setenv(helperProcessEnv, "1")
+	t.Setenv(helperStdoutEnv, "")
+	t.Setenv(helperStderrEnv, "")
+	t.Setenv(helperStdoutFileEnv, "")
+	t.Setenv(helperExitCodeEnv, "0")
 	t.Setenv("CI", "")
 	t.Setenv("ZCL_ALLOW_UNSAFE_CAPTURE", "")
 	t.Setenv("ZCL_OUT_DIR", outDir)
@@ -419,6 +459,27 @@ func setAttemptEnv(t *testing.T, outDir string) {
 	}
 }
 
+func helperRunCommand(t *testing.T, cfg helperProcessConfig, runFlags ...string) []string {
+	return helperRunCommandWithArgs(t, cfg, nil, runFlags...)
+}
+
+func helperRunCommandWithArgs(t *testing.T, cfg helperProcessConfig, helperArgs []string, runFlags ...string) []string {
+	t.Helper()
+	t.Setenv(helperStdoutEnv, cfg.Stdout)
+	t.Setenv(helperStderrEnv, cfg.Stderr)
+	t.Setenv(helperStdoutFileEnv, cfg.OutFile)
+	t.Setenv(helperExitCodeEnv, strconv.Itoa(cfg.Exit))
+	args := []string{"run"}
+	if len(runFlags) > 0 {
+		args = append(args, runFlags...)
+	}
+	args = append(args, "--", os.Args[0], "-test.run=TestHelperProcess", "--", helperProcessMarkerArg)
+	if len(helperArgs) > 0 {
+		args = append(args, helperArgs...)
+	}
+	return args
+}
+
 type helperProcessConfig struct {
 	Helper  bool
 	Stdout  string
@@ -432,6 +493,14 @@ func helperProcessEnabled() bool {
 }
 
 func parseHelperProcessConfig(args []string) helperProcessConfig {
+	cfg := helperProcessConfig{
+		Stdout:  os.Getenv(helperStdoutEnv),
+		Stderr:  os.Getenv(helperStderrEnv),
+		OutFile: os.Getenv(helperStdoutFileEnv),
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(helperExitCodeEnv))); err == nil {
+		cfg.Exit = n
+	}
 	idx := 0
 	for i := range args {
 		if args[i] == "--" {
@@ -439,10 +508,9 @@ func parseHelperProcessConfig(args []string) helperProcessConfig {
 			break
 		}
 	}
-	cfg := helperProcessConfig{}
 	for _, a := range args[idx:] {
 		switch {
-		case a == "helper=1":
+		case a == helperProcessMarkerArg:
 			cfg.Helper = true
 		case strings.HasPrefix(a, "stdout="):
 			cfg.Stdout = strings.TrimPrefix(a, "stdout=")
