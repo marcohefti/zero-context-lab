@@ -16,10 +16,6 @@ import (
 
 const helperProcessEnv = "ZCL_TEST_HELPER_PROCESS"
 
-func init() {
-	maybeRunHelperProcess()
-}
-
 func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
@@ -383,7 +379,8 @@ func TestRun_RepeatGuardBlocksNoProgressLoops(t *testing.T) {
 }
 
 func TestHelperProcess(t *testing.T) {
-	// Compatibility fallback in case helper mode was not triggered from init().
+	// Keep helper process execution inside an explicit test case to avoid
+	// platform-specific flakiness from exiting during package init.
 	cfg := parseHelperProcessConfig(os.Args)
 	if !helperProcessEnabled() || !cfg.Helper {
 		return
@@ -428,18 +425,6 @@ type helperProcessConfig struct {
 	Stderr  string
 	OutFile string
 	Exit    int
-}
-
-func maybeRunHelperProcess() {
-	if !helperProcessEnabled() {
-		return
-	}
-	cfg := parseHelperProcessConfig(os.Args)
-	if !cfg.Helper {
-		return
-	}
-	runHelperProcess(cfg)
-	os.Exit(cfg.Exit)
 }
 
 func helperProcessEnabled() bool {
