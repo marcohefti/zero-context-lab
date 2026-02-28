@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/marcohefti/zero-context-lab/internal/campaign"
+	"github.com/marcohefti/zero-context-lab/internal/codes"
 	"github.com/marcohefti/zero-context-lab/internal/config"
 	"github.com/marcohefti/zero-context-lab/internal/ids"
 	"github.com/marcohefti/zero-context-lab/internal/integrations/codex_app_server"
@@ -86,6 +87,15 @@ type oracleVerdictArtifact struct {
 	PolicyDisposition string            `json:"policyDisposition,omitempty"`
 	Warnings          []string          `json:"warnings,omitempty"`
 	ExecutedAt        string            `json:"executedAt"`
+}
+
+type attemptFeedbackSummary struct {
+	Present       bool
+	OKKnown       bool
+	OK            bool
+	ResultCode    string
+	ResultKind    string
+	HasValidProof bool
 }
 
 var oracleExpectedGotRE = regexp.MustCompile(`^\s*([A-Za-z0-9_./-]+)\s+expected\s+(.+)\s+got\s+(.+)\s*$`)
@@ -1221,8 +1231,22 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 		ma.AttemptDir = ar.AttemptDir
 		ma.Status = ar.Status
 		ma.Errors = append(ma.Errors, ar.Errors...)
+		feedbackSummary := attemptFeedbackSummary{}
+		if strings.TrimSpace(ar.AttemptDir) != "" {
+			if fb, err := readAttemptFeedbackSummary(ar.AttemptDir); err == nil {
+				feedbackSummary = fb
+			}
+		}
+		infraDetected, infraCode := inferAttemptInfraFailure(ar, feedbackSummary)
 
 		gateErrors := make([]string, 0, 8)
+		if infraDetected {
+			if strings.TrimSpace(infraCode) != "" {
+				gateErrors = append(gateErrors, strings.TrimSpace(infraCode))
+			} else {
+				gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
+			}
+		}
 		if parsed.Spec.PairGateEnabled() && ar.Status != campaign.AttemptStatusValid {
 			gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
 		}
@@ -1281,6 +1305,11 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 			}
 		}
 		if parsed.Spec.PromptMode == campaign.PromptModeExam {
+			if !infraDetected && !feedbackSummary.HasValidProof {
+				gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
+			}
+		}
+		if parsed.Spec.PromptMode == campaign.PromptModeExam && !infraDetected && feedbackSummary.HasValidProof {
 			oracleVerdict, oracleErr := r.evaluateOracleForAttempt(parsed, fr.FlowID, missionID, ar)
 			if oracleErr != nil {
 				gateErrors = append(gateErrors, campaign.ReasonOracleEvalError)
@@ -1302,7 +1331,7 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 			ma.OK = false
 			ma.Errors = dedupeSortedStrings(append(ma.Errors, gateErrors...))
 			ar.Errors = dedupeSortedStrings(append(ar.Errors, gateErrors...))
-			if containsString(gateErrors, codeCampaignTimeoutGate) {
+			if containsString(gateErrors, codeCampaignTimeoutGate) || infraDetected || ar.Status == campaign.AttemptStatusInfraFailed {
 				ma.Status = campaign.AttemptStatusInfraFailed
 				ar.Status = campaign.AttemptStatusInfraFailed
 			} else if ar.Status == campaign.AttemptStatusSkipped {
@@ -1486,6 +1515,91 @@ func loadOracleProofFromAttempt(attemptDir string) (map[string]any, error) {
 		return nil, fmt.Errorf("feedback.result must resolve to a JSON object")
 	}
 	return proof, nil
+}
+
+func readAttemptFeedbackSummary(attemptDir string) (attemptFeedbackSummary, error) {
+	path := filepath.Join(strings.TrimSpace(attemptDir), "feedback.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return attemptFeedbackSummary{}, err
+	}
+	var fb struct {
+		OK         *bool           `json:"ok"`
+		Result     string          `json:"result"`
+		ResultJSON json.RawMessage `json:"resultJson"`
+	}
+	if err := json.Unmarshal(raw, &fb); err != nil {
+		return attemptFeedbackSummary{}, err
+	}
+	out := attemptFeedbackSummary{Present: true}
+	if fb.OK != nil {
+		out.OKKnown = true
+		out.OK = *fb.OK
+	}
+	if len(fb.ResultJSON) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(fb.ResultJSON, &obj); err == nil {
+			out.HasValidProof = true
+			if code, ok := obj["code"].(string); ok {
+				out.ResultCode = strings.TrimSpace(code)
+			}
+			if kind, ok := obj["kind"].(string); ok {
+				out.ResultKind = strings.TrimSpace(kind)
+			}
+		}
+		return out, nil
+	}
+	trimmed := strings.TrimSpace(fb.Result)
+	if trimmed == "" {
+		return out, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil {
+		out.HasValidProof = true
+	}
+	return out, nil
+}
+
+func inferAttemptInfraFailure(ar *campaign.AttemptStatusV1, fb attemptFeedbackSummary) (bool, string) {
+	if ar != nil {
+		if code := strings.TrimSpace(ar.RunnerErrorCode); code != "" {
+			return true, code
+		}
+		if code := strings.TrimSpace(ar.AutoFeedbackCode); code != "" {
+			return true, code
+		}
+		if ar.Status == campaign.AttemptStatusInfraFailed {
+			for _, code := range ar.Errors {
+				code = strings.TrimSpace(code)
+				if isInfraFailureCode(code) {
+					return true, code
+				}
+			}
+			return true, ""
+		}
+	}
+	if fb.Present && fb.OKKnown && !fb.OK && strings.TrimSpace(fb.ResultCode) != "" {
+		if strings.EqualFold(strings.TrimSpace(fb.ResultKind), "infra_failure") || isInfraFailureCode(fb.ResultCode) {
+			return true, strings.TrimSpace(fb.ResultCode)
+		}
+	}
+	return false, ""
+}
+
+func isInfraFailureCode(code string) bool {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return false
+	}
+	switch code {
+	case codeIO, codeMissingArtifact, codeSpawn, codeTimeout, codeToolFailed:
+		return true
+	}
+	return strings.HasPrefix(code, runtimeCodePrefix())
+}
+
+func runtimeCodePrefix() string {
+	return strings.TrimSuffix(codes.RuntimeTimeout, "TIMEOUT")
 }
 
 func normalizeOracleEvaluatorOutput(out *oracleEvaluatorOutput, policyMode string) {
@@ -1937,6 +2051,11 @@ func formatCampaignResultsMarkdown(sum campaign.SummaryV1) string {
 	fmt.Fprintf(&b, "- mismatchCount: `%d`\n", sum.MismatchCount)
 	fmt.Fprintf(&b, "- gatesPassed: `%d`\n", sum.GatesPassed)
 	fmt.Fprintf(&b, "- gatesFailed: `%d`\n\n", sum.GatesFailed)
+	fmt.Fprintf(&b, "- failureBuckets: infra_failed=%d oracle_failed=%d mission_failed=%d\n\n",
+		sum.FailureBuckets.InfraFailed,
+		sum.FailureBuckets.OracleFailed,
+		sum.FailureBuckets.MissionFailed,
+	)
 	if len(sum.TopFailureCodes) > 0 {
 		fmt.Fprintf(&b, "## Top Failure Codes\n\n")
 		for _, f := range sum.TopFailureCodes {
@@ -1957,7 +2076,8 @@ func formatCampaignResultsMarkdown(sum campaign.SummaryV1) string {
 	if len(sum.Flows) > 0 {
 		fmt.Fprintf(&b, "## Flows\n\n")
 		for _, f := range sum.Flows {
-			fmt.Fprintf(&b, "- `%s` (%s): attempts=%d valid=%d invalid=%d skipped=%d infra_failed=%d\n", f.FlowID, f.RunnerType, f.AttemptsTotal, f.Valid, f.Invalid, f.Skipped, f.InfraFailed)
+			fmt.Fprintf(&b, "- `%s` (%s): attempts=%d valid=%d invalid=%d skipped=%d infra_failed=%d oracle_failed=%d mission_failed=%d\n",
+				f.FlowID, f.RunnerType, f.AttemptsTotal, f.Valid, f.Invalid, f.Skipped, f.InfraFailed, f.OracleFailed, f.MissionFailed)
 		}
 		fmt.Fprintf(&b, "\n")
 	}

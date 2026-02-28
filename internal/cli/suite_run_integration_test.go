@@ -2238,6 +2238,12 @@ func TestHelperSuiteRunnerProcess(t *testing.T) {
 		}
 		_, _ = os.Stdout.WriteString(marker + `{"ok":true,"resultJson":{"proof":"stdout-channel-ok"}}` + "\n")
 		os.Exit(exit)
+	case "infra-feedback-only":
+		_ = r.Run([]string{"run", "--", "echo", "hi"})
+		if code := r.Run([]string{"feedback", "--fail", "--result-json", `{"kind":"infra_failure","code":"ZCL_E_RUNTIME_TIMEOUT","source":"suite_run"}`}); code != 0 {
+			os.Exit(114)
+		}
+		os.Exit(exit)
 	case "sleep":
 		time.Sleep(3 * time.Second)
 		os.Exit(exit)

@@ -1749,6 +1749,133 @@ flows:
 	}
 }
 
+func TestCampaignRun_ExamModeInfraFeedbackSkipsOracleAndBucketsInfra(t *testing.T) {
+	outRoot := t.TempDir()
+	specDir := t.TempDir()
+	promptDir := filepath.Join(specDir, "prompts")
+	oracleDir := filepath.Join(specDir, "oracles")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatalf("mkdir oracles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve the task and return proof JSON."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("expected title: hello"), 0o644); err != nil {
+		t.Fatalf("write oracle: %v", err)
+	}
+	specPath := filepath.Join(specDir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-exam-infra-feedback
+promptMode: exam
+missionSource:
+  promptSource:
+    path: prompts
+  oracleSource:
+    path: oracles
+    visibility: workspace
+evaluation:
+  mode: oracle
+  evaluator:
+    kind: script
+    command: ["`+os.Args[0]+`", "-test.run=TestHelperCampaignOracleEvaluator$", "--", "case=error"]
+flows:
+  - flowId: flow-a
+    runner:
+      type: process_cmd
+      command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=infra-feedback-only"]
+      finalization:
+        mode: auto_from_result_json
+        resultChannel:
+          kind: file_json
+`), 0o644); err != nil {
+		t.Fatalf("write campaign spec: %v", err)
+	}
+	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
+	t.Setenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL", "1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 15, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
+	if code != 2 {
+		t.Fatalf("campaign run expected 2 for infra failure, got %d stderr=%q", code, stderr.String())
+	}
+
+	statePath := filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.run.state.json")
+	stateRaw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		MissionGates []struct {
+			Reasons  []string `json:"reasons"`
+			Attempts []struct {
+				AttemptDir string   `json:"attemptDir"`
+				Status     string   `json:"status"`
+				Errors     []string `json:"errors"`
+			} `json:"attempts"`
+		} `json:"missionGates"`
+	}
+	if err := json.Unmarshal(stateRaw, &st); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	if len(st.MissionGates) != 1 || len(st.MissionGates[0].Attempts) != 1 {
+		t.Fatalf("expected one mission gate/attempt, got %+v", st)
+	}
+	attempt := st.MissionGates[0].Attempts[0]
+	if attempt.Status != "infra_failed" {
+		t.Fatalf("expected infra_failed attempt status, got %+v", attempt)
+	}
+	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_RUNTIME_TIMEOUT") {
+		t.Fatalf("expected mission gate reasons to include infra code, got %+v", st.MissionGates[0].Reasons)
+	}
+	if strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
+		t.Fatalf("did not expect oracle evaluation error reason for infra attempt, got %+v", st.MissionGates[0].Reasons)
+	}
+	if strings.Contains(strings.Join(attempt.Errors, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
+		t.Fatalf("did not expect oracle evaluation error on attempt, got %+v", attempt)
+	}
+	if _, err := os.Stat(filepath.Join(attempt.AttemptDir, "oracle.verdict.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected oracle.verdict.json to be absent when oracle evaluation is skipped, err=%v", err)
+	}
+
+	summaryPath := filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.summary.json")
+	summaryRaw, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	var sum struct {
+		FailureBuckets struct {
+			InfraFailed   int `json:"infraFailed"`
+			OracleFailed  int `json:"oracleFailed"`
+			MissionFailed int `json:"missionFailed"`
+		} `json:"failureBuckets"`
+		Flows []struct {
+			InfraFailed   int `json:"infraFailed"`
+			OracleFailed  int `json:"oracleFailed"`
+			MissionFailed int `json:"missionFailed"`
+		} `json:"flows"`
+	}
+	if err := json.Unmarshal(summaryRaw, &sum); err != nil {
+		t.Fatalf("unmarshal summary: %v", err)
+	}
+	if sum.FailureBuckets.InfraFailed != 1 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 0 {
+		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
+	}
+	if len(sum.Flows) != 1 || sum.Flows[0].InfraFailed != 1 || sum.Flows[0].OracleFailed != 0 || sum.Flows[0].MissionFailed != 0 {
+		t.Fatalf("unexpected flow failure buckets: %+v", sum.Flows)
+	}
+}
+
 func TestCampaignRun_ExamModeFormatOnlyMismatchCanWarnNonGating(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()

@@ -60,6 +60,12 @@ func TestRunState_SaveLoadAndReport(t *testing.T) {
 	if len(rep.Flows) != 1 || rep.Flows[0].Valid != 1 || rep.Flows[0].Invalid != 1 {
 		t.Fatalf("unexpected flow summary: %+v", rep.Flows)
 	}
+	if rep.Flows[0].InfraFailed != 0 || rep.Flows[0].OracleFailed != 0 || rep.Flows[0].MissionFailed != 1 {
+		t.Fatalf("unexpected flow failure buckets: %+v", rep.Flows[0])
+	}
+	if rep.FailureBuckets.InfraFailed != 0 || rep.FailureBuckets.OracleFailed != 0 || rep.FailureBuckets.MissionFailed != 1 {
+		t.Fatalf("unexpected report failure buckets: %+v", rep.FailureBuckets)
+	}
 	sum := BuildSummary(got)
 	if sum.GatesPassed != 1 || sum.GatesFailed != 1 {
 		t.Fatalf("unexpected summary gates: %+v", sum)
@@ -69,6 +75,9 @@ func TestRunState_SaveLoadAndReport(t *testing.T) {
 	}
 	if sum.ClaimedMissionsOK != 1 || sum.VerifiedMissionsOK != 1 || sum.MismatchCount != 0 {
 		t.Fatalf("unexpected summary claimed/verified counts: %+v", sum)
+	}
+	if sum.FailureBuckets.InfraFailed != 0 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 1 {
+		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
 	}
 	if sum.EvidencePaths.RunStatePath == "" || sum.EvidencePaths.ResultsMDPath == "" {
 		t.Fatalf("expected evidence paths in summary, got %+v", sum.EvidencePaths)

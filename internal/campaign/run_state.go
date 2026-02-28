@@ -105,6 +105,8 @@ type ReportV1 struct {
 	GatesFailed       int `json:"gatesFailed"`
 
 	Flows []FlowReportV1 `json:"flows,omitempty"`
+	// FailureBuckets split failed attempts into mutually-exclusive classes.
+	FailureBuckets FailureBucketsV1 `json:"failureBuckets"`
 
 	UpdatedAt string `json:"updatedAt"`
 }
@@ -127,9 +129,16 @@ type SummaryV1 struct {
 	MismatchCount      int `json:"mismatchCount"`
 
 	TopFailureCodes []CodeCountV1      `json:"topFailureCodes,omitempty"`
+	FailureBuckets  FailureBucketsV1   `json:"failureBuckets"`
 	Missions        []MissionSummaryV1 `json:"missions,omitempty"`
 	EvidencePaths   SummaryEvidenceV1  `json:"evidencePaths"`
 	Flows           []FlowReportV1     `json:"flows,omitempty"`
+}
+
+type FailureBucketsV1 struct {
+	InfraFailed   int `json:"infraFailed"`
+	OracleFailed  int `json:"oracleFailed"`
+	MissionFailed int `json:"missionFailed"`
 }
 
 type CodeCountV1 struct {
@@ -171,6 +180,8 @@ type FlowReportV1 struct {
 	Invalid       int    `json:"invalid"`
 	Skipped       int    `json:"skipped"`
 	InfraFailed   int    `json:"infraFailed"`
+	OracleFailed  int    `json:"oracleFailed"`
+	MissionFailed int    `json:"missionFailed"`
 }
 
 type PlanV1 struct {
@@ -327,6 +338,7 @@ func BuildReport(st RunStateV1) ReportV1 {
 			RunnerType: fr.RunnerType,
 		}
 		for _, ar := range fr.Attempts {
+			bucket := classifyAttemptFailureBucket(ar)
 			cur.AttemptsTotal++
 			switch ar.Status {
 			case AttemptStatusValid:
@@ -334,9 +346,20 @@ func BuildReport(st RunStateV1) ReportV1 {
 			case AttemptStatusSkipped:
 				cur.Skipped++
 			case AttemptStatusInfraFailed:
-				cur.InfraFailed++
+				// Keep status counters backward-compatible; bucket counters track infra failures.
 			default:
 				cur.Invalid++
+			}
+			switch bucket {
+			case failureBucketInfra:
+				cur.InfraFailed++
+				rep.FailureBuckets.InfraFailed++
+			case failureBucketOracle:
+				cur.OracleFailed++
+				rep.FailureBuckets.OracleFailed++
+			case failureBucketMission:
+				cur.MissionFailed++
+				rep.FailureBuckets.MissionFailed++
 			}
 		}
 		byFlow[fr.FlowID] = cur
@@ -373,6 +396,7 @@ func BuildSummary(st RunStateV1) SummaryV1 {
 		MissionsCompleted: rep.MissionsCompleted,
 		GatesPassed:       rep.GatesPassed,
 		GatesFailed:       rep.GatesFailed,
+		FailureBuckets:    rep.FailureBuckets,
 		Flows:             rep.Flows,
 		EvidencePaths: SummaryEvidenceV1{
 			RunStatePath:  RunStatePath(st.OutRoot, st.CampaignID),
@@ -479,6 +503,75 @@ func sortCodeCounts(in map[string]int) []CodeCountV1 {
 		return out[i].Code < out[j].Code
 	})
 	return out
+}
+
+const (
+	failureBucketNone    = ""
+	failureBucketInfra   = "infra"
+	failureBucketOracle  = "oracle"
+	failureBucketMission = "mission"
+)
+
+func classifyAttemptFailureBucket(ar AttemptStatusV1) string {
+	if ar.Status == AttemptStatusValid || ar.Status == AttemptStatusSkipped {
+		return failureBucketNone
+	}
+	if ar.Status == AttemptStatusInfraFailed || isInfraAttemptStatus(ar) {
+		return failureBucketInfra
+	}
+	if hasOracleFailureCode(ar.Errors) {
+		return failureBucketOracle
+	}
+	return failureBucketMission
+}
+
+func isInfraAttemptStatus(ar AttemptStatusV1) bool {
+	if isInfraCode(ar.RunnerErrorCode) || isInfraCode(ar.AutoFeedbackCode) {
+		return true
+	}
+	for _, code := range ar.Errors {
+		if isInfraCode(code) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasOracleFailureCode(in []string) bool {
+	for _, code := range in {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			continue
+		}
+		if strings.HasPrefix(code, campaignOracleCodePrefix()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isInfraCode(code string) bool {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return false
+	}
+	if strings.HasPrefix(code, runtimeCodePrefix()) {
+		return true
+	}
+	switch code {
+	case codes.Timeout, codes.Spawn, codes.ToolFailed, codes.IO, codes.MissingArtifact:
+		return true
+	default:
+		return false
+	}
+}
+
+func campaignOracleCodePrefix() string {
+	return strings.TrimSuffix(codes.CampaignOracleEvaluatorMissing, "EVALUATOR_REQUIRED")
+}
+
+func runtimeCodePrefix() string {
+	return strings.TrimSuffix(codes.RuntimeTimeout, "TIMEOUT")
 }
 
 func normalizeReasonCodes(in []string) []string {

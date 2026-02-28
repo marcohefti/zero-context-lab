@@ -758,6 +758,11 @@ Example:
   "missionsCompleted": 3,
   "gatesPassed": 3,
   "gatesFailed": 0,
+  "failureBuckets": {
+    "infraFailed": 0,
+    "oracleFailed": 0,
+    "missionFailed": 0
+  },
   "flows": [],
   "updatedAt": "2026-02-22T12:01:00.123456789Z"
 }
@@ -790,6 +795,11 @@ Example:
   "missionsCompleted": 3,
   "gatesPassed": 2,
   "gatesFailed": 1,
+  "failureBuckets": {
+    "infraFailed": 1,
+    "oracleFailed": 1,
+    "missionFailed": 0
+  },
   "claimedMissionsOk": 3,
   "verifiedMissionsOk": 2,
   "mismatchCount": 1,
@@ -802,7 +812,19 @@ Example:
     "resultsMdPath": ".zcl/campaigns/cmp-main/RESULTS.md",
     "attemptDirs": []
   },
-  "flows": []
+  "flows": [
+    {
+      "flowId": "flow-a",
+      "runnerType": "codex_app_server",
+      "attemptsTotal": 1,
+      "valid": 0,
+      "invalid": 1,
+      "skipped": 0,
+      "infraFailed": 1,
+      "oracleFailed": 0,
+      "missionFailed": 0
+    }
+  ]
 }
 ```
 
