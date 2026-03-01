@@ -1,8 +1,8 @@
 class Zcl < Formula
   desc "Zero Context Lab (ZCL): agent evaluation harness with trace-backed evidence"
   homepage "https://github.com/marcohefti/zero-context-lab"
-  url "https://codeload.github.com/marcohefti/zero-context-lab/tar.gz/refs/tags/v0.1.0"
-  sha256 "29a660c2f587730dacd3ab830dbeb6fadeef8e828692425af4ba348be650d9ba"
+  url "https://codeload.github.com/marcohefti/zero-context-lab/tar.gz/refs/tags/v0.1.1"
+  sha256 "e669b8a1f09532786f58207837301f17ebd313352b66d5e75013015112b84956"
   license "MIT"
   head "https://github.com/marcohefti/zero-context-lab.git", branch: "main"
 
