@@ -25,6 +25,9 @@ type AttemptRuntimeContextV1 struct {
 	ToolDriverKind string `json:"toolDriverKind,omitempty"`
 	RuntimeID      string `json:"runtimeId,omitempty"`
 	NativeMode     bool   `json:"nativeMode"`
+	StartCwdMode   string `json:"startCwdMode,omitempty"`
+	StartCwd       string `json:"startCwd,omitempty"`
+	StartCwdRetain string `json:"startCwdRetain,omitempty"`
 }
 
 type AttemptPromptMetadataV1 struct {

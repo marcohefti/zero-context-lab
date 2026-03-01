@@ -658,6 +658,148 @@ flows:
 	}
 }
 
+func TestParseSpecFile_RunnerCwdDefaults(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-runner-cwd-defaults
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: codex_app_server
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	got := ps.Spec.Flows[0].Runner.Cwd
+	if got.Mode != RunnerCwdModeInherit || got.Retain != RunnerCwdRetainNever || got.BasePath != "" {
+		t.Fatalf("unexpected runner cwd defaults: %+v", got)
+	}
+}
+
+func TestParseSpecFile_RunnerCwdTempEmptyPerAttemptNormalized(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-runner-cwd-normalized
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: codex_app_server
+      cwd:
+        mode: " TEMP_EMPTY_PER_ATTEMPT "
+        basePath: ".tmp/cwd"
+        retain: " ON_FAILURE "
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	ps, err := ParseSpecFile(specPath)
+	if err != nil {
+		t.Fatalf("ParseSpecFile: %v", err)
+	}
+	got := ps.Spec.Flows[0].Runner.Cwd
+	if got.Mode != RunnerCwdModeTempEmptyPerAttempt {
+		t.Fatalf("expected cwd mode %q, got %q", RunnerCwdModeTempEmptyPerAttempt, got.Mode)
+	}
+	if got.Retain != RunnerCwdRetainOnFailure {
+		t.Fatalf("expected cwd retain %q, got %q", RunnerCwdRetainOnFailure, got.Retain)
+	}
+	wantBase := filepath.Join(dir, ".tmp", "cwd")
+	if got.BasePath != wantBase {
+		t.Fatalf("expected cwd basePath %q, got %q", wantBase, got.BasePath)
+	}
+}
+
+func TestParseSpecFile_RunnerCwdModeRequiresCodexAppServer(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-runner-cwd-unsupported
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: process_cmd
+      command: ["echo","ok"]
+      cwd:
+        mode: temp_empty_per_attempt
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "supported only for runner.type=codex_app_server") {
+		t.Fatalf("expected runner cwd runner-type validation error, got %v", err)
+	}
+}
+
+func TestParseSpecFile_RunnerCwdRetainRequiresTempMode(t *testing.T) {
+	dir := t.TempDir()
+	suitePath := filepath.Join(dir, "suite.json")
+	if err := os.WriteFile(suitePath, []byte(`{
+  "version": 1,
+  "suiteId": "suite-a",
+  "missions": [
+    { "missionId": "m1", "prompt": "p1" }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write suite: %v", err)
+	}
+	specPath := filepath.Join(dir, "campaign.yaml")
+	if err := os.WriteFile(specPath, []byte(`
+schemaVersion: 1
+campaignId: cmp-runner-cwd-retain
+flows:
+  - flowId: flow-a
+    suiteFile: suite.json
+    runner:
+      type: codex_app_server
+      cwd:
+        retain: always
+`), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if _, err := ParseSpecFile(specPath); err == nil || !strings.Contains(err.Error(), "runner.cwd.retain requires runner.cwd.mode=temp_empty_per_attempt") {
+		t.Fatalf("expected runner cwd retain-mode validation error, got %v", err)
+	}
+}
+
 func TestParseSpecFile_ExamModeSplitSourcesAndEvaluator(t *testing.T) {
 	dir := t.TempDir()
 	promptDir := filepath.Join(dir, "prompts")

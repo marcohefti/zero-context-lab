@@ -45,6 +45,10 @@ flows:
       modelReasoningPolicy: best_effort
       sessionIsolation: native
       runtimeStrategies: ["codex_app_server", "provider_stub"]
+      cwd:
+        mode: temp_empty_per_attempt
+        basePath: /tmp/zcl
+        retain: on_failure
       feedbackPolicy: strict
       mode: discovery
       freshAgentPerAttempt: true

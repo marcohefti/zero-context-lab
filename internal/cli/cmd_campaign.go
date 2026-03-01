@@ -1791,6 +1791,13 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 	env["ZCL_CAMPAIGN_RUNNER_TYPE"] = strings.TrimSpace(flow.Runner.Type)
 	env["ZCL_FRESH_AGENT_PER_ATTEMPT"] = "1"
 	env["ZCL_TOOL_DRIVER_KIND"] = strings.TrimSpace(flow.Runner.ToolDriver.Kind)
+	env[suiteRunEnvRunnerCwdMode] = strings.TrimSpace(flow.Runner.Cwd.Mode)
+	if strings.TrimSpace(flow.Runner.Cwd.BasePath) != "" {
+		env[suiteRunEnvRunnerCwdBasePath] = strings.TrimSpace(flow.Runner.Cwd.BasePath)
+	}
+	if strings.TrimSpace(flow.Runner.Cwd.Retain) != "" {
+		env[suiteRunEnvRunnerCwdRetain] = strings.TrimSpace(flow.Runner.Cwd.Retain)
+	}
 	if kind, sourcePath, templatePath := flowPromptMetadata(parsed, flow); kind != "" {
 		env["ZCL_PROMPT_SOURCE_KIND"] = kind
 		if sourcePath != "" {

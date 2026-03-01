@@ -68,6 +68,13 @@ const (
 	FinalizationModeAutoFail           = "auto_fail"
 	FinalizationModeAutoFromResultJSON = "auto_from_result_json"
 
+	RunnerCwdModeInherit             = "inherit"
+	RunnerCwdModeTempEmptyPerAttempt = "temp_empty_per_attempt"
+
+	RunnerCwdRetainNever     = "never"
+	RunnerCwdRetainOnFailure = "on_failure"
+	RunnerCwdRetainAlways    = "always"
+
 	ModelReasoningEffortNone    = "none"
 	ModelReasoningEffortMinimal = "minimal"
 	ModelReasoningEffortLow     = "low"
@@ -288,6 +295,7 @@ type RunnerAdapterSpec struct {
 	StrictExpect     *bool            `json:"strictExpect,omitempty" yaml:"strictExpect,omitempty"`
 	ToolDriver       ToolDriverSpec   `json:"toolDriver,omitempty" yaml:"toolDriver,omitempty"`
 	Finalization     FinalizationSpec `json:"finalization,omitempty" yaml:"finalization,omitempty"`
+	Cwd              RunnerCwdSpec    `json:"cwd,omitempty" yaml:"cwd,omitempty"`
 
 	MCP MCPLifecycleSpec `json:"mcp,omitempty" yaml:"mcp,omitempty"`
 
@@ -310,6 +318,12 @@ type FinalizationSpec struct {
 	Mode          string            `json:"mode,omitempty" yaml:"mode,omitempty"` // strict|auto_fail|auto_from_result_json
 	MinResultTurn int               `json:"minResultTurn,omitempty" yaml:"minResultTurn,omitempty"`
 	ResultChannel ResultChannelSpec `json:"resultChannel,omitempty" yaml:"resultChannel,omitempty"`
+}
+
+type RunnerCwdSpec struct {
+	Mode     string `json:"mode,omitempty" yaml:"mode,omitempty"`         // inherit|temp_empty_per_attempt
+	BasePath string `json:"basePath,omitempty" yaml:"basePath,omitempty"` // optional root for temp_empty_per_attempt
+	Retain   string `json:"retain,omitempty" yaml:"retain,omitempty"`     // never|on_failure|always
 }
 
 type ResultChannelSpec struct {
@@ -825,6 +839,37 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		}
 		if !isValidFinalizationMode(f.Runner.Finalization.Mode) {
 			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.mode (expected %s|%s|%s)", f.FlowID, FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON)
+		}
+		f.Runner.Cwd.Mode = strings.ToLower(strings.TrimSpace(f.Runner.Cwd.Mode))
+		if f.Runner.Cwd.Mode == "" {
+			f.Runner.Cwd.Mode = RunnerCwdModeInherit
+		}
+		if !isValidRunnerCwdMode(f.Runner.Cwd.Mode) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.cwd.mode (expected %s|%s)", f.FlowID, RunnerCwdModeInherit, RunnerCwdModeTempEmptyPerAttempt)
+		}
+		f.Runner.Cwd.BasePath = strings.TrimSpace(f.Runner.Cwd.BasePath)
+		if f.Runner.Cwd.BasePath != "" {
+			if !filepath.IsAbs(f.Runner.Cwd.BasePath) {
+				f.Runner.Cwd.BasePath = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.Runner.Cwd.BasePath))
+			} else {
+				f.Runner.Cwd.BasePath = filepath.Clean(f.Runner.Cwd.BasePath)
+			}
+		}
+		if f.Runner.Cwd.Mode == RunnerCwdModeInherit && f.Runner.Cwd.BasePath != "" {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.basePath requires runner.cwd.mode=%s", f.FlowID, RunnerCwdModeTempEmptyPerAttempt)
+		}
+		f.Runner.Cwd.Retain = strings.ToLower(strings.TrimSpace(f.Runner.Cwd.Retain))
+		if f.Runner.Cwd.Retain == "" {
+			f.Runner.Cwd.Retain = RunnerCwdRetainNever
+		}
+		if !isValidRunnerCwdRetain(f.Runner.Cwd.Retain) {
+			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.cwd.retain (expected %s|%s|%s)", f.FlowID, RunnerCwdRetainNever, RunnerCwdRetainOnFailure, RunnerCwdRetainAlways)
+		}
+		if f.Runner.Cwd.Mode == RunnerCwdModeInherit && f.Runner.Cwd.Retain != RunnerCwdRetainNever {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.retain requires runner.cwd.mode=%s", f.FlowID, RunnerCwdModeTempEmptyPerAttempt)
+		}
+		if f.Runner.Cwd.Mode != RunnerCwdModeInherit && f.Runner.Type != RunnerTypeCodexAppSrv {
+			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.mode=%s is supported only for runner.type=%s", f.FlowID, f.Runner.Cwd.Mode, RunnerTypeCodexAppSrv)
 		}
 		if f.Runner.Finalization.MinResultTurn < 0 {
 			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.minResultTurn must be >= 1 when set", f.FlowID)
@@ -1691,6 +1736,24 @@ func isValidToolDriverKind(v string) bool {
 func isValidFinalizationMode(v string) bool {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidRunnerCwdMode(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case RunnerCwdModeInherit, RunnerCwdModeTempEmptyPerAttempt:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidRunnerCwdRetain(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case RunnerCwdRetainNever, RunnerCwdRetainOnFailure, RunnerCwdRetainAlways:
 		return true
 	default:
 		return false

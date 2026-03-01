@@ -929,6 +929,8 @@
       "flowMode": "sequence",
       "traceProfile": "none",
       "toolDriverKind": "shell",
+      "runnerCwdMode": "inherit",
+      "runnerCwdRetain": "never",
       "modelReasoningPolicy": "best_effort",
       "finalizationMode": "auto_fail",
       "resultChannelKind": "none",
@@ -1141,6 +1143,35 @@
         "type": "string[]",
         "required": false,
         "description": "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only or exam with cli_funnel."
+      },
+      {
+        "path": "flows[].runner.cwd.mode",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "inherit",
+          "temp_empty_per_attempt"
+        ],
+        "default": "inherit",
+        "description": "Agent thread/start cwd policy; temp_empty_per_attempt creates a fresh empty directory per attempt."
+      },
+      {
+        "path": "flows[].runner.cwd.basePath",
+        "type": "string",
+        "required": false,
+        "description": "Optional base path used by temp_empty_per_attempt runner cwd policy."
+      },
+      {
+        "path": "flows[].runner.cwd.retain",
+        "type": "string",
+        "required": false,
+        "enum": [
+          "never",
+          "on_failure",
+          "always"
+        ],
+        "default": "never",
+        "description": "Retention policy for per-attempt temp cwd directories."
       },
       {
         "path": "flows[].runner.model",

@@ -96,7 +96,9 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 		}
 		var runtimeEnv struct {
 			Runtime struct {
-				NativeMode bool `json:"nativeMode"`
+				NativeMode   bool   `json:"nativeMode"`
+				StartCwdMode string `json:"startCwdMode"`
+				StartCwd     string `json:"startCwd"`
 			} `json:"runtime"`
 			Prompt struct {
 				SourceKind string `json:"sourceKind"`
@@ -113,6 +115,9 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 		}
 		if runtimeEnv.Runtime.NativeMode {
 			t.Fatalf("expected process-mode runtime env artifact for this test")
+		}
+		if runtimeEnv.Runtime.StartCwdMode != "inherit" || strings.TrimSpace(runtimeEnv.Runtime.StartCwd) == "" {
+			t.Fatalf("unexpected runtime start cwd metadata: %+v", runtimeEnv.Runtime)
 		}
 		if runtimeEnv.Prompt.SourceKind != "suite_prompt" || runtimeEnv.Prompt.Bytes <= 0 || len(runtimeEnv.Prompt.SHA256) != 64 {
 			t.Fatalf("unexpected prompt metadata: %+v", runtimeEnv.Prompt)
@@ -626,8 +631,10 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	}
 	var runtimeEnv struct {
 		Runtime struct {
-			NativeMode bool   `json:"nativeMode"`
-			RuntimeID  string `json:"runtimeId"`
+			NativeMode   bool   `json:"nativeMode"`
+			RuntimeID    string `json:"runtimeId"`
+			StartCwdMode string `json:"startCwdMode"`
+			StartCwd     string `json:"startCwd"`
 		} `json:"runtime"`
 		Prompt struct {
 			SourceKind string `json:"sourceKind"`
@@ -639,6 +646,9 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	}
 	if !runtimeEnv.Runtime.NativeMode || runtimeEnv.Runtime.RuntimeID != "codex_app_server" {
 		t.Fatalf("unexpected native runtime metadata: %+v", runtimeEnv.Runtime)
+	}
+	if runtimeEnv.Runtime.StartCwdMode != "inherit" || strings.TrimSpace(runtimeEnv.Runtime.StartCwd) == "" {
+		t.Fatalf("unexpected native start cwd metadata: %+v", runtimeEnv.Runtime)
 	}
 	if runtimeEnv.Prompt.SourceKind != "suite_prompt" || len(runtimeEnv.Prompt.SHA256) != 64 {
 		t.Fatalf("unexpected native prompt metadata: %+v", runtimeEnv.Prompt)
@@ -661,6 +671,87 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	}
 	if rep.NativeResult.ResultSource != "delta_fallback" || rep.NativeResult.PhaseAware {
 		t.Fatalf("unexpected report nativeResult: %+v", rep.NativeResult)
+	}
+}
+
+func TestSuiteRun_NativeRunnerCwdTempEmptyPerAttempt(t *testing.T) {
+	outRoot := t.TempDir()
+	basePath := filepath.Join(t.TempDir(), "runner-cwd")
+	suitePath := filepath.Join(t.TempDir(), "suite.json")
+	writeSuiteFile(t, suitePath, `{
+  "version": 1,
+  "suiteId": "suite-run-native-cwd-temp",
+  "defaults": { "mode": "discovery", "timeoutMs": 60000 },
+  "missions": [
+    { "missionId": "m1", "prompt": "native prompt", "expects": { "ok": true } }
+  ]
+}`)
+
+	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
+	t.Setenv("ZCL_HELPER_PROCESS", "1")
+	t.Setenv("ZCL_HELPER_MODE", "smoke")
+	t.Setenv("ZCL_HELPER_EXPECT_CWD_PREFIX", filepath.Clean(basePath)+string(os.PathSeparator))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
+		Version: "0.0.0-dev",
+		Now:     func() time.Time { return time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC) },
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+
+	code := r.runSuiteRunWithEnv([]string{
+		"--file", suitePath,
+		"--out-root", outRoot,
+		"--session-isolation", "native",
+		"--json",
+	}, map[string]string{
+		suiteRunEnvRunnerCwdMode:     "temp_empty_per_attempt",
+		suiteRunEnvRunnerCwdBasePath: basePath,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+	}
+
+	var sum struct {
+		OK       bool `json:"ok"`
+		Attempts []struct {
+			AttemptDir string `json:"attemptDir"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	}
+	if !sum.OK || len(sum.Attempts) != 1 {
+		t.Fatalf("unexpected summary: %+v", sum)
+	}
+	attemptDir := sum.Attempts[0].AttemptDir
+	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
+	if err != nil {
+		t.Fatalf("read attempt.runtime.env.json: %v", err)
+	}
+	var runtimeEnv struct {
+		Runtime struct {
+			StartCwdMode   string `json:"startCwdMode"`
+			StartCwd       string `json:"startCwd"`
+			StartCwdRetain string `json:"startCwdRetain"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+	}
+	if runtimeEnv.Runtime.StartCwdMode != "temp_empty_per_attempt" {
+		t.Fatalf("unexpected start cwd mode: %+v", runtimeEnv.Runtime)
+	}
+	if !strings.HasPrefix(runtimeEnv.Runtime.StartCwd, filepath.Clean(basePath)+string(os.PathSeparator)) {
+		t.Fatalf("start cwd %q not under %q", runtimeEnv.Runtime.StartCwd, basePath)
+	}
+	if runtimeEnv.Runtime.StartCwdRetain != "never" {
+		t.Fatalf("unexpected start cwd retain policy: %+v", runtimeEnv.Runtime)
+	}
+	if _, err := os.Stat(runtimeEnv.Runtime.StartCwd); !os.IsNotExist(err) {
+		t.Fatalf("expected temp start cwd cleanup, stat err=%v path=%q", err, runtimeEnv.Runtime.StartCwd)
 	}
 }
 
@@ -2346,6 +2437,21 @@ func runSuiteNativeHelper(mode string) {
 			}
 		case "thread/start":
 			params, _ := msg["params"].(map[string]any)
+			gotCwd, _ := params["cwd"].(string)
+			expectedCwd := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD"))
+			if expectedCwd != "" {
+				if filepath.Clean(strings.TrimSpace(gotCwd)) != filepath.Clean(expectedCwd) {
+					respondErr(-32000, fmt.Sprintf("thread/start cwd mismatch got=%q want=%q", gotCwd, expectedCwd))
+					continue
+				}
+			}
+			expectedCwdPrefix := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD_PREFIX"))
+			if expectedCwdPrefix != "" {
+				if !strings.HasPrefix(strings.TrimSpace(gotCwd), expectedCwdPrefix) {
+					respondErr(-32000, fmt.Sprintf("thread/start cwd prefix mismatch got=%q wantPrefix=%q", gotCwd, expectedCwdPrefix))
+					continue
+				}
+			}
 			switch mode {
 			case "invalid_model":
 				if gotModel, _ := params["model"].(string); strings.TrimSpace(gotModel) == "invalid-model-id" {

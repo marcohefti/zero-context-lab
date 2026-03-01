@@ -219,7 +219,10 @@ Shape (v1):
     "isolationModel": "process_runner",
     "toolDriverKind": "shell",
     "runtimeId": "",
-    "nativeMode": false
+    "nativeMode": false,
+    "startCwdMode": "inherit",
+    "startCwd": "/Users/operator/workspace/zero-context-lab",
+    "startCwdRetain": "never"
   },
   "prompt": {
     "sourceKind": "suite_prompt",
@@ -242,6 +245,7 @@ Notes:
 - `env.explicit` values are redacted with native env redaction policy.
 - `env.effectiveKeys` is key-only visibility after merge/filter (no values).
 - `env.blockedKeys` is populated for native runtime policy filtering.
+- `runtime.startCwd*` captures the effective agent thread/start working directory contract for auditability.
 - `prompt.sourceKind` is `suite_prompt` for plain suite runs; campaign runs include flow-aware kinds such as `flow_prompt_source` and `flow_prompt_template`.
 
 ## `tool.calls.jsonl` trace events (v1)
@@ -576,6 +580,9 @@ Core enforced fields:
   - `type`: `process_cmd|codex_exec|codex_subagent|claude_subagent|codex_app_server`
   - `command` (required except `codex_app_server`), `env`, `sessionIsolation`, `feedbackPolicy`, `freshAgentPerAttempt`
   - `runtimeStrategies`: ordered strategy fallback chain for native execution (for example `["codex_app_server","provider_stub"]`)
+  - `cwd.mode`: `inherit|temp_empty_per_attempt` (native codex_app_server flows only)
+  - `cwd.basePath`: optional base directory for per-attempt empty cwd allocation
+  - `cwd.retain`: `never|on_failure|always` temp cwd retention policy
   - `model` (optional, `codex_app_server` only): native `thread/start` model override
   - `modelReasoningEffort` (optional, `codex_app_server` only): `none|minimal|low|medium|high|xhigh`
   - `modelReasoningPolicy` (optional, `codex_app_server` only): `best_effort|required` (defaults to `best_effort` when effort is set)

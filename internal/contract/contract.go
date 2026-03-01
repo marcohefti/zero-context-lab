@@ -73,6 +73,8 @@ type CampaignSchemaDefaults struct {
 	FlowMode                    string   `json:"flowMode"`
 	TraceProfile                string   `json:"traceProfile"`
 	ToolDriverKind              string   `json:"toolDriverKind"`
+	RunnerCwdMode               string   `json:"runnerCwdMode"`
+	RunnerCwdRetain             string   `json:"runnerCwdRetain"`
 	ModelReasoningPolicy        string   `json:"modelReasoningPolicy"`
 	FinalizationMode            string   `json:"finalizationMode"`
 	ResultChannelKind           string   `json:"resultChannelKind"`
@@ -573,6 +575,8 @@ func Build(version string) Contract {
 				FlowMode:                    campaign.FlowModeSequence,
 				TraceProfile:                campaign.TraceProfileNone,
 				ToolDriverKind:              campaign.ToolDriverShell,
+				RunnerCwdMode:               campaign.RunnerCwdModeInherit,
+				RunnerCwdRetain:             campaign.RunnerCwdRetainNever,
 				ModelReasoningPolicy:        campaign.ModelReasoningPolicyBestEffort,
 				FinalizationMode:            campaign.FinalizationModeAutoFail,
 				ResultChannelKind:           campaign.ResultChannelNone,
@@ -739,6 +743,28 @@ func Build(version string) Contract {
 					Type:        "string[]",
 					Required:    false,
 					Description: "Shim binaries for tool driver funneling. Required (or runner.shims) when promptMode=mission_only or exam with cli_funnel.",
+				},
+				{
+					Path:        "flows[].runner.cwd.mode",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.RunnerCwdModeInherit, campaign.RunnerCwdModeTempEmptyPerAttempt},
+					Default:     campaign.RunnerCwdModeInherit,
+					Description: "Agent thread/start cwd policy; temp_empty_per_attempt creates a fresh empty directory per attempt.",
+				},
+				{
+					Path:        "flows[].runner.cwd.basePath",
+					Type:        "string",
+					Required:    false,
+					Description: "Optional base path used by temp_empty_per_attempt runner cwd policy.",
+				},
+				{
+					Path:        "flows[].runner.cwd.retain",
+					Type:        "string",
+					Required:    false,
+					Enum:        []string{campaign.RunnerCwdRetainNever, campaign.RunnerCwdRetainOnFailure, campaign.RunnerCwdRetainAlways},
+					Default:     campaign.RunnerCwdRetainNever,
+					Description: "Retention policy for per-attempt temp cwd directories.",
 				},
 				{
 					Path:        "flows[].runner.model",

@@ -236,6 +236,15 @@
               "strict": { "type": "boolean" },
               "strictExpect": { "type": "boolean" },
               "freshAgentPerAttempt": { "type": "boolean" },
+              "cwd": {
+                "type": "object",
+                "properties": {
+                  "mode": { "type": "string", "enum": ["inherit", "temp_empty_per_attempt"] },
+                  "basePath": { "type": "string" },
+                  "retain": { "type": "string", "enum": ["never", "on_failure", "always"] }
+                },
+                "additionalProperties": false
+              },
               "toolDriver": {
                 "type": "object",
                 "properties": {

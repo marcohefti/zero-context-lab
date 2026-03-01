@@ -32,7 +32,7 @@ func TestCampaignRun_Status_Report_PublishCheck(t *testing.T) {
   ]
 }`)
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(fmt.Sprintf(`
+	if err := os.WriteFile(specPath, []byte(strings.TrimSpace(fmt.Sprintf(`
 schemaVersion: 1
 campaignId: cmp-int
 outRoot: %q
@@ -50,7 +50,7 @@ flows:
     runner:
       type: process_cmd
       command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
-`, outRoot)), 0o644); err != nil {
+	`, outRoot))+"\n"), 0o644); err != nil {
 		t.Fatalf("write campaign spec: %v", err)
 	}
 
@@ -145,6 +145,7 @@ flows:
 func TestCampaignRun_NativeCodexAppServerFlow(t *testing.T) {
 	outRoot := t.TempDir()
 	specDir := t.TempDir()
+	runnerCwdBase := filepath.Join(outRoot, "runner-cwd")
 	suitePath := filepath.Join(specDir, "suite-native.json")
 	writeSuiteFile(t, suitePath, `{
   "version": 1,
@@ -155,7 +156,7 @@ func TestCampaignRun_NativeCodexAppServerFlow(t *testing.T) {
 }`)
 
 	specPath := filepath.Join(specDir, "campaign-native.yaml")
-	if err := os.WriteFile(specPath, []byte(fmt.Sprintf(`
+	if err := os.WriteFile(specPath, []byte(strings.TrimSpace(fmt.Sprintf(`
 schemaVersion: 1
 campaignId: cmp-native
 outRoot: %q
@@ -169,13 +170,17 @@ flows:
       type: codex_app_server
       sessionIsolation: native
       runtimeStrategies: ["codex_app_server"]
-`, outRoot)), 0o644); err != nil {
+      cwd:
+        mode: temp_empty_per_attempt
+        basePath: %q
+	`, outRoot, runnerCwdBase))+"\n"), 0o644); err != nil {
 		t.Fatalf("write native campaign spec: %v", err)
 	}
 
 	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
+	t.Setenv("ZCL_HELPER_EXPECT_CWD_PREFIX", filepath.Clean(runnerCwdBase)+string(os.PathSeparator))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -212,6 +217,54 @@ flows:
 	}
 	if run.CampaignID != "cmp-native" || run.RunID == "" || run.Status != "valid" {
 		t.Fatalf("unexpected campaign run summary: %+v", run)
+	}
+	statePath := filepath.Join(outRoot, "campaigns", "cmp-native", "campaign.run.state.json")
+	stateRaw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read campaign run state: %v", err)
+	}
+	var state struct {
+		FlowRuns []struct {
+			Attempts []struct {
+				AttemptDir string `json:"attemptDir"`
+			} `json:"attempts"`
+		} `json:"flowRuns"`
+	}
+	if err := json.Unmarshal(stateRaw, &state); err != nil {
+		t.Fatalf("unmarshal campaign run state: %v", err)
+	}
+	if len(state.FlowRuns) != 1 || len(state.FlowRuns[0].Attempts) != 1 {
+		t.Fatalf("unexpected campaign run state shape: %+v", state)
+	}
+	attemptDir := state.FlowRuns[0].Attempts[0].AttemptDir
+	if strings.TrimSpace(attemptDir) == "" {
+		t.Fatalf("expected non-empty attemptDir in campaign run state")
+	}
+	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
+	if err != nil {
+		t.Fatalf("read attempt.runtime.env.json: %v", err)
+	}
+	var runtimeEnv struct {
+		Runtime struct {
+			StartCwdMode   string `json:"startCwdMode"`
+			StartCwd       string `json:"startCwd"`
+			StartCwdRetain string `json:"startCwdRetain"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+	}
+	if runtimeEnv.Runtime.StartCwdMode != "temp_empty_per_attempt" {
+		t.Fatalf("expected temp_empty_per_attempt runner cwd mode, got %+v", runtimeEnv.Runtime)
+	}
+	if !strings.HasPrefix(runtimeEnv.Runtime.StartCwd, filepath.Clean(runnerCwdBase)+string(os.PathSeparator)) {
+		t.Fatalf("expected runner start cwd under %q, got %q", runnerCwdBase, runtimeEnv.Runtime.StartCwd)
+	}
+	if runtimeEnv.Runtime.StartCwdRetain != "never" {
+		t.Fatalf("expected runner cwd retain never, got %+v", runtimeEnv.Runtime)
+	}
+	if _, err := os.Stat(runtimeEnv.Runtime.StartCwd); !os.IsNotExist(err) {
+		t.Fatalf("expected cleaned temp runner cwd, stat err=%v path=%q", err, runtimeEnv.Runtime.StartCwd)
 	}
 
 	stdout.Reset()

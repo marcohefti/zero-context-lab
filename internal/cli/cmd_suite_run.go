@@ -39,6 +39,12 @@ import (
 	"github.com/marcohefti/zero-context-lab/internal/validate"
 )
 
+const (
+	suiteRunEnvRunnerCwdMode     = "ZCL_RUNNER_CWD_MODE"
+	suiteRunEnvRunnerCwdBasePath = "ZCL_RUNNER_CWD_BASE_PATH"
+	suiteRunEnvRunnerCwdRetain   = "ZCL_RUNNER_CWD_RETAIN"
+)
+
 type lockedWriter struct {
 	mu *sync.Mutex
 	w  io.Writer
@@ -295,6 +301,13 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	}
 	if !nativeMode && (resolvedNativeModel != "" || resolvedNativeReasoningEffort != "" || resolvedNativeReasoningPolicy != "") {
 		return r.failUsage("suite run: native model flags require --session-isolation native")
+	}
+	runnerCwdPolicy, err := resolveSuiteRunRunnerCwdPolicy(extraAttemptEnv)
+	if err != nil {
+		return r.failUsage("suite run: " + err.Error())
+	}
+	if runnerCwdPolicy.Mode != campaign.RunnerCwdModeInherit && !nativeMode {
+		return r.failUsage("suite run: runner cwd policy requires --session-isolation native")
 	}
 
 	runtimeStrategyChain := config.ParseRuntimeStrategyCSV(*runtimeStrategiesCSV)
@@ -569,6 +582,7 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 		StderrWriter:     errWriter,
 		Progress:         progress,
 		ExtraEnv:         copyStringMap(extraAttemptEnv),
+		RunnerCwdPolicy:  runnerCwdPolicy,
 	}
 	if progress != nil {
 		if err := progress.Emit(suiteRunProgressEvent{
@@ -780,6 +794,7 @@ type suiteRunExecOpts struct {
 	StderrWriter     io.Writer
 	Progress         *suiteRunProgressEmitter
 	ExtraEnv         map[string]string
+	RunnerCwdPolicy  suiteRunRunnerCwdPolicy
 }
 
 type suiteRunResultChannel struct {
@@ -787,6 +802,18 @@ type suiteRunResultChannel struct {
 	Path         string
 	Marker       string
 	MinFinalTurn int
+}
+
+type suiteRunRunnerCwdPolicy struct {
+	Mode     string
+	BasePath string
+	Retain   string
+}
+
+type suiteRunAttemptRuntimeContext struct {
+	StartCwdMode   string
+	StartCwd       string
+	StartCwdRetain string
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
@@ -808,6 +835,25 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		OK: false,
 	}
 	harnessErr := false
+	runtimeCtx, cleanupRunnerCwd, err := prepareSuiteRunAttemptStartCwd(pm, opts.RunnerCwdPolicy)
+	if err != nil {
+		harnessErr = true
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return ar, harnessErr
+	}
+	finishAttemptWithCleanup := func() (suiteRunAttemptResult, bool) {
+		if cleanupRunnerCwd != nil {
+			if err := cleanupRunnerCwd(ar.OK); err != nil {
+				harnessErr = true
+				if ar.RunnerErrorCode == "" {
+					ar.RunnerErrorCode = codeIO
+				}
+				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+			}
+		}
+		return ar, harnessErr
+	}
 
 	env := map[string]string{}
 	for k, v := range pm.Env {
@@ -840,13 +886,13 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		env["ZCL_SHIM_ZCL_PATH"] = opts.ZCLExe
 	}
 	if opts.NativeMode {
-		if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts); err != nil {
+		if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts, runtimeCtx); err != nil {
 			harnessErr = true
 			ar.RunnerErrorCode = codeIO
 			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			return ar, harnessErr
+			return finishAttemptWithCleanup()
 		}
-		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, &ar, errWriter)
+		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, runtimeCtx, &ar, errWriter)
 		if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar, schema.FeedbackPolicyAutoFailV1); err != nil {
 			harnessErr = true
 			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
@@ -872,7 +918,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 				},
 			})
 		}
-		return ar, harnessErr
+		return finishAttemptWithCleanup()
 	}
 
 	var shimBinDir string
@@ -889,11 +935,11 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			env["PATH"] = shimBinDir + ":" + os.Getenv("PATH")
 		}
 	}
-	if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts); err != nil {
+	if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts, runtimeCtx); err != nil {
 		harnessErr = true
 		ar.RunnerErrorCode = codeIO
 		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		return ar, harnessErr
+		return finishAttemptWithCleanup()
 	}
 
 	// Runner IO capture buffers (tail) + paths.
@@ -1051,7 +1097,7 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 			},
 		})
 	}
-	return ar, harnessErr
+	return finishAttemptWithCleanup()
 }
 
 func copyStringMap(in map[string]string) map[string]string {
@@ -1065,7 +1111,7 @@ func copyStringMap(in map[string]string) map[string]string {
 	return out
 }
 
-func writeAttemptRuntimeEnvArtifact(now time.Time, pm planner.PlannedMission, explicitEnv map[string]string, opts suiteRunExecOpts) error {
+func writeAttemptRuntimeEnvArtifact(now time.Time, pm planner.PlannedMission, explicitEnv map[string]string, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext) error {
 	outDir := strings.TrimSpace(pm.OutDirAbs)
 	if outDir == "" {
 		return fmt.Errorf("missing attempt out dir for runtime env artifact")
@@ -1102,6 +1148,9 @@ func writeAttemptRuntimeEnvArtifact(now time.Time, pm planner.PlannedMission, ex
 			ToolDriverKind: strings.TrimSpace(explicitEnv["ZCL_TOOL_DRIVER_KIND"]),
 			RuntimeID:      string(opts.NativeSelection.Selected),
 			NativeMode:     opts.NativeMode,
+			StartCwdMode:   strings.TrimSpace(runtimeCtx.StartCwdMode),
+			StartCwd:       strings.TrimSpace(runtimeCtx.StartCwd),
+			StartCwdRetain: strings.TrimSpace(runtimeCtx.StartCwdRetain),
 		},
 		Prompt: schema.AttemptPromptMetadataV1{
 			SourceKind:   promptSourceKind,
@@ -1377,7 +1426,140 @@ func parsePositiveIntEnv(key string, fallback int) int {
 	return n
 }
 
-func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+func resolveSuiteRunRunnerCwdPolicy(extraAttemptEnv map[string]string) (suiteRunRunnerCwdPolicy, error) {
+	policy := suiteRunRunnerCwdPolicy{
+		Mode:   campaign.RunnerCwdModeInherit,
+		Retain: campaign.RunnerCwdRetainNever,
+	}
+	if len(extraAttemptEnv) == 0 {
+		return policy, nil
+	}
+	if rawMode := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdMode])); rawMode != "" {
+		policy.Mode = rawMode
+	}
+	if !isValidSuiteRunRunnerCwdMode(policy.Mode) {
+		return suiteRunRunnerCwdPolicy{}, fmt.Errorf("invalid %s (expected %s|%s)", suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeInherit, campaign.RunnerCwdModeTempEmptyPerAttempt)
+	}
+	policy.BasePath = strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdBasePath])
+	if rawRetain := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdRetain])); rawRetain != "" {
+		policy.Retain = rawRetain
+	}
+	if !isValidSuiteRunRunnerCwdRetain(policy.Retain) {
+		return suiteRunRunnerCwdPolicy{}, fmt.Errorf("invalid %s (expected %s|%s|%s)", suiteRunEnvRunnerCwdRetain, campaign.RunnerCwdRetainNever, campaign.RunnerCwdRetainOnFailure, campaign.RunnerCwdRetainAlways)
+	}
+	if policy.BasePath != "" {
+		base := policy.BasePath
+		if !filepath.IsAbs(base) {
+			abs, err := filepath.Abs(base)
+			if err != nil {
+				return suiteRunRunnerCwdPolicy{}, fmt.Errorf("resolve %s: %w", suiteRunEnvRunnerCwdBasePath, err)
+			}
+			base = abs
+		}
+		policy.BasePath = filepath.Clean(base)
+	}
+	if policy.Mode == campaign.RunnerCwdModeInherit {
+		if policy.BasePath != "" {
+			return suiteRunRunnerCwdPolicy{}, fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdBasePath, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
+		}
+		if policy.Retain != campaign.RunnerCwdRetainNever {
+			return suiteRunRunnerCwdPolicy{}, fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdRetain, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
+		}
+	}
+	return policy, nil
+}
+
+func prepareSuiteRunAttemptStartCwd(pm planner.PlannedMission, policy suiteRunRunnerCwdPolicy) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
+	mode := strings.ToLower(strings.TrimSpace(policy.Mode))
+	if mode == "" {
+		mode = campaign.RunnerCwdModeInherit
+	}
+	retain := strings.ToLower(strings.TrimSpace(policy.Retain))
+	if retain == "" {
+		retain = campaign.RunnerCwdRetainNever
+	}
+	switch mode {
+	case campaign.RunnerCwdModeInherit:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("resolve inherited runner cwd: %w", err)
+		}
+		return suiteRunAttemptRuntimeContext{
+			StartCwdMode:   mode,
+			StartCwd:       strings.TrimSpace(cwd),
+			StartCwdRetain: retain,
+		}, nil, nil
+	case campaign.RunnerCwdModeTempEmptyPerAttempt:
+		basePath := strings.TrimSpace(policy.BasePath)
+		if basePath == "" {
+			basePath = os.TempDir()
+		}
+		if !filepath.IsAbs(basePath) {
+			abs, err := filepath.Abs(basePath)
+			if err != nil {
+				return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("resolve runner cwd base path: %w", err)
+			}
+			basePath = abs
+		}
+		basePath = filepath.Clean(basePath)
+		if err := os.MkdirAll(basePath, 0o700); err != nil {
+			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("create runner cwd base path: %w", err)
+		}
+		prefix := "zcl-cwd-"
+		if attemptID := ids.SanitizeComponent(strings.TrimSpace(pm.AttemptID)); attemptID != "" {
+			prefix = "zcl-cwd-" + attemptID + "-"
+		}
+		startCwd, err := os.MkdirTemp(basePath, prefix)
+		if err != nil {
+			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("create runner cwd temp dir: %w", err)
+		}
+		cleanup := func(attemptOK bool) error {
+			remove := false
+			switch retain {
+			case campaign.RunnerCwdRetainAlways:
+				remove = false
+			case campaign.RunnerCwdRetainOnFailure:
+				remove = attemptOK
+			default:
+				remove = true
+			}
+			if !remove {
+				return nil
+			}
+			if err := os.RemoveAll(startCwd); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("cleanup runner cwd %q: %w", startCwd, err)
+			}
+			return nil
+		}
+		return suiteRunAttemptRuntimeContext{
+			StartCwdMode:   mode,
+			StartCwd:       startCwd,
+			StartCwdRetain: retain,
+		}, cleanup, nil
+	default:
+		return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("invalid runner cwd mode %q", mode)
+	}
+}
+
+func isValidSuiteRunRunnerCwdMode(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case campaign.RunnerCwdModeInherit, campaign.RunnerCwdModeTempEmptyPerAttempt:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidSuiteRunRunnerCwdRetain(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case campaign.RunnerCwdRetainNever, campaign.RunnerCwdRetainOnFailure, campaign.RunnerCwdRetainAlways:
+		return true
+	default:
+		return false
+	}
+}
+
+func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
 	if errWriter == nil {
 		errWriter = r.Stderr
 	}
@@ -1551,12 +1733,11 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		_ = sess.RemoveListener(listenerID)
 	}()
 
-	cwd, _ := os.Getwd()
 	threadReq := native.ThreadStartRequest{
 		Model:                strings.TrimSpace(opts.NativeModel),
 		ModelReasoningEffort: strings.ToLower(strings.TrimSpace(opts.ReasoningEffort)),
 		ModelReasoningPolicy: strings.ToLower(strings.TrimSpace(opts.ReasoningPolicy)),
-		Cwd:                  cwd,
+		Cwd:                  strings.TrimSpace(runtimeCtx.StartCwd),
 	}
 	thread, err := sess.StartThread(ctx, threadReq)
 	if err != nil {
