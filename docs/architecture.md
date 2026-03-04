@@ -23,3 +23,5 @@ Each deep dive should follow a consistent structure:
   - Atomic JSON writes, safe JSONL appends/locking, bounds, containment.
 - `docs/architecture/native-runtime.md`
   - Runtime strategy model, capability contract, failure mapping, and provider onboarding checklist.
+- `docs/architecture/bounded-contexts.md`
+  - Bounded contexts + per-context layering rules, and how they’re enforced mechanically.

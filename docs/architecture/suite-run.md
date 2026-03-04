@@ -26,12 +26,12 @@ We must also avoid silently preferring process orchestration when the host can n
 - ZCL does not infer task success/failure from transcripts. It only auto-writes canonical **infra-failure** evidence when the runner exits before writing feedback.
 
 ## Where The Logic Lives
-- CLI entry point: `internal/cli/cli.go`
-- Implementation: `internal/cli/cmd_suite_run.go`
-- Suite parsing: `internal/suite/parse.go`
-- Attempt allocation + artifacts: `internal/attempt/start.go`
-- Finish pipeline: `internal/report/report.go`, `internal/validate/validate.go`, `internal/expect/expect.go`
-- Tests: `internal/cli/suite_run_integration_test.go`
+- CLI entry point: `internal/interfaces/cli/cli.go`
+- Implementation: `internal/interfaces/cli/cmd_suite_run.go`
+- Suite parsing: `internal/contexts/spec/ports/suite/parse.go`
+- Attempt allocation + artifacts: `internal/contexts/execution/app/attempt/start.go`
+- Finish pipeline: `internal/contexts/evaluation/app/report/report.go`, `internal/contexts/evaluation/app/validate/validate.go`, `internal/contexts/evaluation/app/expect/expect.go`
+- Tests: `internal/interfaces/cli/suite_run_integration_test.go`
 
 ## Runtime Flow
 Per `zcl suite run --file ... --session-isolation auto|process|native --feedback-policy strict|auto_fail --campaign-id <id> --campaign-state <path> --progress-jsonl <path|-> --parallel N --total M --json -- <runner-cmd> ...`:

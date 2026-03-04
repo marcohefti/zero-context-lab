@@ -541,7 +541,7 @@ Required fields:
 ## `campaign.spec.v1` (input contract; strict)
 
 Path:
-- `internal/campaign/campaign.spec.schema.json`
+- `internal/contexts/execution/app/campaign/campaign.spec.schema.json`
 - commonly authored as `campaign.yaml` / `campaign.json`
 
 Parse/validation behavior:

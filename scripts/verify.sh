@@ -8,6 +8,9 @@ cd "$root"
 ./scripts/mod-tidy-check.sh
 ./scripts/docs-check.sh
 ./scripts/error-codes-check.sh
+./scripts/dep-boundaries-check.sh
+./scripts/arch-coverage-check.sh
+./scripts/arch-boundaries-check.sh
 
 go_files="$(find . -type f -name '*.go' -not -path './vendor/*' || true)"
 if [[ -n "${go_files}" ]]; then

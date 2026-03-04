@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/marcohefti/zero-context-lab/internal/cli"
+	"github.com/marcohefti/zero-context-lab/internal/interfaces/cli"
 )
 
 var version = "0.0.0-dev"

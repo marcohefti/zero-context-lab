@@ -95,9 +95,9 @@ Native failure taxonomy (`ZCL_E_RUNTIME_*`):
 - `..._STREAM_DISCONNECT`, `..._CRASH`, `..._AUTH`, `..._RATE_LIMIT`, `..._LISTENER_FAILURE`, `..._ENV_POLICY`
 
 Provider onboarding checklist:
-1. Implement `internal/native.Runtime` + `Session` lifecycle methods.
+1. Implement `native.Runtime` + `Session` lifecycle methods (`internal/contexts/runtime/ports/native`).
 2. Declare capabilities truthfully and enforce unsupported operations with typed errors.
-3. Pass conformance tests (`internal/native/conformance`) plus adapter integration tests.
+3. Pass conformance tests (`internal/contexts/runtime/ports/native/conformance`) plus adapter integration tests.
 4. Map provider-native failures to `ZCL_E_RUNTIME_*` taxonomy.
 5. Ensure event stream mapping preserves canonical trace contract and redaction/bounds policies.
 6. Document unsupported API gaps in contract/docs (see `provider_stub` strategy).
@@ -117,21 +117,33 @@ Safety knobs:
 
 ## Code Map (Where Things Live)
 - `cmd/zcl`: CLI entrypoint.
-- `internal/cli`: command handlers (UX + stable JSON output).
-- `internal/attempt`: attempt allocation + metadata (`attempt.json`, `attempt.env.sh`, `prompt.txt`, `ZCL_TMP_DIR`).
-- `internal/planner`: suite planning (suite file -> planned attempts + env).
-- `internal/suite`: suite parsing + expectations (runner-agnostic).
-- `internal/campaign`: first-class campaign specs, run-state persistence, campaign report materialization.
+- `internal/interfaces/cli`: command handlers (UX + stable JSON output) + composition root wiring.
+- `internal/interfaces/contract`: command + artifact contract surface (`zcl contract --json`).
+- `internal/contexts/execution/app/attempt`: attempt allocation + metadata (`attempt.json`, `attempt.env.sh`, `prompt.txt`, `ZCL_TMP_DIR`).
+- `internal/contexts/execution/app/planner`: suite planning (suite file -> planned attempts + env).
+- `internal/contexts/spec/ports/suite`: suite parsing + expectations (runner-agnostic spec model).
+- `internal/contexts/execution/app/campaign`: first-class campaign specs, run-state persistence, campaign report materialization.
 - Campaign specs support minimal mission-pack mode (`missionSource.path` + flow runner blocks without `suiteFile`) and per-mission flow execution mode (`sequence|parallel`).
-- `internal/semantic`: semantic validity gates and rule-pack evaluation.
-- `internal/runners`: runner adapters used by campaign mission engine.
-- `internal/funnel`: protocol funnels (CLI/MCP/HTTP).
-- `internal/trace`: trace shaping, bounds, redaction hooks.
-- `internal/report`: computes `attempt.report.json`.
-- `internal/validate`: typed integrity validation.
-- `internal/expect`: suite expectation evaluation.
-- `internal/store`: atomic writes, JSONL append safety, retention helpers.
-- `internal/enrich`: optional runner enrichment (must not affect scoring).
+- `internal/contexts/evaluation/app/semantic`: semantic validity gates and rule-pack evaluation.
+- `internal/contexts/execution/app/runners`: runner adapters used by campaign mission engine.
+- `internal/kernel/cli_funnel`: CLI funnel (exec wrapper writing `tool.calls.jsonl`).
+- `internal/contexts/evidence/app/http_proxy`, `internal/contexts/evidence/app/mcp_proxy`: protocol funnels.
+- `internal/contexts/evidence/app/trace`: trace shaping, bounds, redaction hooks.
+- `internal/contexts/evaluation/app/report`: computes `attempt.report.json`.
+- `internal/contexts/evaluation/app/validate`: typed integrity validation.
+- `internal/contexts/evaluation/app/expect`: suite expectation evaluation.
+- `internal/kernel/store`: atomic writes, JSONL append safety, retention helpers.
+- `internal/contexts/runtime/app/enrich`: optional runner enrichment (must not affect scoring).
+
+## Dependency Boundaries (Enforced)
+Enforced by `scripts/dep-boundaries-check.sh` + `scripts/arch-coverage-check.sh` + `scripts/arch-boundaries-check.sh` (wired into `./scripts/verify.sh`):
+- `cmd/*` may only import `internal/interfaces/cli` from `internal/*`.
+- Only `cmd/*` may import `internal/interfaces/cli` (no context package imports UI).
+- Only `internal/interfaces/*` may import runtime infra adapters (`internal/contexts/runtime/infra/*`).
+- Only `internal/interfaces/cli` may import protocol funnels (`internal/contexts/evidence/app/http_proxy`, `internal/contexts/evidence/app/mcp_proxy`).
+- Only `internal/interfaces/cli` or `internal/contexts/evidence/app/replay` may import `internal/kernel/cli_funnel`.
+- `internal/kernel/*` must not depend on contexts/interfaces.
+- Context layering rules live in `docs/architecture/bounded-contexts.md`.
 
 ## Deep Dives
 See `docs/architecture.md`, starting with:
@@ -143,4 +155,4 @@ See `docs/architecture.md`, starting with:
 Recommendation thresholds (Codex native runtime):
 - Reliability: 20-attempt parallel native smoke success rate >= 95%.
 - Throughput: same run completes in <= 30 seconds on CI baseline.
-- Guarded by integration tests in `internal/cli/suite_run_integration_test.go`.
+- Guarded by integration tests in `internal/interfaces/cli/suite_run_integration_test.go`.

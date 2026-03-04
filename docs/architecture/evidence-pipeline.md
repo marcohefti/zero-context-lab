@@ -18,16 +18,16 @@ We need a strict, runner-agnostic evidence contract that is easy to validate and
 - ZCL does not store unbounded payloads by default.
 
 ## Where The Logic Lives
-- Attempt allocation: `internal/attempt/start.go` (writes `run.json`, `suite.json` snapshot, `attempt.json`, optional `prompt.txt`)
+- Attempt allocation: `internal/contexts/execution/app/attempt/start.go` (writes `run.json`, `suite.json` snapshot, `attempt.json`, optional `prompt.txt`)
 - Funnel trace emission:
-  - CLI funnel: `internal/cli/cmd_run.go`
-  - MCP funnel: `internal/funnel/mcp_proxy/proxy.go`
-  - HTTP funnel: `internal/cli/cmd_http_proxy.go`, `internal/funnel/http_proxy`
-- Outcome writing: `internal/feedback/feedback.go` (writes `feedback.json`, enforces prerequisites)
-- Suite auto-finalization policy: `internal/cli/cmd_suite_run.go` (`feedbackPolicy=strict|auto_fail`)
-- Report: `internal/report/report.go` (computes `attempt.report.json`)
-- Validation: `internal/validate/validate.go` (typed integrity errors, strict enforcement)
-- Finish orchestration: `internal/cli/cmd_attempt_finish.go` (report -> validate -> expect)
+  - CLI funnel: `internal/interfaces/cli/cmd_run.go`
+  - MCP funnel: `internal/contexts/evidence/app/mcp_proxy/proxy.go`
+  - HTTP funnel: `internal/interfaces/cli/cmd_http_proxy.go`, `internal/contexts/evidence/app/http_proxy`
+- Outcome writing: `internal/contexts/evidence/app/feedback/feedback.go` (writes `feedback.json`, enforces prerequisites)
+- Suite auto-finalization policy: `internal/interfaces/cli/cmd_suite_run.go` (`feedbackPolicy=strict|auto_fail`)
+- Report: `internal/contexts/evaluation/app/report/report.go` (computes `attempt.report.json`)
+- Validation: `internal/contexts/evaluation/app/validate/validate.go` (typed integrity errors, strict enforcement)
+- Finish orchestration: `internal/interfaces/cli/cmd_attempt_finish.go` (report -> validate -> expect)
 
 ## Runtime Flow
 1. Allocate attempt:

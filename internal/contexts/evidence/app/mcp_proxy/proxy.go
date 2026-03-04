@@ -1,0 +1,686 @@
+package mcpproxy
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/marcohefti/zero-context-lab/internal/contexts/evidence/app/redact"
+	"github.com/marcohefti/zero-context-lab/internal/contexts/evidence/app/trace"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/schema"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/store"
+)
+
+type reqInfo struct {
+	start          time.Time
+	method         string
+	input          json.RawMessage
+	inputTruncated bool
+	wait           chan struct{}
+}
+
+type boundedCapture struct {
+	max       int
+	buf       bytes.Buffer
+	total     int64
+	truncated bool
+	mu        sync.Mutex
+}
+
+func (c *boundedCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.total += int64(len(p))
+	remaining := c.max - c.buf.Len()
+	if remaining <= 0 {
+		c.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = c.buf.Write(p[:remaining])
+		c.truncated = true
+		return len(p), nil
+	}
+	_, _ = c.buf.Write(p)
+	return len(p), nil
+}
+
+func (c *boundedCapture) snapshot() (preview string, total int64, truncated bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String(), c.total, c.truncated
+}
+
+func Proxy(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, maxPreviewBytes int) error {
+	return ProxyWithOptions(ctx, env, serverArgv, clientIn, clientOut, Options{
+		MaxPreviewBytes: maxPreviewBytes,
+	})
+}
+
+type Options struct {
+	MaxPreviewBytes    int
+	MaxToolCalls       int64
+	IdleTimeoutMs      int64
+	ShutdownOnComplete bool
+	SequentialRequests bool
+}
+
+func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, clientIn io.Reader, clientOut io.Writer, opts Options) error {
+	if len(serverArgv) == 0 {
+		return fmt.Errorf("missing server command argv")
+	}
+	maxPreviewBytes := opts.MaxPreviewBytes
+	if maxPreviewBytes < 0 {
+		maxPreviewBytes = 0
+	}
+	if opts.MaxToolCalls < 0 {
+		opts.MaxToolCalls = 0
+	}
+	if opts.IdleTimeoutMs < 0 {
+		opts.IdleTimeoutMs = 0
+	}
+
+	proxyCtx := ctx
+	cancelProxy := func() {}
+	if opts.MaxToolCalls > 0 || opts.IdleTimeoutMs > 0 || opts.ShutdownOnComplete {
+		var cancel context.CancelFunc
+		proxyCtx, cancel = context.WithCancel(ctx)
+		cancelProxy = cancel
+	}
+	defer cancelProxy()
+
+	cmd := exec.CommandContext(proxyCtx, serverArgv[0], serverArgv[1:]...)
+	serverIn, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	serverOut, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	serverErr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	waited := false
+	defer func() {
+		if waited {
+			return
+		}
+		// Ensure we don't leak the child process on early returns (e.g., trace write failures).
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	var (
+		mu       sync.Mutex
+		inflight = map[string]reqInfo{}
+
+		activityMu    sync.Mutex
+		lastActivity  = time.Now()
+		idleTimedOut  atomic.Bool
+		maxCallsHit   atomic.Bool
+		forcedStop    atomic.Bool
+		toolCallsSeen int64
+	)
+	touch := func() {
+		activityMu.Lock()
+		lastActivity = time.Now()
+		activityMu.Unlock()
+	}
+	touch()
+
+	if opts.IdleTimeoutMs > 0 {
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-proxyCtx.Done():
+					return
+				case <-ticker.C:
+					activityMu.Lock()
+					idle := time.Since(lastActivity)
+					activityMu.Unlock()
+					if idle >= time.Duration(opts.IdleTimeoutMs)*time.Millisecond {
+						idleTimedOut.Store(true)
+						cancelProxy()
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	redServerArgv, argvApplied := redactStrings(serverArgv)
+
+	// Spawn evidence event (for replayability and operator debugging).
+	{
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "spawn",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         true,
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
+	var errCap boundedCapture
+	errCap.max = maxPreviewBytes
+	// Drain stderr to avoid deadlocks; capture a bounded preview for evidence.
+	go func() { _, _ = io.Copy(&errCap, serverErr) }()
+
+	// Client -> Server (requests)
+	reqDone := make(chan struct{})
+	go func() {
+		defer close(reqDone)
+		sc := bufio.NewScanner(clientIn)
+		sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+		for sc.Scan() {
+			line := bytesTrim(sc.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			touch()
+			var msg map[string]any
+			if err := json.Unmarshal(line, &msg); err != nil {
+				// Forward raw non-JSON lines unchanged.
+				_, _ = serverIn.Write(append(line, '\n'))
+				continue
+			}
+			method, _ := msg["method"].(string)
+			id := jsonRPCID(msg["id"])
+			inputRaw, truncated := boundedJSONRPCInput(msg, schema.ToolInputMaxBytesV1)
+
+			var wait chan struct{}
+			if id != "" && opts.SequentialRequests {
+				wait = make(chan struct{})
+			}
+			if id != "" {
+				mu.Lock()
+				inflight[id] = reqInfo{
+					start:          time.Now(),
+					method:         method,
+					input:          inputRaw,
+					inputTruncated: truncated,
+					wait:           wait,
+				}
+				mu.Unlock()
+			}
+
+			_, _ = serverIn.Write(append(line, '\n'))
+			if wait == nil {
+				continue
+			}
+			select {
+			case <-wait:
+			case <-proxyCtx.Done():
+				return
+			}
+		}
+		_ = serverIn.Close()
+	}()
+
+	// Server -> Client (responses)
+	sc := bufio.NewScanner(serverOut)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := bytesTrim(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		touch()
+		_, _ = clientOut.Write(append(line, '\n'))
+
+		var msg map[string]any
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		id := jsonRPCID(msg["id"])
+		if id == "" {
+			continue
+		}
+
+		mu.Lock()
+		info, ok := inflight[id]
+		if ok {
+			delete(inflight, id)
+		}
+		mu.Unlock()
+		if !ok {
+			continue
+		}
+		if info.wait != nil {
+			close(info.wait)
+		}
+
+		op := normalizeMCPMethod(info.method)
+		unknownMethod := false
+		if op == "" {
+			op = "unknown"
+			unknownMethod = true
+		}
+
+		okRes := msg["error"] == nil
+		code := ""
+		var enrichment any
+		if !okRes {
+			code = "MCP_ERROR"
+			if em, ok := msg["error"].(map[string]any); ok {
+				if c, ok := em["code"].(float64); ok {
+					code = fmt.Sprintf("MCP_%d", int64(c))
+				}
+				enrichment = map[string]any{
+					"mcpError": map[string]any{
+						"code":    em["code"],
+						"message": em["message"],
+					},
+				}
+			}
+		}
+		if unknownMethod {
+			if enrichment == nil {
+				enrichment = map[string]any{}
+			}
+			if m, ok := enrichment.(map[string]any); ok {
+				m["mcpMethod"] = info.method
+			}
+		}
+
+		// Input is canonical JSON (and bounded) from the request side. Redact secrets in its string form.
+		input := info.input
+		inStr, inApplied := redact.Text(string(input))
+		input = []byte(inStr)
+		inCapped := false
+		// Defensive: ensure input stays within bounds even after redaction.
+		if len(input) > schema.ToolInputMaxBytesV1 {
+			// Fall back to a minimal shape rather than emitting invalid JSON.
+			input = []byte(`{"method":"[TRUNCATED]"}`)
+			inCapped = true
+		}
+
+		outPreview := line
+		outTruncated := false
+		if len(outPreview) > maxPreviewBytes {
+			outPreview = outPreview[:maxPreviewBytes]
+			outTruncated = true
+		}
+		outStr, a := redact.Text(string(outPreview))
+		outStr, outCapped := capStringBytes(outStr, maxPreviewBytes)
+
+		duration := time.Since(info.start).Milliseconds()
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        info.start.UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        op,
+			Input:     input,
+			Result: schema.TraceResultV1{
+				OK:         okRes,
+				Code:       code,
+				DurationMs: duration,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes:   int64(len(line)),
+				ErrBytes:   0,
+				OutPreview: outStr,
+			},
+			RedactionsApplied: unionStrings(inApplied.Names, a.Names),
+			Warnings: func() []schema.TraceWarningV1 {
+				var w []schema.TraceWarningV1
+				if info.inputTruncated || inCapped {
+					w = append(w, schema.TraceWarningV1{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"})
+				}
+				if unknownMethod {
+					w = append(w, schema.TraceWarningV1{Code: "ZCL_W_MCP_UNKNOWN_METHOD", Message: "unrecognized MCP method; recorded as op=unknown"})
+				}
+				if len(w) == 0 {
+					return nil
+				}
+				return w
+			}(),
+			Integrity: &schema.TraceIntegrityV1{
+				Truncated: info.inputTruncated || inCapped || outTruncated || outCapped,
+			},
+		}
+		if enrichment != nil {
+			if b, err := store.CanonicalJSON(enrichment); err == nil {
+				if len(b) <= schema.EnrichmentMaxBytesV1 {
+					ev.Enrichment = b
+				} else {
+					ev.Warnings = append(ev.Warnings, schema.TraceWarningV1{Code: "ZCL_W_ENRICHMENT_TRUNCATED", Message: "trace enrichment omitted to fit bounds"})
+					if ev.Integrity == nil {
+						ev.Integrity = &schema.TraceIntegrityV1{}
+					}
+					ev.Integrity.Truncated = true
+				}
+			}
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+
+		if op == "tools/call" && opts.MaxToolCalls > 0 {
+			toolCallsSeen++
+			if toolCallsSeen > opts.MaxToolCalls {
+				maxCallsHit.Store(true)
+				cancelProxy()
+				break
+			}
+		}
+
+		if opts.ShutdownOnComplete {
+			mu.Lock()
+			inflightCount := len(inflight)
+			mu.Unlock()
+			if inflightCount == 0 {
+				select {
+				case <-reqDone:
+					forcedStop.Store(true)
+					cancelProxy()
+				default:
+				}
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case <-reqDone:
+	case <-proxyCtx.Done():
+	}
+	waitErr := cmd.Wait()
+	waited = true
+
+	// If the attempt has a deadline and we hit it, record a timeout event.
+	if errors.Is(proxyCtx.Err(), context.DeadlineExceeded) || idleTimedOut.Load() {
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		op := "timeout"
+		msg := "attempt deadline exceeded"
+		if idleTimedOut.Load() {
+			op = "idle-timeout"
+			msg = "mcp idle timeout exceeded"
+		}
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        op,
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         false,
+				Code:       "ZCL_E_TIMEOUT",
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+			Warnings: []schema.TraceWarningV1{{
+				Code:    "ZCL_W_MCP_TIMEOUT",
+				Message: msg,
+			}},
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+	if maxCallsHit.Load() {
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "limit",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         false,
+				Code:       "ZCL_E_MCP_MAX_TOOL_CALLS",
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes: 0,
+				ErrBytes: 0,
+			},
+			RedactionsApplied: argvApplied,
+			Warnings: []schema.TraceWarningV1{{
+				Code:    "ZCL_W_MCP_MAX_TOOL_CALLS",
+				Message: "mcp max tool calls reached",
+			}},
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
+	// Emit one stderr evidence event at the end (bounded).
+	if prev, total, trunc := errCap.snapshot(); total > 0 || prev != "" {
+		prevRed, applied := redact.Text(prev)
+		prevRed, capped := capStringBytes(prevRed, maxPreviewBytes)
+
+		in := map[string]any{"argv": redServerArgv}
+		inRaw, _ := store.CanonicalJSON(in)
+		ev := schema.TraceEventV1{
+			V:         schema.TraceSchemaV1,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			RunID:     env.RunID,
+			SuiteID:   env.SuiteID,
+			MissionID: env.MissionID,
+			AttemptID: env.AttemptID,
+			AgentID:   env.AgentID,
+			Tool:      "mcp",
+			Op:        "stderr",
+			Input:     inRaw,
+			Result: schema.TraceResultV1{
+				OK:         true,
+				DurationMs: 0,
+			},
+			IO: schema.TraceIOV1{
+				OutBytes:   0,
+				ErrBytes:   total,
+				ErrPreview: prevRed,
+			},
+			RedactionsApplied: unionStrings(argvApplied, applied.Names),
+			Integrity: &schema.TraceIntegrityV1{
+				Truncated: trunc || capped,
+			},
+		}
+		if trunc || capped {
+			ev.Warnings = []schema.TraceWarningV1{{Code: "ZCL_W_STDERR_TRUNCATED", Message: "mcp server stderr preview truncated to fit bounds"}}
+		}
+		if err := store.AppendJSONL(tracePath, ev); err != nil {
+			return err
+		}
+	}
+
+	if waitErr != nil {
+		if forcedStop.Load() && !maxCallsHit.Load() && !idleTimedOut.Load() {
+			return nil
+		}
+		var ee *exec.ExitError
+		if errors.As(waitErr, &ee) {
+			// Treat server exit as OK if it exited cleanly after EOF; keep error for non-zero.
+			if ee.ExitCode() != 0 {
+				return waitErr
+			}
+			return nil
+		}
+		return waitErr
+	}
+	if maxCallsHit.Load() {
+		return fmt.Errorf("ZCL_E_MCP_MAX_TOOL_CALLS: reached configured max tool calls")
+	}
+	if idleTimedOut.Load() {
+		return fmt.Errorf("ZCL_E_TIMEOUT: mcp idle timeout exceeded")
+	}
+	return nil
+}
+
+func normalizeMCPMethod(method string) string {
+	switch method {
+	case "initialize":
+		return "initialize"
+	case "tools/list":
+		return "tools/list"
+	case "tools/call":
+		return "tools/call"
+	default:
+		return ""
+	}
+}
+
+func jsonRPCID(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		// JSON numbers decode as float64.
+		if x == float64(int64(x)) {
+			return fmt.Sprintf("%d", int64(x))
+		}
+		return fmt.Sprintf("%v", x)
+	default:
+		return ""
+	}
+}
+
+func boundedJSONRPCInput(msg map[string]any, maxBytes int) (json.RawMessage, bool) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	method, _ := msg["method"].(string)
+	id := msg["id"]
+	params := msg["params"]
+
+	candidates := []map[string]any{
+		{"method": method, "id": id, "params": params},
+		{"method": method, "id": id},
+		{"method": method},
+	}
+
+	for i, c := range candidates {
+		b, err := store.CanonicalJSON(c)
+		if err != nil {
+			continue
+		}
+		if len(b) <= maxBytes {
+			return b, i != 0
+		}
+	}
+
+	// Last resort: always valid JSON.
+	return json.RawMessage(`{}`), true
+}
+
+func bytesTrim(b []byte) []byte {
+	i := 0
+	j := len(b)
+	for i < j {
+		c := b[i]
+		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
+			break
+		}
+		i++
+	}
+	for j > i {
+		c := b[j-1]
+		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
+			break
+		}
+		j--
+	}
+	return b[i:j]
+}
+
+func capStringBytes(s string, maxBytes int) (string, bool) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	return s[:maxBytes], true
+}
+
+func unionStrings(parts ...[]string) []string {
+	out := make([]string, 0, 4)
+	seen := map[string]bool{}
+	for _, p := range parts {
+		for _, s := range p {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func redactStrings(in []string) ([]string, []string) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	var applied []string
+	for _, s := range in {
+		red, a := redact.Text(s)
+		out = append(out, red)
+		applied = append(applied, a.Names...)
+	}
+	return out, unionStrings(applied)
+}

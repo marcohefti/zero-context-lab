@@ -115,7 +115,7 @@ Codex native runtime is recommended when both hold in CI/nightly checks:
 2. Throughput: same run completes in <= 30 seconds on CI worker baseline.
 
 Guard test path:
-- `internal/cli/suite_run_integration_test.go` (`TestSuiteRun_NativeParallelUniqueSessions`, `TestSuiteRun_NativeSchedulerRateLimitIsDeterministic`).
+- `internal/interfaces/cli/suite_run_integration_test.go` (`TestSuiteRun_NativeParallelUniqueSessions`, `TestSuiteRun_NativeSchedulerRateLimitIsDeterministic`).
 
 ## Templates
 

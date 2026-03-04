@@ -14,10 +14,10 @@ Evidence artifacts must be durable, parseable, and non-interleaved. Partial writ
 - We do not guarantee multi-writer ordering beyond "each append is whole-line".
 
 ## Where The Logic Lives
-- Atomic JSON writes: `internal/store/json.go`, `internal/store/file.go` (via `store.WriteJSONAtomic`, `store.WriteFileAtomic`)
-- JSONL append + locking: `internal/store/jsonl.go`, `internal/store/lock.go`
-- Bounds + redaction: `internal/redact/redact.go`, `internal/trace/trace.go`
-- Containment checks: `internal/validate/validate.go`
+- Atomic JSON writes: `internal/kernel/store/json.go`, `internal/kernel/store/file.go` (via `store.WriteJSONAtomic`, `store.WriteFileAtomic`)
+- JSONL append + locking: `internal/kernel/store/jsonl.go`, `internal/kernel/store/lock.go`
+- Bounds + redaction: `internal/contexts/evidence/app/redact/redact.go`, `internal/contexts/evidence/app/trace/trace.go`
+- Containment checks: `internal/contexts/evaluation/app/validate/validate.go`
 
 ## Runtime Flow
 - JSON artifacts (`run.json`, `attempt.json`, `feedback.json`, `attempt.report.json`):

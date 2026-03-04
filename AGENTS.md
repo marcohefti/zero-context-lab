@@ -27,12 +27,12 @@ Canonical operator templates:
 - `examples/campaign.native.codex.advanced.yaml`
 - `examples/semantic.rulepack.yaml`
 - `docs/migration/shell-adapter-to-native-codex.md`
-- `internal/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
+- `internal/contexts/execution/app/campaign/campaign.spec.schema.json` (strict spec shape; unknown fields fail unless `x-*` extension)
 - `zcl contract --json` now includes `campaignSchema` + `runtimeSchema` for promptMode/toolDriver/finalization/runtime field discovery.
 
 Campaign capability status (operator truth source):
 - `implemented+enforced`: campaign lint/run/canary/resume/status/report/publish-check, semantic gate, publish guards, mission plan/progress checkpointing, cleanup hooks (`beforeMission/afterMission/onFailure`), campaign lock, traceability profiles, campaign summary outputs (`campaign.summary.json`, `RESULTS.md`).
-- `implemented+enforced`: native runtime strategy architecture (`internal/native`) with ordered fallback chains, capability gates, typed runtime errors, and provider onboarding stub (`provider_stub`).
+- `implemented+enforced`: native runtime strategy architecture (`internal/contexts/runtime/ports/native`) with ordered fallback chains, capability gates, typed runtime errors, and provider onboarding stub (`provider_stub`).
 - `implemented+enforced`: Codex native runtime adapter (`runner.type=codex_app_server`) for suite/campaign orchestration without per-flow shell adapter scripts.
 - `implemented+enforced`: minimal campaign mode (`missionSource.path` + flows without `suiteFile`) for mission-pack ingestion.
 - `implemented+enforced`: mission-only campaign mode (`promptMode: mission_only`) with lint/publish-check prompt-leak guardrails.
@@ -140,51 +140,51 @@ Root: `.zcl/`
 ## Where To Change Things (By Intent)
 
 If you’re changing CLI behavior or adding a command:
-- `internal/cli/cli.go`
-- `internal/contract/contract.go` (command + artifact contract)
+- `internal/interfaces/cli/cli.go`
+- `internal/interfaces/contract/contract.go` (command + artifact contract)
 - `test/fixtures/contract/contract.snapshot.json` (via `scripts/contract-snapshot.sh --update`)
 
 If you’re changing artifact shapes or schema versions:
-- `internal/schema/`
+- `internal/kernel/schema/`
 - `SCHEMAS.md`
-- `internal/contract/contract.go` + contract snapshot test
+- `internal/interfaces/contract/contract.go` + contract snapshot test
 
 If you’re changing first-class campaign orchestration:
-- `internal/campaign/`
-- `internal/runners/campaign_adapter.go`
-- `internal/cli/cmd_campaign.go`
+- `internal/contexts/execution/app/campaign/`
+- `internal/contexts/execution/app/runners/campaign_adapter.go`
+- `internal/interfaces/cli/cmd_campaign.go`
 - `SCHEMAS.md` (campaign artifacts) + contract snapshot
 
 If you’re changing native runtime strategy behavior/adapters:
-- `internal/native/`
-- `internal/integrations/codex_app_server/`
-- `internal/integrations/provider_stub/`
-- `internal/cli/cmd_suite_run.go`
+- `internal/contexts/runtime/ports/native/`
+- `internal/contexts/runtime/infra/codex_app_server/`
+- `internal/contexts/runtime/infra/provider_stub/`
+- `internal/interfaces/cli/cmd_suite_run.go`
 - `ARCHITECTURE.md` + `SCHEMAS.md` + contract snapshot
 
 If you’re changing trace emission:
-- CLI funnel exec: `internal/funnel/cli_funnel/exec.go`
-- MCP proxy funnel: `internal/funnel/mcp_proxy/proxy.go`
-- Trace writer/util: `internal/trace/trace.go`
-- JSONL append safety: `internal/store/jsonl.go` + `internal/store/lock.go`
+- CLI funnel exec: `internal/kernel/cli_funnel/exec.go`
+- MCP proxy funnel: `internal/contexts/evidence/app/mcp_proxy/proxy.go`
+- Trace writer/util: `internal/contexts/evidence/app/trace/trace.go`
+- JSONL append safety: `internal/kernel/store/jsonl.go` + `internal/kernel/store/lock.go`
 
 If you’re changing redaction or bounds:
-- `internal/redact/redact.go`
-- `internal/feedback/feedback.go`, `internal/note/note.go`
-- `internal/validate/validate.go` (bounds are enforced here too)
+- `internal/contexts/evidence/app/redact/redact.go`
+- `internal/contexts/evidence/app/feedback/feedback.go`, `internal/contexts/evidence/app/note/note.go`
+- `internal/contexts/evaluation/app/validate/validate.go` (bounds are enforced here too)
 
 If you’re changing reporting/metrics:
-- `internal/report/report.go`
+- `internal/contexts/evaluation/app/report/report.go`
 - Golden fixtures: `test/fixtures/report/`
 
 If you’re changing retention/scale knobs:
-- `internal/gc/gc.go`
-- `internal/doctor/doctor.go`
-- `internal/config/merge.go`
+- `internal/contexts/ops/app/gc/gc.go`
+- `internal/contexts/ops/app/doctor/doctor.go`
+- `internal/kernel/config/merge.go`
 
 If you’re changing Codex enrichment:
-- `internal/enrich/`
-- Runner schemas: `internal/schema/runner_v1.go`
+- `internal/contexts/runtime/app/enrich/`
+- Runner schemas: `internal/kernel/schema/runner_v1.go`
 
 ## Mechanical Guardrails (What Enforces Coherence)
 
@@ -196,6 +196,9 @@ What it runs:
 - `scripts/mod-tidy-check.sh` (module graph cleanliness)
 - `scripts/docs-check.sh` (doc cross-links exist)
 - `scripts/error-codes-check.sh` (blocks raw `ZCL_E_*` literals in core runtime paths)
+- `scripts/dep-boundaries-check.sh` (enforces package dependency boundaries)
+- `scripts/arch-coverage-check.sh` (fails if internal packages live outside kernel/contexts/interfaces)
+- `scripts/arch-boundaries-check.sh` (enforces bounded-context + layer import rules)
 - gofmt check
 - `go test ./...`, `go vet ./...`
 - `scripts/campaign-e2e.sh` (campaign orchestration regression path)
