@@ -5,14 +5,14 @@ The system of record lives in the linked docs + contracts + validation scripts.
 
 ## Start Here (In Order)
 
-1. `PLAN.md`
-   - Execution checklist. Do steps in order. Update the log as you go.
-2. `CONCEPT.md`
+1. `CONCEPT.md`
    - Why ZCL exists and the non-negotiables (funnel-first evidence, bounded outputs, runner-agnostic scoring).
-3. `ARCHITECTURE.md`
+2. `ARCHITECTURE.md`
    - The intended shape: command surface, artifacts, determinism, guardrails.
-4. `SCHEMAS.md`
+3. `SCHEMAS.md`
    - Exact v1 artifact schemas and canonical ID formats.
+4. Local execution checklist (`PLAN.md`, gitignored)
+   - Optional operator plan/log file for in-flight sequencing.
 
 Repo validation (must be green after meaningful changes):
 - `./scripts/verify.sh`

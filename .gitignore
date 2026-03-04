@@ -2,6 +2,8 @@
 .zcl/
 .zcl-parity/
 .zcl-parity*/
+PLAN.md
+tmp/
 
 # Local/CI artifacts from validation scripts
 artifacts/

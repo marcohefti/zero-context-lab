@@ -15,7 +15,6 @@ docs = [
     Path("CONCEPT.md"),
     Path("ARCHITECTURE.md"),
     Path("SCHEMAS.md"),
-    Path("PLAN.md"),
 ]
 doc_text = {}
 for p in docs:

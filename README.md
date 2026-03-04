@@ -281,3 +281,5 @@ This runs formatting/tests/vet + contract/docs/skills checks.
 - `SCHEMAS.md` (exact v1 schemas and canonical IDs)
 - `AGENTS.md` (operator workflow + builder index)
 - `docs/feedback-evaluation.md` (feedback triage and broad-value recommendation routine)
+
+`PLAN.md` is intentionally local/gitignored for operator in-flight planning.
