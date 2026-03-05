@@ -11,6 +11,7 @@ cd "$root"
 ./scripts/dep-boundaries-check.sh
 ./scripts/arch-coverage-check.sh
 ./scripts/arch-boundaries-check.sh
+./scripts/artifact-literals-check.sh
 
 go_files="$(find . -type f -name '*.go' -not -path './vendor/*' || true)"
 if [[ -n "${go_files}" ]]; then
