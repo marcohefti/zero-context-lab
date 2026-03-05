@@ -63,17 +63,44 @@ function fetchBuffer(url) {
 }
 
 function parseSha256Sums(text, assetName) {
-  const lines = String(text || "").split(/\r?\n/);
+  const lines = String(text || "").split("\n");
   for (const line of lines) {
-    const trimmed = line.trim();
+    const trimmed = line.replaceAll("\r", "").trim();
     if (!trimmed) continue;
-    const match = /^([a-fA-F0-9]{64})\s+\*?(.+)$/.exec(trimmed);
-    if (!match) continue;
-    if (match[2].trim() === assetName) {
-      return match[1].toLowerCase();
+    const firstSpace = firstWhitespaceIndex(trimmed);
+    if (firstSpace <= 0) continue;
+    const maybeHash = trimmed.slice(0, firstSpace).toLowerCase();
+    if (!isSha256Hex(maybeHash)) continue;
+    let maybeAsset = trimmed.slice(firstSpace).trim();
+    if (maybeAsset.startsWith("*")) {
+      maybeAsset = maybeAsset.slice(1).trim();
+    }
+    if (maybeAsset === assetName) {
+      return maybeHash;
     }
   }
   return "";
+}
+
+function firstWhitespaceIndex(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 32 || code === 9) return index;
+  }
+  return -1;
+}
+
+function isSha256Hex(value) {
+  if (value.length !== 64) return false;
+  for (const ch of value) {
+    const code = ch.charCodeAt(0);
+    const isDigit = code >= 48 && code <= 57;
+    const isLowerHex = code >= 97 && code <= 102;
+    if (!isDigit && !isLowerHex) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function sha256Hex(buf) {

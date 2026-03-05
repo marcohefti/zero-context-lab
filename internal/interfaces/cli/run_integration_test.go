@@ -23,6 +23,14 @@ const (
 	helperProcessMarkerArg = "helper=1"
 )
 
+func fixtureOpenAIKey() string {
+	return "sk-" + strings.Repeat("a", 16)
+}
+
+func fixtureGitHubToken() string {
+	return "ghp_" + strings.Repeat("b", 16)
+}
+
 func TestRun_PassthroughAndTraceEmission(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
@@ -111,8 +119,8 @@ func TestRun_RedactsSecretsInTraceButNotPassthrough(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
 
-	openAIKey := "sk-1234567890ABCDEF"
-	ghToken := "ghp_1234567890abcdef"
+	openAIKey := fixtureOpenAIKey()
+	ghToken := fixtureGitHubToken()
 
 	payloadOut := "cred=" + openAIKey
 	payloadErr := "gh=" + ghToken + "\n"
@@ -172,7 +180,7 @@ func TestRun_CaptureRedactsByDefault(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
 
-	openAIKey := "sk-1234567890ABCDEF"
+	openAIKey := fixtureOpenAIKey()
 	payloadOut := "cred=" + openAIKey
 
 	var stdout bytes.Buffer
@@ -209,7 +217,7 @@ func TestRun_CaptureRawDoesNotRedact(t *testing.T) {
 	outDir := t.TempDir()
 	setAttemptEnv(t, outDir)
 
-	openAIKey := "sk-1234567890ABCDEF"
+	openAIKey := fixtureOpenAIKey()
 	payloadOut := "cred=" + openAIKey
 
 	var stdout bytes.Buffer
