@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -218,27 +219,27 @@ func CampaignDir(outRoot string, campaignID string) string {
 }
 
 func RunStatePath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.run.state.json")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignRunStateJSON)
 }
 
 func ReportPath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.report.json")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignReportJSON)
 }
 
 func SummaryPath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.summary.json")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignSummaryJSON)
 }
 
 func ResultsMDPath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "RESULTS.md")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignResultsMD)
 }
 
 func PlanPath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.plan.json")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignPlanJSON)
 }
 
 func ProgressPath(outRoot string, campaignID string) string {
-	return filepath.Join(CampaignDir(outRoot, campaignID), "campaign.progress.jsonl")
+	return filepath.Join(CampaignDir(outRoot, campaignID), artifacts.CampaignProgressJSONL)
 }
 
 func LockPath(outRoot string, campaignID string) string {

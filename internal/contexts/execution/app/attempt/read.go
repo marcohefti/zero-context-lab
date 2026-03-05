@@ -2,6 +2,7 @@ package attempt
 
 import (
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 
@@ -9,7 +10,7 @@ import (
 )
 
 func ReadAttempt(attemptDir string) (schema.AttemptJSONV1, error) {
-	raw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	raw, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptJSON))
 	if err != nil {
 		return schema.AttemptJSONV1{}, err
 	}

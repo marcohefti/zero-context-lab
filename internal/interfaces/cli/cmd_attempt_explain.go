@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ func (r Runner) runAttemptExplain(args []string) int {
 	rep, repPresent := r.loadAttemptExplainReport(opts.attemptDir, opts.strict)
 	valRes, _ := validate.ValidatePath(opts.attemptDir, opts.strict)
 	expRes, _ := expect.ExpectPath(opts.attemptDir, false)
-	tail, tailErr := tailTraceEvents(filepath.Join(opts.attemptDir, "tool.calls.jsonl"), opts.tailN)
+	tail, tailErr := tailTraceEvents(filepath.Join(opts.attemptDir, artifacts.ToolCallsJSONL), opts.tailN)
 	if tailErr != nil && opts.strict {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", tailErr.Error())
 		return 1
@@ -126,7 +127,7 @@ func (r Runner) resolveAttemptExplainTarget(rest []string) (string, int, bool) {
 
 func loadAttemptExplainIDs(attemptDir string) schema.AttemptJSONV1 {
 	var out schema.AttemptJSONV1
-	if b, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptJSON)); err == nil {
 		_ = json.Unmarshal(b, &out)
 	}
 	return out
@@ -134,7 +135,7 @@ func loadAttemptExplainIDs(attemptDir string) schema.AttemptJSONV1 {
 
 func (r Runner) loadAttemptExplainReport(attemptDir string, strict bool) (schema.AttemptReportJSONV1, bool) {
 	var rep schema.AttemptReportJSONV1
-	if b, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptReportJSON)); err == nil {
 		if err := json.Unmarshal(b, &rep); err == nil {
 			return rep, true
 		}

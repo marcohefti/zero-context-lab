@@ -3,6 +3,7 @@ package codex
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 
@@ -104,10 +105,10 @@ func WriteAttemptArtifacts(attemptDir string, attempt schema.AttemptJSONV1, roll
 		ReasoningOutputTokens: metrics.Usage.ReasoningOutputTokens,
 	}
 
-	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.ref.json"), ref); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.RunnerRefJSON), ref); err != nil {
 		return err
 	}
-	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.metrics.json"), met); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.RunnerMetricsJSON), met); err != nil {
 		return err
 	}
 	return nil

@@ -3,6 +3,7 @@ package feedback
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		}
 	}
 
-	path := filepath.Join(env.OutDirAbs, "feedback.json")
+	path := filepath.Join(env.OutDirAbs, artifacts.FeedbackJSON)
 	return store.WriteJSONAtomic(path, payload)
 }
 
@@ -71,7 +72,7 @@ func requireEvidenceForMode(env trace.Env) (schema.AttemptJSONV1, error) {
 	if err != nil {
 		return schema.AttemptJSONV1{}, err
 	}
-	if err := requireNonEmptyTrace(filepath.Join(env.OutDirAbs, "tool.calls.jsonl")); err != nil {
+	if err := requireNonEmptyTrace(filepath.Join(env.OutDirAbs, artifacts.ToolCallsJSONL)); err != nil {
 		return schema.AttemptJSONV1{}, err
 	}
 	return attemptMeta, nil
@@ -121,7 +122,7 @@ func normalizeFeedbackResult(opts WriteOpts) (string, json.RawMessage, []string,
 
 func readAttemptMetadata(attemptDir string) (schema.AttemptJSONV1, error) {
 	// Enforce "funnel-first" semantics: primary evidence must exist before we accept a final outcome.
-	rawAttempt, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	rawAttempt, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptJSON))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return schema.AttemptJSONV1{}, fmt.Errorf("missing attempt.json in attempt directory (need zcl attempt start context)")
@@ -169,13 +170,13 @@ func fileHasNonWhitespace(r *os.File) bool {
 
 func enforceSuiteResultShape(env trace.Env, attemptMeta schema.AttemptJSONV1, payload schema.FeedbackJSONV1) error {
 	runDir := filepath.Dir(filepath.Dir(env.OutDirAbs))
-	if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(runDir, artifacts.RunJSON)); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	suitePath := filepath.Join(runDir, "suite.json")
+	suitePath := filepath.Join(runDir, artifacts.SuiteJSON)
 	b, err := os.ReadFile(suitePath)
 	if err != nil {
 		if os.IsNotExist(err) {

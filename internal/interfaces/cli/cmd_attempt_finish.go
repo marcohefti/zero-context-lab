@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -99,7 +100,7 @@ func (r Runner) executeAttemptFinish(strict, strictExpect bool, attemptDir strin
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, validate.Result{}, expect.Result{}, false, r.printReportErr(err), true
 	}
-	if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
+	if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, artifacts.AttemptReportJSON), rep); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return schema.AttemptReportJSONV1{}, validate.Result{}, expect.Result{}, false, 1, true
 	}

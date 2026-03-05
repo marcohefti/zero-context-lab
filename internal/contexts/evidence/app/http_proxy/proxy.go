@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"net"
 	"net/http"
@@ -179,7 +180,7 @@ type proxyServer struct {
 func newProxyServer(cfg proxyStartConfig) *proxyServer {
 	return &proxyServer{
 		env:             cfg.env,
-		tracePath:       filepath.Join(cfg.env.OutDirAbs, "tool.calls.jsonl"),
+		tracePath:       filepath.Join(cfg.env.OutDirAbs, artifacts.ToolCallsJSONL),
 		client:          &http.Client{Timeout: 60 * time.Second},
 		up:              cfg.up,
 		maxPreviewBytes: cfg.maxPreviewBytes,

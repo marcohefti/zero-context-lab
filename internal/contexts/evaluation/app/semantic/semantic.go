@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -110,10 +111,10 @@ func invalidSemanticTarget(path, message string) Result {
 }
 
 func detectSemanticTarget(abs string) string {
-	if fileExists(filepath.Join(abs, "attempt.json")) {
+	if fileExists(filepath.Join(abs, artifacts.AttemptJSON)) {
 		return "attempt"
 	}
-	if fileExists(filepath.Join(abs, "run.json")) {
+	if fileExists(filepath.Join(abs, artifacts.RunJSON)) {
 		return "run"
 	}
 	return ""
@@ -184,9 +185,9 @@ func evaluateAttempt(attemptDir string, pack *RulePackV1) (AttemptResult, error)
 		OK:         true,
 	}
 
-	attemptPath := filepath.Join(attemptDir, "attempt.json")
-	feedbackPath := filepath.Join(attemptDir, "feedback.json")
-	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
+	attemptPath := filepath.Join(attemptDir, artifacts.AttemptJSON)
+	feedbackPath := filepath.Join(attemptDir, artifacts.FeedbackJSON)
+	tracePath := filepath.Join(attemptDir, artifacts.ToolCallsJSONL)
 
 	attemptRaw, err := os.ReadFile(attemptPath)
 	if err != nil {
@@ -264,7 +265,7 @@ func selectRules(attemptDir string, missionID string, pack *RulePackV1) (*suite.
 	}
 
 	runDir := filepath.Dir(filepath.Dir(attemptDir))
-	suitePath := filepath.Join(runDir, "suite.json")
+	suitePath := filepath.Join(runDir, artifacts.SuiteJSON)
 	raw, err := os.ReadFile(suitePath)
 	if err != nil {
 		if os.IsNotExist(err) {

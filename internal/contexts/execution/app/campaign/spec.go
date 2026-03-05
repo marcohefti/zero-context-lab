@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -1693,8 +1694,8 @@ func defaultMissionOnlyForbiddenTerms() []string {
 		"zcl http proxy",
 		"zcl feedback",
 		"zcl attempt finish",
-		"tool.calls.jsonl",
-		"feedback.json",
+		artifacts.ToolCallsJSONL,
+		artifacts.FeedbackJSON,
 	}
 }
 

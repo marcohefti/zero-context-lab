@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"os/exec"
@@ -55,7 +56,7 @@ type missionPromptArtifactV1 struct {
 	Prompt       string `json:"prompt"`
 }
 
-const oracleVerdictFileName = "oracle.verdict.json"
+const oracleVerdictFileName = artifacts.OracleVerdictJSON
 
 type oracleEvaluatorOutput struct {
 	OK                bool              `json:"ok"`
@@ -1829,7 +1830,7 @@ func (r Runner) evaluateBuiltinOracle(parsed campaign.ParsedSpec, missionID stri
 }
 
 func loadOracleProofFromAttempt(attemptDir string) (map[string]any, error) {
-	raw, err := os.ReadFile(filepath.Join(strings.TrimSpace(attemptDir), "feedback.json"))
+	raw, err := os.ReadFile(filepath.Join(strings.TrimSpace(attemptDir), artifacts.FeedbackJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -1859,7 +1860,7 @@ func loadOracleProofFromAttempt(attemptDir string) (map[string]any, error) {
 }
 
 func readAttemptFeedbackSummary(attemptDir string) (attemptFeedbackSummary, error) {
-	path := filepath.Join(strings.TrimSpace(attemptDir), "feedback.json")
+	path := filepath.Join(strings.TrimSpace(attemptDir), artifacts.FeedbackJSON)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return attemptFeedbackSummary{}, err
@@ -2402,7 +2403,7 @@ func flowPromptMetadata(parsed campaign.ParsedSpec, flow campaign.FlowSpec) (kin
 }
 
 func readAttemptReport(attemptDir string) (schema.AttemptReportJSONV1, error) {
-	path := filepath.Join(attemptDir, "attempt.report.json")
+	path := filepath.Join(attemptDir, artifacts.AttemptReportJSON)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
@@ -2751,7 +2752,7 @@ func buildMissionPromptArtifacts(parsed campaign.ParsedSpec, tpl string) []missi
 func buildMissionPromptsBuildResult(parsed campaign.ParsedSpec, resolvedOutRoot, absSpec, absTemplate, outPath, tpl string, prompts []missionPromptArtifactV1) missionPromptsBuildResult {
 	outPath = strings.TrimSpace(outPath)
 	if outPath == "" {
-		outPath = filepath.Join(resolvedOutRoot, "campaigns", parsed.Spec.CampaignID, "mission.prompts.json")
+		outPath = filepath.Join(resolvedOutRoot, "campaigns", parsed.Spec.CampaignID, artifacts.MissionPromptsJSON)
 	}
 	createdAt := deterministicBuildTimestamp(absSpec, absTemplate, tpl, prompts)
 	return missionPromptsBuildResult{

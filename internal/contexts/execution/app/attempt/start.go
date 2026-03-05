@@ -3,6 +3,7 @@ package attempt
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -78,7 +79,7 @@ func Start(now time.Time, opts StartOpts) (*StartResult, error) {
 		return nil, err
 	}
 	env := buildAttemptEnv(normalized, runID, attemptID, outDirAbs, scratchAbs)
-	if err := store.WriteJSONAtomic(filepath.Join(outDir, "attempt.json"), attemptMeta); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(outDir, artifacts.AttemptJSON), attemptMeta); err != nil {
 		return nil, err
 	}
 	attemptEnvFile := filepath.Join(outDir, attemptMeta.AttemptEnvSH)
@@ -173,7 +174,7 @@ func ensureSuiteSnapshot(runDir string, suiteSnapshot any, runID string) error {
 	if err := json.Unmarshal(b, &v); err != nil {
 		return err
 	}
-	suiteJSONPath := filepath.Join(runDir, "suite.json")
+	suiteJSONPath := filepath.Join(runDir, artifacts.SuiteJSON)
 	_, statErr := os.Stat(suiteJSONPath)
 	if statErr == nil {
 		existing, err := os.ReadFile(suiteJSONPath)
@@ -196,7 +197,7 @@ func ensureSuiteSnapshot(runDir string, suiteSnapshot any, runID string) error {
 }
 
 func ensureRunJSON(runDir string, runID string, suiteID string, now time.Time) error {
-	runJSONPath := filepath.Join(runDir, "run.json")
+	runJSONPath := filepath.Join(runDir, artifacts.RunJSON)
 	_, statErr := os.Stat(runJSONPath)
 	if statErr == nil {
 		return validateExistingRunJSON(runJSONPath, runID, suiteID)
@@ -256,7 +257,7 @@ func writePromptSnapshot(outDir string, prompt string) error {
 	if strings.TrimSpace(prompt) == "" {
 		return nil
 	}
-	return store.WriteFileAtomic(filepath.Join(outDir, "prompt.txt"), []byte(prompt))
+	return store.WriteFileAtomic(filepath.Join(outDir, artifacts.PromptTXT), []byte(prompt))
 }
 
 func buildAttemptMeta(now time.Time, opts StartOpts, runID string, attemptID string, mode string, outRoot string) (schema.AttemptJSONV1, string, error) {

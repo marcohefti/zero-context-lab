@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -825,7 +826,7 @@ func finalizeSuiteNativeRun(now time.Time, envTrace trace.Env, supervisor *nativ
 		})
 	}
 	setSuiteNativeRunnerExitCode(ar)
-	if fileExists(filepath.Join(pm.OutDirAbs, "feedback.json")) {
+	if fileExists(filepath.Join(pm.OutDirAbs, artifacts.FeedbackJSON)) {
 		return false
 	}
 	return writeSuiteNativeAutoFeedback(now, envTrace, supervisor, turn.TurnID, finalResult, resultSource, ar, emitNativeState, errWriter)
@@ -1396,7 +1397,7 @@ func writeNativeResultProvenance(attemptDir string, provenance *schema.NativeRes
 	}
 	cloned := *provenance
 	meta.NativeResult = &cloned
-	return store.WriteJSONAtomic(filepath.Join(attemptDir, "attempt.json"), meta)
+	return store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.AttemptJSON), meta)
 }
 
 func buildNativeRuntimeRegistry() *native.Registry {
@@ -1422,5 +1423,5 @@ func writeNativeRunnerRef(attemptDir string, env map[string]string, runtimeID na
 		SessionID:     strings.TrimSpace(sessionID),
 		Transport:     "stdio",
 	}
-	return store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.ref.json"), ref)
+	return store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.RunnerRefJSON), ref)
 }

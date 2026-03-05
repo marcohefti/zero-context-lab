@@ -3,6 +3,7 @@ package expect
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,10 +49,10 @@ func ExpectPath(targetDir string, strict bool) (Result, error) {
 		}, nil
 	}
 
-	if _, err := os.Stat(filepath.Join(abs, "attempt.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(abs, artifacts.AttemptJSON)); err == nil {
 		return expectAttempt(abs, strict)
 	}
-	if _, err := os.Stat(filepath.Join(abs, "run.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(abs, artifacts.RunJSON)); err == nil {
 		return expectRun(abs, strict)
 	}
 	return Result{
@@ -128,13 +129,13 @@ func loadAttemptEvidence(attemptDir string, strict bool, res *Result) (schema.At
 	if err != nil || done {
 		return schema.AttemptJSONV1{}, "", schema.FeedbackJSONV1{}, done, err
 	}
-	feedbackPath := filepath.Join(attemptDir, "feedback.json")
+	feedbackPath := filepath.Join(attemptDir, artifacts.FeedbackJSON)
 	fb, done, err := loadFeedbackForExpect(feedbackPath, strict, res)
 	return a, feedbackPath, fb, done, err
 }
 
 func loadAttemptHeader(attemptDir string, strict bool, res *Result) (schema.AttemptJSONV1, bool, error) {
-	attemptPath := filepath.Join(attemptDir, "attempt.json")
+	attemptPath := filepath.Join(attemptDir, artifacts.AttemptJSON)
 	attemptBytes, err := os.ReadFile(attemptPath)
 	if err != nil {
 		if strict && os.IsNotExist(err) {
@@ -170,14 +171,14 @@ func loadFeedbackForExpect(feedbackPath string, strict bool, res *Result) (schem
 
 func loadSuiteSnapshot(attemptDir string, strict bool, res *Result) (suite.SuiteFileV1, bool, error) {
 	runDir := filepath.Dir(filepath.Dir(attemptDir))
-	runPath := filepath.Join(runDir, "run.json")
+	runPath := filepath.Join(runDir, artifacts.RunJSON)
 	if _, err := os.Stat(runPath); err != nil {
 		if strict && os.IsNotExist(err) {
 			appendFailure(res, "ZCL_E_MISSING_ARTIFACT", "missing run.json", runPath)
 		}
 		return suite.SuiteFileV1{}, true, nil
 	}
-	suitePath := filepath.Join(runDir, "suite.json")
+	suitePath := filepath.Join(runDir, artifacts.SuiteJSON)
 	suiteBytes, err := os.ReadFile(suitePath)
 	if err != nil {
 		if strict && os.IsNotExist(err) {
@@ -223,7 +224,7 @@ func appendFailure(res *Result, code, message, path string) {
 }
 
 func traceFactsForAttempt(attemptDir string, strict bool) (*suite.TraceFacts, error) {
-	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
+	tracePath := filepath.Join(attemptDir, artifacts.ToolCallsJSONL)
 	f, missing, err := openAttemptTrace(tracePath, strict)
 	if err != nil {
 		return nil, err

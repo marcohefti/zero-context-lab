@@ -3,6 +3,7 @@ package validate
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,10 +43,10 @@ func ValidatePath(targetDir string, strict bool) (Result, error) {
 	}
 
 	// Determine type by presence of attempt.json vs run.json.
-	if _, err := os.Stat(filepath.Join(abs, "attempt.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(abs, artifacts.AttemptJSON)); err == nil {
 		return validateAttempt(abs, strict), nil
 	}
-	if _, err := os.Stat(filepath.Join(abs, "run.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(abs, artifacts.RunJSON)); err == nil {
 		return validateRun(abs, strict), nil
 	}
 	return Result{OK: false, Strict: strict, Target: "unknown", Path: abs, Errors: []Finding{{Code: "ZCL_E_USAGE", Message: "target does not look like an attemptDir or runDir", Path: abs}}}, nil
@@ -66,7 +67,7 @@ func validateRun(runDir string, strict bool) Result {
 }
 
 func loadAndValidateRunJSON(runDir string, strict bool, res *Result) (schema.RunJSONV1, bool) {
-	runJSONPath := filepath.Join(runDir, "run.json")
+	runJSONPath := filepath.Join(runDir, artifacts.RunJSON)
 	if !requireFile(runJSONPath, true, true, res) {
 		return schema.RunJSONV1{}, false
 	}
@@ -132,11 +133,11 @@ func validateRFC3339(value string, message string, strict bool, res *Result, pat
 }
 
 func validateOptionalRunArtifacts(runDir string, run schema.RunJSONV1, strict bool, res *Result) {
-	suiteRunSummaryPath := filepath.Join(runDir, "suite.run.summary.json")
+	suiteRunSummaryPath := filepath.Join(runDir, artifacts.SuiteRunSummaryJSON)
 	if _, err := os.Stat(suiteRunSummaryPath); err == nil && requireContained(runDir, suiteRunSummaryPath, res) {
 		validateSuiteRunSummary(suiteRunSummaryPath, run, strict, res)
 	}
-	runReportPath := filepath.Join(runDir, "run.report.json")
+	runReportPath := filepath.Join(runDir, artifacts.RunReportJSON)
 	if _, err := os.Stat(runReportPath); err == nil && requireContained(runDir, runReportPath, res) {
 		validateRunReport(runReportPath, runDir, run, strict, res)
 	}
@@ -186,7 +187,7 @@ func validateAttempt(attemptDir string, strict bool) Result {
 }
 
 func loadAndValidateAttemptHeader(attemptDir string, strict bool, res *Result) (schema.AttemptJSONV1, bool, bool) {
-	attemptJSONPath := filepath.Join(attemptDir, "attempt.json")
+	attemptJSONPath := filepath.Join(attemptDir, artifacts.AttemptJSON)
 	if !requireFile(attemptJSONPath, true, true, res) {
 		return schema.AttemptJSONV1{}, false, false
 	}
@@ -219,7 +220,7 @@ func validateAttemptContract(attemptDir string, attempt schema.AttemptJSONV1, st
 	if !validateAttemptBlindTerms(attempt.BlindTerms, path, res) {
 		return false
 	}
-	if !validateNativeResultProvenance(attempt.NativeResult, strict, res, path, "attempt.json") {
+	if !validateNativeResultProvenance(attempt.NativeResult, strict, res, path, artifacts.AttemptJSON) {
 		return false
 	}
 	if !validateAttemptCanonicalIDs(attempt, strict, path, res) {
@@ -313,8 +314,8 @@ func validateAttemptDirMatch(attemptDir, attemptID, path string, res *Result) {
 }
 
 func validateAttemptPrimaryArtifacts(attemptDir string, attempt schema.AttemptJSONV1, enforce bool, res *Result) bool {
-	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
-	feedbackPath := filepath.Join(attemptDir, "feedback.json")
+	tracePath := filepath.Join(attemptDir, artifacts.ToolCallsJSONL)
+	feedbackPath := filepath.Join(attemptDir, artifacts.FeedbackJSON)
 	if !validateFunnelBypass(attemptDir, tracePath, feedbackPath, enforce, res) {
 		return false
 	}
@@ -362,18 +363,18 @@ func validateFunnelBypass(attemptDir string, tracePath string, feedbackPath stri
 }
 
 func validateAttemptOptionalArtifacts(attemptDir string, attempt schema.AttemptJSONV1, enforce bool, res *Result) {
-	notesPath := filepath.Join(attemptDir, "notes.jsonl")
+	notesPath := filepath.Join(attemptDir, artifacts.NotesJSONL)
 	if _, err := os.Stat(notesPath); err == nil && requireContained(attemptDir, notesPath, res) {
 		validateNotes(notesPath, attempt, enforce, res)
 	}
-	capturesPath := filepath.Join(attemptDir, "captures.jsonl")
+	capturesPath := filepath.Join(attemptDir, artifacts.CapturesJSONL)
 	if _, err := os.Stat(capturesPath); err == nil && requireContained(attemptDir, capturesPath, res) {
 		validateCaptures(capturesPath, attemptDir, attempt, enforce, res)
 	}
 }
 
 func validateAttemptReportArtifact(attemptDir string, attempt schema.AttemptJSONV1, enforce bool, res *Result) bool {
-	reportPath := filepath.Join(attemptDir, "attempt.report.json")
+	reportPath := filepath.Join(attemptDir, artifacts.AttemptReportJSON)
 	if _, err := os.Stat(reportPath); err != nil {
 		return true
 	}
@@ -393,7 +394,7 @@ func validateAttemptReportArtifact(attemptDir string, attempt schema.AttemptJSON
 	if !validateAttemptReportContract(rep, attempt, enforce, reportPath, res) {
 		return false
 	}
-	return validateNativeResultProvenance(rep.NativeResult, enforce, res, reportPath, "attempt.report.json")
+	return validateNativeResultProvenance(rep.NativeResult, enforce, res, reportPath, artifacts.AttemptReportJSON)
 }
 
 func validateAttemptReportContract(rep schema.AttemptReportJSONV1, attempt schema.AttemptJSONV1, enforce bool, reportPath string, res *Result) bool {
@@ -488,7 +489,7 @@ func scanAndValidateTraceEvents(f *os.File, path, attemptDir string, attempt sch
 	count := 0
 	for sc.Scan() {
 		line := sc.Bytes()
-		if !validateNonEmptyJSONLLine(line, strict, "tool.calls.jsonl", path, res) {
+		if !validateNonEmptyJSONLLine(line, strict, artifacts.ToolCallsJSONL, path, res) {
 			return 0, false
 		}
 		if len(bytesTrim(line)) == 0 {
@@ -811,7 +812,7 @@ func validateNotes(path string, attempt schema.AttemptJSONV1, strict bool, res *
 func scanAndValidateNotes(sc *bufio.Scanner, path string, attempt schema.AttemptJSONV1, strict bool, res *Result) bool {
 	for sc.Scan() {
 		line := sc.Bytes()
-		if !validateNonEmptyJSONLLine(line, strict, "notes.jsonl", path, res) {
+		if !validateNonEmptyJSONLLine(line, strict, artifacts.NotesJSONL, path, res) {
 			return false
 		}
 		if len(bytesTrim(line)) == 0 {
@@ -898,7 +899,7 @@ func validateCaptures(path string, attemptDir string, attempt schema.AttemptJSON
 func scanAndValidateCaptures(sc *bufio.Scanner, path, attemptDir string, attempt schema.AttemptJSONV1, strict bool, res *Result) bool {
 	for sc.Scan() {
 		line := sc.Bytes()
-		if !validateNonEmptyJSONLLine(line, strict, "captures.jsonl", path, res) {
+		if !validateNonEmptyJSONLLine(line, strict, artifacts.CapturesJSONL, path, res) {
 			return false
 		}
 		if len(bytesTrim(line)) == 0 {

@@ -3,6 +3,7 @@ package note
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"path/filepath"
 	"strings"
 	"time"
@@ -79,6 +80,6 @@ func Append(now time.Time, env trace.Env, opts AppendOpts) error {
 		RedactionsApplied: applied,
 	}
 
-	path := filepath.Join(env.OutDirAbs, "notes.jsonl")
+	path := filepath.Join(env.OutDirAbs, artifacts.NotesJSONL)
 	return store.AppendJSONL(path, ev)
 }

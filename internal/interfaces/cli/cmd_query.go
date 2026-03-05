@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -299,7 +300,7 @@ func collectRunRows(outRoot string, suiteFilter string) ([]runIndexRow, error) {
 		}
 		runDir := filepath.Join(runsDir, e.Name())
 		var runMeta schema.RunJSONV1
-		if !readJSONIfExists(filepath.Join(runDir, "run.json"), &runMeta) {
+		if !readJSONIfExists(filepath.Join(runDir, artifacts.RunJSON), &runMeta) {
 			continue
 		}
 		if suiteFilter != "" && runMeta.SuiteID != suiteFilter {
@@ -397,14 +398,14 @@ func collectAttemptRowsForRun(absOutRoot string, runEntry os.DirEntry, filter at
 	}
 	runDir := filepath.Join(absOutRoot, "runs", runEntry.Name())
 	var runMeta schema.RunJSONV1
-	if !readJSONIfExists(filepath.Join(runDir, "run.json"), &runMeta) {
+	if !readJSONIfExists(filepath.Join(runDir, artifacts.RunJSON), &runMeta) {
 		return nil, nil
 	}
 	if filter.SuiteID != "" && runMeta.SuiteID != filter.SuiteID {
 		return nil, nil
 	}
 
-	tagsByMission := loadMissionTags(filepath.Join(runDir, "suite.json"))
+	tagsByMission := loadMissionTags(filepath.Join(runDir, artifacts.SuiteJSON))
 	attemptsDir := filepath.Join(runDir, "attempts")
 	attemptEntries, err := os.ReadDir(attemptsDir)
 	if err != nil {
@@ -431,7 +432,7 @@ func buildAttemptIndexRow(attemptsDir string, entry os.DirEntry, tagsByMission m
 	}
 	attemptDir := filepath.Join(attemptsDir, entry.Name())
 	var a schema.AttemptJSONV1
-	if !readJSONIfExists(filepath.Join(attemptDir, "attempt.json"), &a) {
+	if !readJSONIfExists(filepath.Join(attemptDir, artifacts.AttemptJSON), &a) {
 		return attemptIndexRow{}, false
 	}
 	if filter.Mission != "" && a.MissionID != filter.Mission {
@@ -455,7 +456,7 @@ func buildAttemptIndexRow(attemptsDir string, entry os.DirEntry, tagsByMission m
 	applyAttemptFeedback(attemptDir, &row)
 	applyAttemptReport(attemptDir, &row)
 	if !row.TraceNonEmpty {
-		nonEmpty, err := store.JSONLHasNonEmptyLine(filepath.Join(attemptDir, "tool.calls.jsonl"))
+		nonEmpty, err := store.JSONLHasNonEmptyLine(filepath.Join(attemptDir, artifacts.ToolCallsJSONL))
 		if err == nil {
 			row.TraceNonEmpty = nonEmpty
 		}
@@ -468,7 +469,7 @@ func buildAttemptIndexRow(attemptsDir string, entry os.DirEntry, tagsByMission m
 
 func applyAttemptFeedback(attemptDir string, row *attemptIndexRow) {
 	var fb schema.FeedbackJSONV1
-	if !readJSONIfExists(filepath.Join(attemptDir, "feedback.json"), &fb) {
+	if !readJSONIfExists(filepath.Join(attemptDir, artifacts.FeedbackJSON), &fb) {
 		return
 	}
 	row.FeedbackPresent = true
@@ -485,7 +486,7 @@ func applyAttemptFeedback(attemptDir string, row *attemptIndexRow) {
 
 func applyAttemptReport(attemptDir string, row *attemptIndexRow) {
 	var rep schema.AttemptReportJSONV1
-	if !readJSONIfExists(filepath.Join(attemptDir, "attempt.report.json"), &rep) {
+	if !readJSONIfExists(filepath.Join(attemptDir, artifacts.AttemptReportJSON), &rep) {
 		return
 	}
 	if row.EndedAt == "" {

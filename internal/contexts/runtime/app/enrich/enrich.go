@@ -3,6 +3,7 @@ package enrich
 import (
 	"encoding/json"
 	"errors"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 
@@ -22,7 +23,7 @@ type CliError struct {
 func (e *CliError) Error() string { return e.Message }
 
 func EnrichCodexAttempt(attemptDir string, rolloutPath string) error {
-	attemptBytes, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	attemptBytes, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptJSON))
 	if err != nil {
 		return err
 	}
@@ -42,7 +43,7 @@ func EnrichCodexAttempt(attemptDir string, rolloutPath string) error {
 }
 
 func EnrichClaudeAttempt(attemptDir string, sessionPath string) error {
-	attemptBytes, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
+	attemptBytes, err := os.ReadFile(filepath.Join(attemptDir, artifacts.AttemptJSON))
 	if err != nil {
 		return err
 	}
@@ -83,10 +84,10 @@ func EnrichClaudeAttempt(attemptDir string, sessionPath string) error {
 		CachedInputTokens:     metrics.Usage.CachedInputTokens,
 		ReasoningOutputTokens: metrics.Usage.ReasoningOutputTokens,
 	}
-	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.ref.json"), ref); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.RunnerRefJSON), ref); err != nil {
 		return err
 	}
-	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, "runner.metrics.json"), met); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(attemptDir, artifacts.RunnerMetricsJSON), met); err != nil {
 		return err
 	}
 	return nil

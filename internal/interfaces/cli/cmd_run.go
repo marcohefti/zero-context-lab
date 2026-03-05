@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -221,7 +222,7 @@ func (r Runner) applyRepeatGuard(env trace.Env, argv []string) (int, bool) {
 	if threshold <= 0 {
 		return 0, false
 	}
-	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	tracePath := filepath.Join(env.OutDirAbs, artifacts.ToolCallsJSONL)
 	streak, err := trailingFailedRepeatStreak(tracePath, argv)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": failed to inspect repeat guard state: %s\n", err.Error())
@@ -456,7 +457,7 @@ func (r Runner) appendRunCaptureEvent(now time.Time, env trace.Env, opts runOpti
 		RedactionsApplied: captureState.redactionsApplied,
 		MaxBytes:          opts.captureMaxBytes,
 	}
-	if err := store.AppendJSONL(filepath.Join(env.OutDirAbs, "captures.jsonl"), ev); err != nil {
+	if err := store.AppendJSONL(filepath.Join(env.OutDirAbs, artifacts.CapturesJSONL), ev); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": failed to append captures.jsonl: %s\n", err.Error())
 		return 1
 	}

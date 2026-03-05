@@ -1,8 +1,10 @@
 package schema
 
+import "github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
+
 const (
 	// AttemptRuntimeEnvFileNameV1 is written to: .zcl/runs/<runId>/attempts/<attemptId>/attempt.runtime.env.json
-	AttemptRuntimeEnvFileNameV1 = "attempt.runtime.env.json"
+	AttemptRuntimeEnvFileNameV1 = artifacts.AttemptRuntimeEnvJSON
 )
 
 type AttemptRuntimeEnvJSONV1 struct {

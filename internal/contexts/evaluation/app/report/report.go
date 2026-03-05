@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,8 +25,8 @@ type CliError struct {
 func (e *CliError) Error() string { return e.Message }
 
 func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.AttemptReportJSONV1, error) {
-	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
-	feedbackPath := filepath.Join(attemptDir, "feedback.json")
+	tracePath := filepath.Join(attemptDir, artifacts.ToolCallsJSONL)
+	feedbackPath := filepath.Join(attemptDir, artifacts.FeedbackJSON)
 	attempt, enforce, err := loadAttemptForReport(attemptDir, strict)
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
@@ -92,7 +93,7 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 }
 
 func loadAttemptForReport(attemptDir string, strict bool) (schema.AttemptJSONV1, bool, error) {
-	attemptPath := filepath.Join(attemptDir, "attempt.json")
+	attemptPath := filepath.Join(attemptDir, artifacts.AttemptJSON)
 	attemptBytes, err := os.ReadFile(attemptPath)
 	if err != nil {
 		if strict && os.IsNotExist(err) {
@@ -153,12 +154,12 @@ func buildAttemptIntegrity(tracePresent, traceNonEmpty, feedbackPresent bool, te
 
 func discoverAttemptArtifacts(attemptDir string) schema.AttemptArtifactsV1 {
 	artifacts := schema.AttemptArtifactsV1{
-		AttemptJSON:  "attempt.json",
-		TraceJSONL:   "tool.calls.jsonl",
-		FeedbackJSON: "feedback.json",
+		AttemptJSON:  artifacts.AttemptJSON,
+		TraceJSONL:   artifacts.ToolCallsJSONL,
+		FeedbackJSON: artifacts.FeedbackJSON,
 	}
-	setArtifactIfPresent(filepath.Join(attemptDir, "notes.jsonl"), &artifacts.NotesJSONL, "notes.jsonl")
-	setArtifactIfPresent(filepath.Join(attemptDir, "prompt.txt"), &artifacts.PromptTXT, "prompt.txt")
+	setArtifactIfPresent(filepath.Join(attemptDir, artifacts.NotesJSONL), &artifacts.NotesJSONL, artifacts.NotesJSONL)
+	setArtifactIfPresent(filepath.Join(attemptDir, artifacts.PromptTXT), &artifacts.PromptTXT, artifacts.PromptTXT)
 	setArtifactIfPresent(filepath.Join(attemptDir, schema.AttemptEnvShFileNameV1), &artifacts.AttemptEnvSH, schema.AttemptEnvShFileNameV1)
 	setArtifactIfPresent(filepath.Join(attemptDir, schema.AttemptRuntimeEnvFileNameV1), &artifacts.AttemptRuntimeEnvJSON, schema.AttemptRuntimeEnvFileNameV1)
 	setArtifactIfPresent(filepath.Join(attemptDir, "runner.command.txt"), &artifacts.RunnerCommandTXT, "runner.command.txt")
@@ -289,7 +290,7 @@ func scanTraceSummary(tracePath string) (traceSummary, error) {
 }
 
 func promptContaminationTerms(attemptDir string, configured []string) []string {
-	promptPath := filepath.Join(attemptDir, "prompt.txt")
+	promptPath := filepath.Join(attemptDir, artifacts.PromptTXT)
 	b, err := os.ReadFile(promptPath)
 	if err != nil {
 		return nil
@@ -321,7 +322,7 @@ func classifyTimedOutBeforeFirstToolCall(a schema.AttemptJSONV1, s traceSummary)
 }
 
 func tokenEstimatesForAttempt(attemptDir string, tracePath string, metrics schema.AttemptMetricsV1) *schema.TokenEstimatesV1 {
-	if m, ok := loadRunnerTokenEstimates(filepath.Join(attemptDir, "runner.metrics.json")); ok {
+	if m, ok := loadRunnerTokenEstimates(filepath.Join(attemptDir, artifacts.RunnerMetricsJSON)); ok {
 		return m
 	}
 	s, err := scanTraceSummary(tracePath)
@@ -806,13 +807,13 @@ func quantileMillis(sorted []int64, q float64) int64 {
 
 func loadSuiteForAttempt(attemptDir string) (suite.SuiteFileV1, bool, error) {
 	runDir := filepath.Dir(filepath.Dir(attemptDir))
-	if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(runDir, artifacts.RunJSON)); err != nil {
 		if os.IsNotExist(err) {
 			return suite.SuiteFileV1{}, false, nil
 		}
 		return suite.SuiteFileV1{}, false, err
 	}
-	suitePath := filepath.Join(runDir, "suite.json")
+	suitePath := filepath.Join(runDir, artifacts.SuiteJSON)
 	raw, err := os.ReadFile(suitePath)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"os/exec"
@@ -1008,7 +1009,7 @@ func finalizeSuiteRunSummary(summary suiteRunSummary, results []suiteRunAttemptR
 		summary.Attempts = append(summary.Attempts, ar)
 	}
 	if summary.RunID != "" {
-		_ = store.WriteJSONAtomic(filepath.Join(summary.OutRoot, "runs", summary.RunID, "suite.run.summary.json"), summary)
+		_ = store.WriteJSONAtomic(filepath.Join(summary.OutRoot, "runs", summary.RunID, artifacts.SuiteRunSummaryJSON), summary)
 	}
 	return summary
 }
@@ -1222,7 +1223,7 @@ func applySuiteRunResultChannelEnv(env map[string]string, outDirAbs string, resu
 }
 
 func applySuiteRunOptionalEnvPaths(env map[string]string, outDirAbs string, zclExe string) {
-	if p := filepath.Join(outDirAbs, "prompt.txt"); fileExists(p) {
+	if p := filepath.Join(outDirAbs, artifacts.PromptTXT); fileExists(p) {
 		env["ZCL_PROMPT_PATH"] = p
 	}
 	if strings.TrimSpace(zclExe) != "" {
@@ -1651,7 +1652,7 @@ func classifySuiteRunRunnerExecution(runErr error, ctx context.Context, ar *suit
 }
 
 func promptContamination(attemptDir string, terms []string) []string {
-	b, err := os.ReadFile(filepath.Join(attemptDir, "prompt.txt"))
+	b, err := os.ReadFile(filepath.Join(attemptDir, artifacts.PromptTXT))
 	if err != nil {
 		return nil
 	}
@@ -1827,7 +1828,7 @@ func buildSuiteRunFinishReport(now time.Time, attemptDir string, strict bool) (s
 }
 
 func writeSuiteRunFinishReport(attemptDir string, rep schema.AttemptReportJSONV1) error {
-	return report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep)
+	return report.WriteAttemptReportAtomic(filepath.Join(attemptDir, artifacts.AttemptReportJSON), rep)
 }
 
 func evaluateSuiteRunFinish(attemptDir string, strict bool, strictExpect bool) (validate.Result, expect.Result, error) {

@@ -3,6 +3,7 @@ package trace
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -106,7 +107,7 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		ev.Integrity.Truncated = true
 	}
 
-	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	path := filepath.Join(env.OutDirAbs, artifacts.ToolCallsJSONL)
 	return store.AppendJSONL(path, ev)
 }
 
@@ -234,7 +235,7 @@ func AppendNativeRuntimeEvent(now time.Time, env Env, evIn NativeRuntimeEvent) e
 			Truncated: inputTruncated || evIn.Partial,
 		},
 	}
-	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	path := filepath.Join(env.OutDirAbs, artifacts.ToolCallsJSONL)
 	return store.AppendJSONL(path, traceEvent)
 }
 

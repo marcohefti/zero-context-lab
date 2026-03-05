@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -57,7 +58,7 @@ func ReplayAttempt(ctx context.Context, attemptDir string, opts Opts) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	tracePath := filepath.Join(abs, "tool.calls.jsonl")
+	tracePath := filepath.Join(abs, artifacts.ToolCallsJSONL)
 	f, err := os.Open(tracePath)
 	if err != nil {
 		return Result{}, err

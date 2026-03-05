@@ -1,6 +1,7 @@
 package blind
 
 import (
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"sort"
 	"strings"
 )
@@ -8,8 +9,8 @@ import (
 var defaultHarnessTermsV1 = []string{
 	"zcl",
 	"zcl feedback",
-	"feedback.json",
-	"tool.calls.jsonl",
+	artifacts.FeedbackJSON,
+	artifacts.ToolCallsJSONL,
 	"funnel",
 	"attempt start",
 	"attempt finish",

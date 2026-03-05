@@ -1,6 +1,7 @@
 package attempt
 
 import (
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"path/filepath"
 	"time"
 
@@ -34,5 +35,5 @@ func EnsureTimeoutAnchor(now time.Time, attemptDir string) (schema.AttemptJSONV1
 }
 
 func attemptPath(attemptDir string) string {
-	return filepath.Join(attemptDir, "attempt.json")
+	return filepath.Join(attemptDir, artifacts.AttemptJSON)
 }

@@ -3,6 +3,7 @@ package campaign
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +64,7 @@ func evaluateToolPolicyTraceLine(policy ToolPolicySpec, line string) (bool, erro
 }
 
 func openToolPolicyTrace(attemptDir string) (*os.File, error) {
-	path := filepath.Join(strings.TrimSpace(attemptDir), "tool.calls.jsonl")
+	path := filepath.Join(strings.TrimSpace(attemptDir), artifacts.ToolCallsJSONL)
 	f, err := os.Open(path)
 	if err != nil && os.IsNotExist(err) {
 		return nil, nil

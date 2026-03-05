@@ -3,6 +3,7 @@ package campaign
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,7 +56,7 @@ type UpdateInput struct {
 }
 
 func DefaultStatePath(outRoot string, campaignID string) string {
-	return filepath.Join(outRoot, "campaigns", campaignID, "campaign.state.json")
+	return filepath.Join(outRoot, "campaigns", campaignID, artifacts.CampaignStateJSON)
 }
 
 func UpdateState(path string, in UpdateInput) (StateV1, error) {

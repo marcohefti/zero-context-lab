@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os"
 	"path/filepath"
@@ -683,7 +684,7 @@ func (r Runner) resolveReportTarget(target string, strict bool) (string, bool, i
 }
 
 func isRunReportTarget(target string) bool {
-	_, err := os.Stat(filepath.Join(target, "run.json"))
+	_, err := os.Stat(filepath.Join(target, artifacts.RunJSON))
 	return err == nil
 }
 
@@ -693,7 +694,7 @@ func (r Runner) runReportForRun(target string, strict bool, jsonOut bool) int {
 		return exit
 	}
 	out := buildRunReportJSON(target, reports)
-	if err := store.WriteJSONAtomic(filepath.Join(target, "run.report.json"), out); err != nil {
+	if err := store.WriteJSONAtomic(filepath.Join(target, artifacts.RunReportJSON), out); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
@@ -720,7 +721,7 @@ func (r Runner) buildRunAttemptReports(target string, strict bool) ([]schema.Att
 		if err != nil {
 			return nil, r.printReportErr(err), false
 		}
-		if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
+		if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, artifacts.AttemptReportJSON), rep); err != nil {
 			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 			return nil, 1, false
 		}
@@ -734,7 +735,7 @@ func (r Runner) runReportForAttempt(target string, strict bool, jsonOut bool) in
 	if err != nil {
 		return r.printReportErr(err)
 	}
-	if err := report.WriteAttemptReportAtomic(filepath.Join(target, "attempt.report.json"), rep); err != nil {
+	if err := report.WriteAttemptReportAtomic(filepath.Join(target, artifacts.AttemptReportJSON), rep); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}

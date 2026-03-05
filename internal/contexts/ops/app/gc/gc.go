@@ -2,6 +2,7 @@ package gc
 
 import (
 	"encoding/json"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,7 +92,7 @@ func collectRuns(entries []os.DirEntry, runsDir string) []RunInfo {
 }
 
 func loadRunInfo(runDir string) (RunInfo, bool) {
-	runJSONPath := filepath.Join(runDir, "run.json")
+	runJSONPath := filepath.Join(runDir, artifacts.RunJSON)
 	raw, err := os.ReadFile(runJSONPath)
 	if err != nil {
 		return RunInfo{}, false

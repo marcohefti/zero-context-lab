@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -124,7 +125,7 @@ func ProxyWithOptions(ctx context.Context, env trace.Env, serverArgv []string, c
 	state := newProxyRuntimeState()
 	startIdleTimeoutWatcher(proxyCtx, opts.IdleTimeoutMs, state, cancelProxy)
 
-	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+	tracePath := filepath.Join(env.OutDirAbs, artifacts.ToolCallsJSONL)
 	redServerArgv, argvApplied := redactStrings(serverArgv)
 	if err := appendSpawnTraceEvent(tracePath, env, redServerArgv, argvApplied); err != nil {
 		return err

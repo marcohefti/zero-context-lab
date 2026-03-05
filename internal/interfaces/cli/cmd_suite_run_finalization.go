@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/marcohefti/zero-context-lab/internal/kernel/artifacts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,7 @@ func maybeWriteAutoResultFeedback(now time.Time, env map[string]string, ar *suit
 	if outDir == "" {
 		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto result finalization")
 	}
-	feedbackPath := filepath.Join(outDir, "feedback.json")
+	feedbackPath := filepath.Join(outDir, artifacts.FeedbackJSON)
 	if fileExists(feedbackPath) {
 		return nil
 	}
@@ -371,7 +372,7 @@ func maybeWriteResultChannelFailureFeedback(now time.Time, env map[string]string
 	if outDir == "" {
 		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
 	}
-	feedbackPath := filepath.Join(outDir, "feedback.json")
+	feedbackPath := filepath.Join(outDir, artifacts.FeedbackJSON)
 	if fileExists(feedbackPath) {
 		return nil
 	}
@@ -415,7 +416,7 @@ func maybeWriteResultChannelFailureFeedback(now time.Time, env map[string]string
 }
 
 func ensureAutoFeedbackTrace(now time.Time, envTrace trace.Env, op string, code string, msg string) error {
-	tracePath := filepath.Join(envTrace.OutDirAbs, "tool.calls.jsonl")
+	tracePath := filepath.Join(envTrace.OutDirAbs, artifacts.ToolCallsJSONL)
 	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -481,7 +482,7 @@ func shouldWriteAutoFailureFeedback(env map[string]string, feedbackPolicy string
 	if outDir == "" {
 		return "", false, fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
 	}
-	if fileExists(filepath.Join(outDir, "feedback.json")) {
+	if fileExists(filepath.Join(outDir, artifacts.FeedbackJSON)) {
 		return outDir, false, nil
 	}
 	if schema.NormalizeFeedbackPolicyV1(feedbackPolicy) == schema.FeedbackPolicyStrictV1 {
@@ -514,7 +515,7 @@ func autoFailureMessage(ar suiteRunAttemptResult) string {
 }
 
 func ensureAutoFailureTraceEvent(now time.Time, envTrace trace.Env, code string, msg string) error {
-	tracePath := filepath.Join(envTrace.OutDirAbs, "tool.calls.jsonl")
+	tracePath := filepath.Join(envTrace.OutDirAbs, artifacts.ToolCallsJSONL)
 	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err

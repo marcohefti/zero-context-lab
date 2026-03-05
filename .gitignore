@@ -7,6 +7,8 @@ tmp/
 
 # Local/CI artifacts from validation scripts
 artifacts/
+!internal/kernel/artifacts/
+!internal/kernel/artifacts/*.go
 
 # Go build/test outputs
 *.test
