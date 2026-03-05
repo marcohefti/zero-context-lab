@@ -21,26 +21,32 @@ func TestText_RedactsKnownSecrets(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			out, a := Text(tc.in)
-			if out == tc.in {
-				t.Fatalf("expected redaction, got unchanged output")
-			}
-			if !contains(out, tc.wantSubstr) {
-				t.Fatalf("expected output to contain %q, got: %q", tc.wantSubstr, out)
-			}
-			found := false
-			for _, n := range a.Names {
-				if n == tc.applied {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatalf("expected applied to include %q, got: %+v", tc.applied, a.Names)
-			}
-		})
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) { assertRedactionCase(t, tc.in, tc.wantSubstr, tc.applied) })
 	}
+}
+
+func assertRedactionCase(t *testing.T, input, wantSubstr, expectedRule string) {
+	t.Helper()
+	out, applied := Text(input)
+	if out == input {
+		t.Fatalf("expected redaction, got unchanged output")
+	}
+	if !contains(out, wantSubstr) {
+		t.Fatalf("expected output to contain %q, got: %q", wantSubstr, out)
+	}
+	if !containsName(applied.Names, expectedRule) {
+		t.Fatalf("expected applied to include %q, got: %+v", expectedRule, applied.Names)
+	}
+}
+
+func containsName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(s, sub string) bool {

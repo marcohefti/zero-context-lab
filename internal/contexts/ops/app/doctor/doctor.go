@@ -39,66 +39,73 @@ func Run(ctx context.Context, opts Opts) (Result, error) {
 	outRoot := m.OutRoot
 
 	res := Result{OK: true, OutRoot: outRoot}
-
-	// Write access: create and remove a temp file under outRoot.
-	if err := os.MkdirAll(filepath.Join(outRoot, "runs"), 0o755); err != nil {
-		res.OK = false
-		res.Checks = append(res.Checks, Check{ID: "write_access", OK: false, Message: err.Error()})
-	} else {
-		tmp := filepath.Join(outRoot, ".doctor.tmp")
-		if err := os.WriteFile(tmp, []byte("ok\n"), 0o644); err != nil {
+	add := func(check Check) {
+		if !check.OK {
 			res.OK = false
-			res.Checks = append(res.Checks, Check{ID: "write_access", OK: false, Message: err.Error()})
-		} else {
-			_ = os.Remove(tmp)
-			res.Checks = append(res.Checks, Check{ID: "write_access", OK: true})
 		}
+		res.Checks = append(res.Checks, check)
 	}
 
-	// Project config parse (best-effort): if present, it must parse.
-	if _, err := os.Stat(config.DefaultProjectConfigPath); err == nil {
-		if _, err := config.LoadMerged(""); err != nil {
-			res.OK = false
-			res.Checks = append(res.Checks, Check{ID: "project_config", OK: false, Message: err.Error()})
-		} else {
-			res.Checks = append(res.Checks, Check{ID: "project_config", OK: true})
-		}
-	} else {
-		res.Checks = append(res.Checks, Check{ID: "project_config", OK: true, Message: "missing (ok)"})
-	}
-
-	// Redaction config parse/compile (best-effort): if present, it must be valid.
-	if _, err := config.LoadRedactionMerged(); err != nil {
-		res.OK = false
-		res.Checks = append(res.Checks, Check{ID: "redaction_config", OK: false, Message: err.Error()})
-	} else {
-		res.Checks = append(res.Checks, Check{ID: "redaction_config", OK: true})
-	}
-
-	// Optional runner availability: codex binary.
-	if _, err := exec.LookPath("codex"); err == nil {
-		res.Checks = append(res.Checks, Check{ID: "runner_codex", OK: true})
-	} else {
-		res.Checks = append(res.Checks, Check{ID: "runner_codex", OK: true, Message: "codex not on PATH (ok if not enriching)"})
-	}
+	add(checkWriteAccess(outRoot))
+	add(checkProjectConfig())
+	add(checkRedactionConfig())
+	add(checkCodexRunner())
 	for _, runtime := range opts.NativeRuntimes {
 		if runtime == nil {
 			continue
 		}
-		id := string(runtime.ID())
-		checkID := "runtime_" + id
-		if err := runtime.Probe(ctx); err != nil {
-			res.Checks = append(res.Checks, Check{ID: checkID, OK: true, Message: "native runtime unavailable (" + err.Error() + ")"})
-		} else {
-			res.Checks = append(res.Checks, Check{ID: checkID, OK: true})
-		}
+		add(checkRuntime(ctx, runtime))
 	}
 	health := native.HealthSnapshot()
 	if len(health) == 0 {
-		res.Checks = append(res.Checks, Check{ID: "runtime_health", OK: true, Message: "no runtime health counters recorded yet"})
+		add(Check{ID: "runtime_health", OK: true, Message: "no runtime health counters recorded yet"})
 	} else {
-		res.Checks = append(res.Checks, Check{ID: "runtime_health", OK: true, Message: "runtime health counters available"})
+		add(Check{ID: "runtime_health", OK: true, Message: "runtime health counters available"})
 	}
 
 	return res, nil
+}
+
+func checkWriteAccess(outRoot string) Check {
+	if err := os.MkdirAll(filepath.Join(outRoot, "runs"), 0o755); err != nil {
+		return Check{ID: "write_access", OK: false, Message: err.Error()}
+	}
+	tmp := filepath.Join(outRoot, ".doctor.tmp")
+	if err := os.WriteFile(tmp, []byte("ok\n"), 0o600); err != nil {
+		return Check{ID: "write_access", OK: false, Message: err.Error()}
+	}
+	_ = os.Remove(tmp)
+	return Check{ID: "write_access", OK: true}
+}
+
+func checkProjectConfig() Check {
+	if _, err := os.Stat(config.DefaultProjectConfigPath); err != nil {
+		return Check{ID: "project_config", OK: true, Message: "missing (ok)"}
+	}
+	if _, err := config.LoadMerged(""); err != nil {
+		return Check{ID: "project_config", OK: false, Message: err.Error()}
+	}
+	return Check{ID: "project_config", OK: true}
+}
+
+func checkRedactionConfig() Check {
+	if _, err := config.LoadRedactionMerged(); err != nil {
+		return Check{ID: "redaction_config", OK: false, Message: err.Error()}
+	}
+	return Check{ID: "redaction_config", OK: true}
+}
+
+func checkCodexRunner() Check {
+	if _, err := exec.LookPath("codex"); err == nil {
+		return Check{ID: "runner_codex", OK: true}
+	}
+	return Check{ID: "runner_codex", OK: true, Message: "codex not on PATH (ok if not enriching)"}
+}
+
+func checkRuntime(ctx context.Context, runtime native.Runtime) Check {
+	checkID := "runtime_" + string(runtime.ID())
+	if err := runtime.Probe(ctx); err != nil {
+		return Check{ID: checkID, OK: true, Message: "native runtime unavailable (" + err.Error() + ")"}
+	}
+	return Check{ID: checkID, OK: true}
 }

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/marcohefti/zero-context-lab/internal/contexts/spec/ports/suite"
 	"github.com/marcohefti/zero-context-lab/internal/kernel/schema"
+	"golang.org/x/sys/execabs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,21 +61,8 @@ func ValidatePath(targetDir string, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return Result{}, err
-	}
-	if !info.IsDir() {
-		return Result{
-			OK:     false,
-			Target: "unknown",
-			Path:   abs,
-			Failures: []Finding{{
-				Code:    "ZCL_E_USAGE",
-				Message: "target must be a directory",
-				Path:    abs,
-			}},
-		}, nil
+	if err := requireSemanticTargetDir(abs); err != nil {
+		return invalidSemanticTarget(abs, "target must be a directory"), nil
 	}
 
 	var pack *RulePackV1
@@ -87,72 +74,108 @@ func ValidatePath(targetDir string, opts Options) (Result, error) {
 		pack = &rp
 	}
 
-	if _, err := os.Stat(filepath.Join(abs, "attempt.json")); err == nil {
-		ar, err := evaluateAttempt(abs, pack)
-		if err != nil {
-			return Result{}, err
-		}
-		res := Result{
-			OK:        ar.OK,
-			Target:    "attempt",
-			Path:      abs,
-			RulePath:  strings.TrimSpace(opts.RulesPath),
-			Evaluated: ar.Evaluated,
-		}
-		if ar.Evaluated && !ar.OK {
-			res.Failures = append(res.Failures, ar.Failures...)
-		}
-		if ar.Evaluated {
-			res.Attempts = []AttemptResult{ar}
-		}
-		return res, nil
+	target := detectSemanticTarget(abs)
+	switch target {
+	case "attempt":
+		return evaluateSemanticAttemptTarget(abs, strings.TrimSpace(opts.RulesPath), pack)
+	case "run":
+		return evaluateSemanticRunTarget(abs, strings.TrimSpace(opts.RulesPath), pack)
+	default:
+		return invalidSemanticTarget(abs, "target does not look like an attemptDir or runDir"), nil
 	}
+}
 
-	if _, err := os.Stat(filepath.Join(abs, "run.json")); err == nil {
-		attemptsDir := filepath.Join(abs, "attempts")
-		entries, err := os.ReadDir(attemptsDir)
-		if err != nil {
-			return Result{}, err
-		}
-		out := Result{
-			OK:       true,
-			Target:   "run",
-			Path:     abs,
-			RulePath: strings.TrimSpace(opts.RulesPath),
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			ar, err := evaluateAttempt(filepath.Join(attemptsDir, e.Name()), pack)
-			if err != nil {
-				return Result{}, err
-			}
-			if ar.Evaluated {
-				out.Evaluated = true
-			}
-			if !ar.OK {
-				out.OK = false
-				out.Failures = append(out.Failures, ar.Failures...)
-			}
-			out.Attempts = append(out.Attempts, ar)
-		}
-		sort.Slice(out.Attempts, func(i, j int) bool {
-			return out.Attempts[i].AttemptID < out.Attempts[j].AttemptID
-		})
-		return out, nil
+func requireSemanticTargetDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
 	}
+	if !info.IsDir() {
+		return fmt.Errorf("target must be a directory")
+	}
+	return nil
+}
 
+func invalidSemanticTarget(path, message string) Result {
 	return Result{
 		OK:     false,
 		Target: "unknown",
-		Path:   abs,
+		Path:   path,
 		Failures: []Finding{{
 			Code:    "ZCL_E_USAGE",
-			Message: "target does not look like an attemptDir or runDir",
-			Path:    abs,
+			Message: message,
+			Path:    path,
 		}},
-	}, nil
+	}
+}
+
+func detectSemanticTarget(abs string) string {
+	if fileExists(filepath.Join(abs, "attempt.json")) {
+		return "attempt"
+	}
+	if fileExists(filepath.Join(abs, "run.json")) {
+		return "run"
+	}
+	return ""
+}
+
+func evaluateSemanticAttemptTarget(attemptDir, rulePath string, pack *RulePackV1) (Result, error) {
+	ar, err := evaluateAttempt(attemptDir, pack)
+	if err != nil {
+		return Result{}, err
+	}
+	res := Result{
+		OK:        ar.OK,
+		Target:    "attempt",
+		Path:      attemptDir,
+		RulePath:  rulePath,
+		Evaluated: ar.Evaluated,
+	}
+	if ar.Evaluated {
+		res.Attempts = []AttemptResult{ar}
+		if !ar.OK {
+			res.Failures = append(res.Failures, ar.Failures...)
+		}
+	}
+	return res, nil
+}
+
+func evaluateSemanticRunTarget(runDir, rulePath string, pack *RulePackV1) (Result, error) {
+	attemptsDir := filepath.Join(runDir, "attempts")
+	entries, err := os.ReadDir(attemptsDir)
+	if err != nil {
+		return Result{}, err
+	}
+	out := Result{
+		OK:       true,
+		Target:   "run",
+		Path:     runDir,
+		RulePath: rulePath,
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		ar, err := evaluateAttempt(filepath.Join(attemptsDir, e.Name()), pack)
+		if err != nil {
+			return Result{}, err
+		}
+		out.Attempts = append(out.Attempts, ar)
+		if ar.Evaluated {
+			out.Evaluated = true
+		}
+		if !ar.OK {
+			out.OK = false
+			out.Failures = append(out.Failures, ar.Failures...)
+		}
+	}
+	sort.Slice(out.Attempts, func(i, j int) bool { return out.Attempts[i].AttemptID < out.Attempts[j].AttemptID })
+	return out, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func evaluateAttempt(attemptDir string, pack *RulePackV1) (AttemptResult, error) {
@@ -296,107 +319,139 @@ func traceFacts(tracePath string) (*suite.TraceFacts, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var (
-		sc           = bufio.NewScanner(f)
-		total        int64
-		failures     int64
-		timeouts     int64
-		lastSig      string
-		streak       int64
-		maxStreak    int64
-		distinct     = map[string]bool{}
-		commandNames = map[string]bool{}
-		toolOps      = map[string]bool{}
-		mcpTools     = map[string]bool{}
-		seenNonEmpty bool
-	)
+	acc := newSemanticTraceFactsAccumulator()
+	if err := scanSemanticTraceFacts(f, acc); err != nil {
+		return nil, err
+	}
+	if !acc.seenNonEmpty {
+		return nil, nil
+	}
+	return acc.toTraceFacts(), nil
+}
+
+type semanticTraceFactsAccumulator struct {
+	total        int64
+	failures     int64
+	timeouts     int64
+	lastSig      string
+	streak       int64
+	maxStreak    int64
+	seenNonEmpty bool
+	distinct     map[string]bool
+	commandNames map[string]bool
+	toolOps      map[string]bool
+	mcpTools     map[string]bool
+}
+
+func newSemanticTraceFactsAccumulator() *semanticTraceFactsAccumulator {
+	return &semanticTraceFactsAccumulator{
+		distinct:     map[string]bool{},
+		commandNames: map[string]bool{},
+		toolOps:      map[string]bool{},
+		mcpTools:     map[string]bool{},
+	}
+}
+
+func scanSemanticTraceFacts(f *os.File, acc *semanticTraceFactsAccumulator) error {
+	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		seenNonEmpty = true
-
 		var ev schema.TraceEventV1
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return nil, err
+			return err
 		}
-		total++
-		if !ev.Result.OK {
-			failures++
-			if ev.Result.Code == "ZCL_E_TIMEOUT" {
-				timeouts++
-			}
-		}
-		if ev.Op != "" {
-			toolOps[ev.Op] = true
-		}
+		acc.observe(ev)
+	}
+	return sc.Err()
+}
 
-		sig := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
-		distinct[sig] = true
-		if sig == lastSig {
-			streak++
-		} else {
-			lastSig = sig
-			streak = 1
+func (a *semanticTraceFactsAccumulator) observe(ev schema.TraceEventV1) {
+	a.seenNonEmpty = true
+	a.total++
+	if !ev.Result.OK {
+		a.failures++
+		if ev.Result.Code == "ZCL_E_TIMEOUT" {
+			a.timeouts++
 		}
-		if streak > maxStreak {
-			maxStreak = streak
-		}
+	}
+	if ev.Op != "" {
+		a.toolOps[ev.Op] = true
+	}
+	sig := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
+	a.distinct[sig] = true
+	if sig == a.lastSig {
+		a.streak++
+	} else {
+		a.lastSig = sig
+		a.streak = 1
+	}
+	if a.streak > a.maxStreak {
+		a.maxStreak = a.streak
+	}
+	a.observeNames(ev)
+}
 
-		if ev.Op == "exec" && len(ev.Input) > 0 {
-			var in struct {
-				Argv []string `json:"argv"`
-			}
-			if err := json.Unmarshal(ev.Input, &in); err == nil && len(in.Argv) > 0 && in.Argv[0] != "" {
-				commandNames[in.Argv[0]] = true
-			}
-		}
-		if ev.Tool == "mcp" && ev.Op == "tools/call" && len(ev.Input) > 0 {
-			var in struct {
-				Params struct {
-					Name string `json:"name"`
-				} `json:"params"`
-			}
-			if err := json.Unmarshal(ev.Input, &in); err == nil && in.Params.Name != "" {
-				mcpTools[in.Params.Name] = true
-			}
-		}
+func (a *semanticTraceFactsAccumulator) observeNames(ev schema.TraceEventV1) {
+	if ev.Op == "exec" {
+		a.observeExecCommand(ev.Input)
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
+	if ev.Tool == "mcp" && ev.Op == "tools/call" {
+		a.observeMCPTool(ev.Input)
 	}
-	if !seenNonEmpty {
-		return nil, nil
-	}
+}
 
-	var cmdNames []string
-	for s := range commandNames {
-		cmdNames = append(cmdNames, s)
+func (a *semanticTraceFactsAccumulator) observeExecCommand(input json.RawMessage) {
+	if len(input) == 0 {
+		return
 	}
-	sort.Strings(cmdNames)
-	var ops []string
-	for s := range toolOps {
-		ops = append(ops, s)
+	var in struct {
+		Argv []string `json:"argv"`
 	}
-	sort.Strings(ops)
-	var mcp []string
-	for s := range mcpTools {
-		mcp = append(mcp, s)
+	if err := json.Unmarshal(input, &in); err != nil || len(in.Argv) == 0 || in.Argv[0] == "" {
+		return
 	}
-	sort.Strings(mcp)
+	a.commandNames[in.Argv[0]] = true
+}
 
+func (a *semanticTraceFactsAccumulator) observeMCPTool(input json.RawMessage) {
+	if len(input) == 0 {
+		return
+	}
+	var in struct {
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(input, &in); err != nil || in.Params.Name == "" {
+		return
+	}
+	a.mcpTools[in.Params.Name] = true
+}
+
+func (a *semanticTraceFactsAccumulator) toTraceFacts() *suite.TraceFacts {
 	return &suite.TraceFacts{
-		ToolCallsTotal:            total,
-		FailuresTotal:             failures,
-		TimeoutsTotal:             timeouts,
-		RepeatMaxStreak:           maxStreak,
-		DistinctCommandSignatures: int64(len(distinct)),
-		CommandNamesSeen:          cmdNames,
-		ToolOpsSeen:               ops,
-		MCPToolsSeen:              mcp,
-	}, nil
+		ToolCallsTotal:            a.total,
+		FailuresTotal:             a.failures,
+		TimeoutsTotal:             a.timeouts,
+		RepeatMaxStreak:           a.maxStreak,
+		DistinctCommandSignatures: int64(len(a.distinct)),
+		CommandNamesSeen:          sortedMapKeys(a.commandNames),
+		ToolOpsSeen:               sortedMapKeys(a.toolOps),
+		MCPToolsSeen:              sortedMapKeys(a.mcpTools),
+	}
+}
+
+func sortedMapKeys(in map[string]bool) []string {
+	out := make([]string, 0, len(in))
+	for s := range in {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func evaluateHook(attemptDir string, a schema.AttemptJSONV1, rules *suite.SemanticExpectsV1) ([]Finding, error) {
@@ -411,7 +466,15 @@ func evaluateHook(attemptDir string, a schema.AttemptJSONV1, rules *suite.Semant
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, rules.HookCommand[0], rules.HookCommand[1:]...)
+	output, err := runSemanticHook(ctx, attemptDir, a, rules.HookCommand)
+	if err != nil {
+		return semanticHookErrorFindings(attemptDir, ctx, output), nil
+	}
+	return semanticHookResultFindings(attemptDir, output), nil
+}
+
+func runSemanticHook(ctx context.Context, attemptDir string, a schema.AttemptJSONV1, cmdv []string) (string, error) {
+	cmd := execabs.CommandContext(ctx, cmdv[0], cmdv[1:]...)
 	cmd.Env = append(os.Environ(),
 		"ZCL_ATTEMPT_DIR="+attemptDir,
 		"ZCL_RUN_ID="+a.RunID,
@@ -420,55 +483,59 @@ func evaluateHook(attemptDir string, a schema.AttemptJSONV1, rules *suite.Semant
 		"ZCL_ATTEMPT_ID="+a.AttemptID,
 	)
 	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
-	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return []Finding{{
-				Code:    "ZCL_E_SEMANTIC_HOOK",
-				Message: "semantic hook timed out",
-				Path:    attemptDir,
-			}}, nil
-		}
-		msg := "semantic hook failed"
-		if output != "" {
-			msg += ": " + output
-		}
+	return strings.TrimSpace(string(out)), err
+}
+
+func semanticHookErrorFindings(attemptDir string, ctx context.Context, output string) []Finding {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return []Finding{{
 			Code:    "ZCL_E_SEMANTIC_HOOK",
-			Message: msg,
+			Message: "semantic hook timed out",
 			Path:    attemptDir,
-		}}, nil
+		}}
 	}
+	msg := "semantic hook failed"
+	if output != "" {
+		msg += ": " + output
+	}
+	return []Finding{{
+		Code:    "ZCL_E_SEMANTIC_HOOK",
+		Message: msg,
+		Path:    attemptDir,
+	}}
+}
 
+func semanticHookResultFindings(attemptDir string, output string) []Finding {
 	if output == "" {
-		return nil, nil
+		return nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		// Non-JSON output after success is accepted as informational.
-		return nil, nil
+		return nil
 	}
 	if semPass, ok := payload["semanticPass"].(bool); ok && !semPass {
-		msg := "semantic hook reported failure"
-		if s, ok := payload["message"].(string); ok && strings.TrimSpace(s) != "" {
-			msg = strings.TrimSpace(s)
-		}
+		msg := semanticHookMessage(payload, "semantic hook reported failure")
 		return []Finding{{
 			Code:    "ZCL_E_SEMANTIC_HOOK",
 			Message: msg,
 			Path:    attemptDir,
-		}}, nil
+		}}
 	}
 	if okVal, ok := payload["ok"].(bool); ok && !okVal {
-		msg := "semantic hook reported ok=false"
-		if s, ok := payload["message"].(string); ok && strings.TrimSpace(s) != "" {
-			msg = strings.TrimSpace(s)
-		}
+		msg := semanticHookMessage(payload, "semantic hook reported ok=false")
 		return []Finding{{
 			Code:    "ZCL_E_SEMANTIC_HOOK",
 			Message: msg,
 			Path:    attemptDir,
-		}}, nil
+		}}
 	}
-	return nil, nil
+	return nil
+}
+
+func semanticHookMessage(payload map[string]any, fallback string) string {
+	if s, ok := payload["message"].(string); ok && strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	return fallback
 }

@@ -248,19 +248,42 @@ func (s *session) Close(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if s.closing.CompareAndSwap(false, true) {
-		defer native.RecordHealth(s.runtimeID, native.HealthSessionClosed)
-		s.listenerMu.Lock()
-		s.listeners = map[string]native.EventListener{}
-		s.listenerMu.Unlock()
-		_ = s.stdin.Close()
-	}
+	s.beginClose()
+	waitCh := s.waitProcessAsync()
+	timeout := s.shutdownWaitTimeout(ctx)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
+	select {
+	case err := <-waitCh:
+		return s.handleShutdownWaitResult(err)
+	case <-timer.C:
+		return s.handleShutdownTimeout(waitCh)
+	case <-ctx.Done():
+		return native.WrapError(native.ErrorTimeout, "shutdown context cancelled", ctx.Err())
+	}
+}
+
+func (s *session) beginClose() {
+	if !s.closing.CompareAndSwap(false, true) {
+		return
+	}
+	defer native.RecordHealth(s.runtimeID, native.HealthSessionClosed)
+	s.listenerMu.Lock()
+	s.listeners = map[string]native.EventListener{}
+	s.listenerMu.Unlock()
+	_ = s.stdin.Close()
+}
+
+func (s *session) waitProcessAsync() chan error {
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- s.cmd.Wait()
 	}()
+	return waitCh
+}
 
+func (s *session) shutdownWaitTimeout(ctx context.Context) time.Duration {
 	timeout := s.shutdownTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -271,33 +294,28 @@ func (s *session) Close(ctx context.Context) error {
 	if timeout <= 0 {
 		timeout = s.shutdownTimeout
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	return timeout
+}
 
+func (s *session) handleShutdownWaitResult(err error) error {
+	s.signalDone(err)
+	if err == nil || isExitError(err) {
+		return nil
+	}
+	return native.WrapError(native.ErrorTransport, "wait for codex app-server shutdown", err)
+}
+
+func (s *session) handleShutdownTimeout(waitCh <-chan error) error {
+	_ = s.cmd.Process.Kill()
 	select {
 	case err := <-waitCh:
 		s.signalDone(err)
-		if err == nil {
-			return nil
+		if err == nil || isExitError(err) {
+			return native.NewError(native.ErrorTimeout, "forced codex app-server teardown on shutdown timeout")
 		}
-		if isExitError(err) {
-			return nil
-		}
-		return native.WrapError(native.ErrorTransport, "wait for codex app-server shutdown", err)
-	case <-timer.C:
-		_ = s.cmd.Process.Kill()
-		select {
-		case err := <-waitCh:
-			s.signalDone(err)
-			if err == nil || isExitError(err) {
-				return native.NewError(native.ErrorTimeout, "forced codex app-server teardown on shutdown timeout")
-			}
-			return native.WrapError(native.ErrorTimeout, "forced codex app-server teardown after shutdown timeout", err)
-		case <-time.After(750 * time.Millisecond):
-			return native.NewError(native.ErrorTimeout, "codex app-server did not exit after forced teardown")
-		}
-	case <-ctx.Done():
-		return native.WrapError(native.ErrorTimeout, "shutdown context cancelled", ctx.Err())
+		return native.WrapError(native.ErrorTimeout, "forced codex app-server teardown after shutdown timeout", err)
+	case <-time.After(750 * time.Millisecond):
+		return native.NewError(native.ErrorTimeout, "codex app-server did not exit after forced teardown")
 	}
 }
 
@@ -673,36 +691,10 @@ func (s *session) readLoop() {
 	scanner := bufio.NewScanner(s.stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		msg, err := parseRPCMessage([]byte(line))
-		if err != nil {
+		if err := s.handleRPCLine(scanner.Text()); err != nil {
 			s.signalDone(native.WrapError(native.ErrorProtocol, "decode runtime message", err))
 			return
 		}
-		if msg.Method != "" && strings.TrimSpace(msg.ID) == "" {
-			s.dispatchEvent(msg.Method, msg.Params)
-			continue
-		}
-		if strings.TrimSpace(msg.ID) == "" {
-			continue
-		}
-		s.pendingMu.Lock()
-		ch, ok := s.pending[msg.ID]
-		if ok {
-			delete(s.pending, msg.ID)
-		}
-		s.pendingMu.Unlock()
-		if !ok {
-			continue
-		}
-		if msg.RPCError != nil {
-			ch <- rpcResponse{Err: mapRPCError(msg.Method, msg.RPCError)}
-			continue
-		}
-		ch <- rpcResponse{Result: msg.Result}
 	}
 	if err := scanner.Err(); err != nil {
 		native.RecordHealth(s.runtimeID, native.HealthStreamDisconnect)
@@ -715,6 +707,48 @@ func (s *session) readLoop() {
 	}
 	native.RecordHealth(s.runtimeID, native.HealthRuntimeCrash)
 	s.signalDone(native.NewError(native.ErrorCrash, "runtime process exited (stream closed)"))
+}
+
+func (s *session) handleRPCLine(line string) error {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+	msg, err := parseRPCMessage([]byte(line))
+	if err != nil {
+		return err
+	}
+	if msg.Method != "" && strings.TrimSpace(msg.ID) == "" {
+		s.dispatchEvent(msg.Method, msg.Params)
+		return nil
+	}
+	if strings.TrimSpace(msg.ID) == "" {
+		return nil
+	}
+	return s.dispatchRPCResponse(msg)
+}
+
+func (s *session) dispatchRPCResponse(msg rpcMessage) error {
+	ch, ok := s.takePendingResponseChan(msg.ID)
+	if !ok {
+		return nil
+	}
+	if msg.RPCError != nil {
+		ch <- rpcResponse{Err: mapRPCError(msg.Method, msg.RPCError)}
+		return nil
+	}
+	ch <- rpcResponse{Result: msg.Result}
+	return nil
+}
+
+func (s *session) takePendingResponseChan(id string) (chan rpcResponse, bool) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	ch, ok := s.pending[id]
+	if ok {
+		delete(s.pending, id)
+	}
+	return ch, ok
 }
 
 func (s *session) dispatchEvent(method string, params json.RawMessage) {
@@ -955,39 +989,59 @@ func encodeInput(items []native.InputItem) []map[string]any {
 	}
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
-		typ := strings.TrimSpace(it.Type)
-		switch typ {
-		case "text", "":
-			if strings.TrimSpace(it.Text) == "" {
-				continue
-			}
-			out = append(out, map[string]any{"type": "text", "text": it.Text})
-		case "image":
-			if strings.TrimSpace(it.ImageURL) == "" {
-				continue
-			}
-			out = append(out, map[string]any{"type": "image", "url": it.ImageURL})
-		case "localImage":
-			if strings.TrimSpace(it.Path) == "" {
-				continue
-			}
-			out = append(out, map[string]any{"type": "localImage", "path": it.Path})
-		case "skill":
-			if strings.TrimSpace(it.Name) == "" || strings.TrimSpace(it.Path) == "" {
-				continue
-			}
-			out = append(out, map[string]any{"type": "skill", "name": it.Name, "path": it.Path})
-		case "mention":
-			if strings.TrimSpace(it.Name) == "" || strings.TrimSpace(it.Path) == "" {
-				continue
-			}
-			out = append(out, map[string]any{"type": "mention", "name": it.Name, "path": it.Path})
+		if encoded, ok := encodeInputItem(it); ok {
+			out = append(out, encoded)
 		}
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func encodeInputItem(it native.InputItem) (map[string]any, bool) {
+	switch strings.TrimSpace(it.Type) {
+	case "", "text":
+		return encodeTextInput(it.Text)
+	case "image":
+		return encodeImageInput(it.ImageURL)
+	case "localImage":
+		return encodeLocalImageInput(it.Path)
+	case "skill":
+		return encodeNamedPathInput("skill", it.Name, it.Path)
+	case "mention":
+		return encodeNamedPathInput("mention", it.Name, it.Path)
+	default:
+		return nil, false
+	}
+}
+
+func encodeTextInput(text string) (map[string]any, bool) {
+	if strings.TrimSpace(text) == "" {
+		return nil, false
+	}
+	return map[string]any{"type": "text", "text": text}, true
+}
+
+func encodeImageInput(url string) (map[string]any, bool) {
+	if strings.TrimSpace(url) == "" {
+		return nil, false
+	}
+	return map[string]any{"type": "image", "url": url}, true
+}
+
+func encodeLocalImageInput(path string) (map[string]any, bool) {
+	if strings.TrimSpace(path) == "" {
+		return nil, false
+	}
+	return map[string]any{"type": "localImage", "path": path}, true
+}
+
+func encodeNamedPathInput(itemType string, name string, path string) (map[string]any, bool) {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+		return nil, false
+	}
+	return map[string]any{"type": itemType, "name": name, "path": path}, true
 }
 
 func decodeEvent(method string, params json.RawMessage) native.Event {

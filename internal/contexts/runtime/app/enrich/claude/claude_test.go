@@ -14,7 +14,7 @@ func TestParseSessionJSONL_Works(t *testing.T) {
 	if err := os.WriteFile(sessionPath, []byte(strings.Join([]string{
 		`{"message":{"model":"claude-4.1","usage":{"input_tokens":3,"output_tokens":7}}}`,
 		`{"type":"assistant","model":"claude-4.1","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"total_tokens":35}}`,
-	}, "\n")), 0o644); err != nil {
+	}, "\n")), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestParseSessionJSONL_Works(t *testing.T) {
 func TestParseSessionJSONL_WithMessageUsage(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","model":"claude-4.1","message":{"usage":{"input_tokens":8,"output_tokens":9}}}`), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","model":"claude-4.1","message":{"usage":{"input_tokens":8,"output_tokens":9}}}`), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	metrics, err := ParseSessionJSONL(sessionPath)
@@ -58,7 +58,7 @@ func TestParseSessionJSONL_StrictShape(t *testing.T) {
 		`{"message":{"model":"claude-4.1","usage":{"input_tokens":1,"output_tokens":2}}}`,
 		`{"result":{"usage":{"total_tokens":12,"input_tokens":3,"output_tokens":4}}}`,
 	}, "\n")
-	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestParseSessionJSONL_StrictShape(t *testing.T) {
 func TestParseSessionJSONL_StringTokenCounts(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(sessionPath, []byte(`{"model":"claude-4.1","usage":{"input_tokens":"11","output_tokens":"13","cache_creation_input_tokens":"17","total_tokens":"41"}}`), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(`{"model":"claude-4.1","usage":{"input_tokens":"11","output_tokens":"13","cache_creation_input_tokens":"17","total_tokens":"41"}}`), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	metrics, err := ParseSessionJSONL(sessionPath)
@@ -104,7 +104,7 @@ func TestParseSessionJSONL_StringTokenCounts(t *testing.T) {
 func TestParseSessionJSONL_RejectsInvalidNumbers(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(sessionPath, []byte(`{"model":"claude-4.1","usage":{"input_tokens":-1,"output_tokens":1.5,"total_tokens":"abc"}}`), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(`{"model":"claude-4.1","usage":{"input_tokens":-1,"output_tokens":1.5,"total_tokens":"abc"}}`), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	_, err := ParseSessionJSONL(sessionPath)
@@ -123,7 +123,7 @@ func TestParseSessionJSONL_RejectsInvalidNumbers(t *testing.T) {
 func TestParseSessionJSONL_RejectsModelWithoutUsage(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","model":"claude-4.1","content":"hi"}`), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","model":"claude-4.1","content":"hi"}`), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	_, err := ParseSessionJSONL(sessionPath)
@@ -145,7 +145,7 @@ func TestParseSessionJSONL_RejectsModelWithoutUsage(t *testing.T) {
 func TestParseSessionJSONL_NoUsableData(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","content":"hi"}`), 0o644); err != nil {
+	if err := os.WriteFile(sessionPath, []byte(`{"type":"assistant","content":"hi"}`), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	_, err := ParseSessionJSONL(sessionPath)

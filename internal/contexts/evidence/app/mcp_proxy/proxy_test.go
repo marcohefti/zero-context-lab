@@ -300,58 +300,83 @@ func TestMCPServerHelper(t *testing.T) {
 	var wg sync.WaitGroup
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var msg map[string]any
-		if err := json.Unmarshal(line, &msg); err != nil {
-			continue
-		}
-		id := msg["id"]
-		method, _ := msg["method"].(string)
-		switch method {
-		case "initialize":
-			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"capabilities":{}}}`)
-		case "tools/list":
-			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"tools":[{"name":"echo"}]}}`)
-		case "tools/call":
-			// Echo the requested text so tests can assert redaction behavior in the proxy trace.
-			text := "ok"
-			delayMs := int64(0)
-			if params, ok := msg["params"].(map[string]any); ok {
-				if args, ok := params["arguments"].(map[string]any); ok {
-					if t, ok := args["text"].(string); ok && t != "" {
-						text = t
-					}
-					if d, ok := args["delayMs"].(float64); ok && d > 0 {
-						delayMs = int64(d)
-					}
-				}
-			}
-			b, _ := json.Marshal(text)
-			resp := `{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"content":[{"type":"text","text":` + string(b) + `}]}}`
-			if async {
-				wg.Add(1)
-				go func(delay int64, line string) {
-					defer wg.Done()
-					if delay > 0 {
-						time.Sleep(time.Duration(delay) * time.Millisecond)
-					}
-					writeLine(line)
-				}(delayMs, resp)
-			} else {
-				if delayMs > 0 {
-					time.Sleep(time.Duration(delayMs) * time.Millisecond)
-				}
-				writeLine(resp)
-			}
-		default:
-			writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"error":{"code":-32601,"message":"method not found"}}`)
-		}
+		handleMCPServerHelperLine(sc.Bytes(), async, writeLine, &wg)
 	}
 	wg.Wait()
 	os.Exit(0)
+}
+
+func handleMCPServerHelperLine(raw []byte, async bool, writeLine func(string), wg *sync.WaitGroup) {
+	line := bytes.TrimSpace(raw)
+	if len(line) == 0 {
+		return
+	}
+	msg, ok := decodeMCPServerHelperMessage(line)
+	if !ok {
+		return
+	}
+	id := msg["id"]
+	method, _ := msg["method"].(string)
+	switch method {
+	case "initialize":
+		writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"capabilities":{}}}`)
+	case "tools/list":
+		writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"tools":[{"name":"echo"}]}}`)
+	case "tools/call":
+		respondMCPServerHelperToolCall(msg, id, async, writeLine, wg)
+	default:
+		writeLine(`{"jsonrpc":"2.0","id":` + jsonID(id) + `,"error":{"code":-32601,"message":"method not found"}}`)
+	}
+}
+
+func decodeMCPServerHelperMessage(line []byte) (map[string]any, bool) {
+	var msg map[string]any
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return nil, false
+	}
+	return msg, true
+}
+
+func respondMCPServerHelperToolCall(msg map[string]any, id any, async bool, writeLine func(string), wg *sync.WaitGroup) {
+	text, delayMs := extractMCPServerHelperToolCallArgs(msg)
+	b, _ := json.Marshal(text)
+	resp := `{"jsonrpc":"2.0","id":` + jsonID(id) + `,"result":{"content":[{"type":"text","text":` + string(b) + `}]}}`
+	if async {
+		wg.Add(1)
+		go func(delay int64, line string) {
+			defer wg.Done()
+			if delay > 0 {
+				time.Sleep(time.Duration(delay) * time.Millisecond)
+			}
+			writeLine(line)
+		}(delayMs, resp)
+		return
+	}
+	if delayMs > 0 {
+		time.Sleep(time.Duration(delayMs) * time.Millisecond)
+	}
+	writeLine(resp)
+}
+
+func extractMCPServerHelperToolCallArgs(msg map[string]any) (string, int64) {
+	// Echo requested text so tests can assert proxy redaction behavior.
+	text := "ok"
+	delayMs := int64(0)
+	params, ok := msg["params"].(map[string]any)
+	if !ok {
+		return text, delayMs
+	}
+	args, ok := params["arguments"].(map[string]any)
+	if !ok {
+		return text, delayMs
+	}
+	if t, ok := args["text"].(string); ok && t != "" {
+		text = t
+	}
+	if d, ok := args["delayMs"].(float64); ok && d > 0 {
+		delayMs = int64(d)
+	}
+	return text, delayMs
 }
 
 func jsonID(v any) string {

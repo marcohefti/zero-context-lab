@@ -52,16 +52,7 @@ type Runner struct {
 }
 
 func (r Runner) Run(args []string) int {
-	if r.Stdout == nil {
-		r.Stdout = os.Stdout
-	}
-	if r.Stderr == nil {
-		r.Stderr = os.Stderr
-	}
-	if r.Now == nil {
-		r.Now = time.Now
-	}
-
+	r = r.withDefaults()
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		printRootHelp(r.Stdout)
 		return 0
@@ -74,58 +65,56 @@ func (r Runner) Run(args []string) int {
 		return exit
 	}
 	r.maybePrintUpdateNotice(args)
+	return r.runRootCommand(args[0], args[1:])
+}
 
-	switch args[0] {
-	case "contract":
-		return r.runContract(args[1:])
-	case "init":
-		return r.runInit(args[1:])
-	case "update":
-		return r.runUpdate(args[1:])
-	case "feedback":
-		return r.runFeedback(args[1:])
-	case "note":
-		return r.runNote(args[1:])
-	case "report":
-		return r.runReport(args[1:])
-	case "validate":
-		return r.runValidate(args[1:])
-	case "doctor":
-		return r.runDoctor(args[1:])
-	case "gc":
-		return r.runGC(args[1:])
-	case "pin":
-		return r.runPin(args[1:])
-	case "enrich":
-		return r.runEnrich(args[1:])
-	case "mcp":
-		return r.runMCP(args[1:])
-	case "http":
-		return r.runHTTP(args[1:])
-	case "run":
-		return r.runRun(args[1:])
-	case "attempt":
-		return r.runAttempt(args[1:])
-	case "suite":
-		return r.runSuite(args[1:])
-	case "campaign":
-		return r.runCampaign(args[1:])
-	case "mission":
-		return r.runMission(args[1:])
-	case "runs":
-		return r.runRuns(args[1:])
-	case "replay":
-		return r.runReplay(args[1:])
-	case "expect":
-		return r.runExpect(args[1:])
-	case "version":
+func (r Runner) withDefaults() Runner {
+	if r.Stdout == nil {
+		r.Stdout = os.Stdout
+	}
+	if r.Stderr == nil {
+		r.Stderr = os.Stderr
+	}
+	if r.Now == nil {
+		r.Now = time.Now
+	}
+	return r
+}
+
+func (r Runner) runRootCommand(command string, args []string) int {
+	handlers := map[string]func([]string) int{
+		"contract": r.runContract,
+		"init":     r.runInit,
+		"update":   r.runUpdate,
+		"feedback": r.runFeedback,
+		"note":     r.runNote,
+		"report":   r.runReport,
+		"validate": r.runValidate,
+		"doctor":   r.runDoctor,
+		"gc":       r.runGC,
+		"pin":      r.runPin,
+		"enrich":   r.runEnrich,
+		"mcp":      r.runMCP,
+		"http":     r.runHTTP,
+		"run":      r.runRun,
+		"attempt":  r.runAttempt,
+		"suite":    r.runSuite,
+		"campaign": r.runCampaign,
+		"mission":  r.runMission,
+		"runs":     r.runRuns,
+		"replay":   r.runReplay,
+		"expect":   r.runExpect,
+	}
+	if handler, ok := handlers[command]; ok {
+		return handler(args)
+	}
+	if command == "version" {
 		fmt.Fprintf(r.Stdout, "%s\n", r.Version)
 		return 0
-	default:
-		fmt.Fprintf(r.Stderr, codeUsage+": unknown command %q\n", args[0])
-		printRootHelp(r.Stderr)
-		return 2
 	}
+	fmt.Fprintf(r.Stderr, codeUsage+": unknown command %q\n", command)
+	printRootHelp(r.Stderr)
+	return 2
 }
 
 func (r Runner) runContract(args []string) int {
@@ -425,23 +414,12 @@ func (r Runner) runFeedback(args []string) int {
 		printFeedbackHelp(r.Stderr)
 		return r.failUsage("feedback: require exactly one of --ok or --fail")
 	}
-
-	env, err := trace.EnvFromProcess()
-	if err != nil {
+	env, hasEnv := loadFeedbackAttemptEnv()
+	if !hasEnv {
 		printFeedbackHelp(r.Stderr)
 		return r.failUsage("feedback: missing ZCL attempt context (need ZCL_* env)")
 	}
-
-	if strings.TrimSpace(*decisionTagsCSV) != "" {
-		for _, s := range strings.Split(*decisionTagsCSV, ",") {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			decisionTags = append(decisionTags, s)
-		}
-	}
-
+	decisionTags = append(decisionTags, parseDecisionTagsCSV(*decisionTagsCSV)...)
 	if err := feedback.Write(r.Now(), env, feedback.WriteOpts{
 		OK:             *ok,
 		Result:         *result,
@@ -456,9 +434,29 @@ func (r Runner) runFeedback(args []string) int {
 		}
 		return 2
 	}
-
 	fmt.Fprintf(r.Stdout, "feedback: OK\n")
 	return 0
+}
+
+func loadFeedbackAttemptEnv() (trace.Env, bool) {
+	env, err := trace.EnvFromProcess()
+	if err != nil {
+		return trace.Env{}, false
+	}
+	return env, true
+}
+
+func parseDecisionTagsCSV(csv string) []string {
+	if strings.TrimSpace(csv) == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, s := range strings.Split(csv, ",") {
+		if tag := strings.TrimSpace(s); tag != "" {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 func (r Runner) runNote(args []string) int {
@@ -580,31 +578,9 @@ func (r Runner) runAttemptStart(args []string) int {
 		return 2
 	}
 
-	var (
-		envOut     string
-		envOutOK   bool
-		envOutUsed bool
-	)
-	if strings.TrimSpace(*envFile) != "" {
-		envOut, envOutOK = formatEnv(res.Env, *envFormat)
-		if !envOutOK {
-			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --env-format (expected sh|dotenv)\n")
-			return 2
-		}
-		if err := store.WriteFileAtomic(*envFile, []byte(envOut)); err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
-		}
-		envOutUsed = true
-	}
-	if strings.TrimSpace(*printEnv) != "" {
-		envOut, envOutOK = formatEnv(res.Env, *printEnv)
-		if !envOutOK {
-			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --print-env (expected sh|dotenv)\n")
-			return 2
-		}
-		fmt.Fprint(r.Stderr, envOut)
-		envOutUsed = true
+	envOutUsed, outFile, outFormat, exit := r.emitAttemptStartEnv(res.Env, strings.TrimSpace(*envFile), strings.TrimSpace(*envFormat), strings.TrimSpace(*printEnv))
+	if exit != 0 {
+		return exit
 	}
 
 	// Wrap JSON output so we can surface env-file metadata without changing attempt.Start.
@@ -614,89 +590,147 @@ func (r Runner) runAttemptStart(args []string) int {
 		EnvFormat string `json:"envFormat,omitempty"`
 	}
 	out := attemptStartJSON{StartResult: res}
-	if envOutUsed && strings.TrimSpace(*envFile) != "" {
-		out.EnvFile = *envFile
-		out.EnvFormat = *envFormat
+	if envOutUsed && outFile != "" {
+		out.EnvFile = outFile
+		out.EnvFormat = outFormat
 	}
 	return r.writeJSON(out)
 }
 
+func (r Runner) emitAttemptStartEnv(env map[string]string, envFile, envFormat, printEnv string) (bool, string, string, int) {
+	envOutUsed := false
+	if envFile != "" {
+		envOut, ok := formatEnv(env, envFormat)
+		if !ok {
+			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --env-format (expected sh|dotenv)\n")
+			return false, "", "", 2
+		}
+		if err := store.WriteFileAtomic(envFile, []byte(envOut)); err != nil {
+			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+			return false, "", "", 1
+		}
+		envOutUsed = true
+	}
+	if printEnv != "" {
+		envOut, ok := formatEnv(env, printEnv)
+		if !ok {
+			fmt.Fprintf(r.Stderr, codeUsage+": attempt start: invalid --print-env (expected sh|dotenv)\n")
+			return false, "", "", 2
+		}
+		fmt.Fprint(r.Stderr, envOut)
+		envOutUsed = true
+	}
+	return envOutUsed, envFile, envFormat, 0
+}
+
 func (r Runner) runReport(args []string) int {
+	opts, exit, ok := r.parseReportArgs(args)
+	if !ok {
+		return exit
+	}
+	target, strict, exit, ok := r.resolveReportTarget(opts.target, opts.strict)
+	if !ok {
+		return exit
+	}
+	if isRunReportTarget(target) {
+		return r.runReportForRun(target, strict, opts.jsonOut)
+	}
+	return r.runReportForAttempt(target, strict, opts.jsonOut)
+}
+
+type reportArgs struct {
+	target  string
+	strict  bool
+	jsonOut bool
+}
+
+func (r Runner) parseReportArgs(args []string) (reportArgs, int, bool) {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-
 	strict := fs.Bool("strict", false, "strict mode (missing required artifacts fails)")
 	jsonOut := fs.Bool("json", false, "print JSON output (also writes attempt.report.json)")
 	help := fs.Bool("help", false, "show help")
-
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("report: invalid flags")
+		return reportArgs{}, r.failUsage("report: invalid flags"), false
 	}
 	if *help {
 		printReportHelp(r.Stdout)
-		return 0
+		return reportArgs{}, 0, false
 	}
-
 	paths := fs.Args()
 	if len(paths) != 1 {
 		printReportHelp(r.Stderr)
-		return r.failUsage("report: require exactly one <attemptDir|runDir>")
+		return reportArgs{}, r.failUsage("report: require exactly one <attemptDir|runDir>"), false
 	}
+	return reportArgs{target: paths[0], strict: *strict, jsonOut: *jsonOut}, 0, true
+}
 
-	target := paths[0]
+func (r Runner) resolveReportTarget(target string, strict bool) (string, bool, int, bool) {
 	targetAbs, err := filepath.Abs(target)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return "", false, 1, false
 	}
-	target = targetAbs
-	info, err := os.Stat(target)
+	info, err := os.Stat(targetAbs)
 	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return "", false, 1, false
+	}
+	if !info.IsDir() {
+		return "", false, r.failUsage("report: target must be a directory"), false
+	}
+	return targetAbs, attempt.EffectiveStrict(targetAbs, strict), 0, true
+}
+
+func isRunReportTarget(target string) bool {
+	_, err := os.Stat(filepath.Join(target, "run.json"))
+	return err == nil
+}
+
+func (r Runner) runReportForRun(target string, strict bool, jsonOut bool) int {
+	reports, exit, ok := r.buildRunAttemptReports(target, strict)
+	if !ok {
+		return exit
+	}
+	out := buildRunReportJSON(target, reports)
+	if err := store.WriteJSONAtomic(filepath.Join(target, "run.report.json"), out); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
-	if !info.IsDir() {
-		return r.failUsage("report: target must be a directory")
+	if jsonOut {
+		return r.writeJSON(out)
 	}
+	return 0
+}
 
-	*strict = attempt.EffectiveStrict(target, *strict)
-
-	// If target is a run dir, compute for each attempt under attempts/.
-	if _, err := os.Stat(filepath.Join(target, "run.json")); err == nil {
-		attemptsDir := filepath.Join(target, "attempts")
-		entries, err := os.ReadDir(attemptsDir)
+func (r Runner) buildRunAttemptReports(target string, strict bool) ([]schema.AttemptReportJSONV1, int, bool) {
+	attemptsDir := filepath.Join(target, "attempts")
+	entries, err := os.ReadDir(attemptsDir)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return nil, 1, false
+	}
+	reports := make([]schema.AttemptReportJSONV1, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		attemptDir := filepath.Join(attemptsDir, e.Name())
+		rep, err := report.BuildAttemptReport(r.Now(), attemptDir, strict)
 		if err != nil {
+			return nil, r.printReportErr(err), false
+		}
+		if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
 			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
+			return nil, 1, false
 		}
-		var reports []schema.AttemptReportJSONV1
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			attemptDir := filepath.Join(attemptsDir, e.Name())
-			rep, err := report.BuildAttemptReport(r.Now(), attemptDir, *strict)
-			if err != nil {
-				return r.printReportErr(err)
-			}
-			if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
-				fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-				return 1
-			}
-			reports = append(reports, rep)
-		}
-		out := buildRunReportJSON(target, reports)
-		if err := store.WriteJSONAtomic(filepath.Join(target, "run.report.json"), out); err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
-		}
-		if *jsonOut {
-			return r.writeJSON(out)
-		}
-		return 0
+		reports = append(reports, rep)
 	}
+	return reports, 0, true
+}
 
-	rep, err := report.BuildAttemptReport(r.Now(), target, *strict)
+func (r Runner) runReportForAttempt(target string, strict bool, jsonOut bool) int {
+	rep, err := report.BuildAttemptReport(r.Now(), target, strict)
 	if err != nil {
 		return r.printReportErr(err)
 	}
@@ -704,7 +738,7 @@ func (r Runner) runReport(args []string) int {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
-	if *jsonOut {
+	if jsonOut {
 		return r.writeJSON(rep)
 	}
 	fmt.Fprintf(r.Stdout, "report: OK\n")
@@ -712,68 +746,61 @@ func (r Runner) runReport(args []string) int {
 }
 
 func (r Runner) runValidate(args []string) int {
+	opts, exit, ok := r.parseValidateArgs(args)
+	if !ok {
+		return exit
+	}
+	opts.strict = attempt.EffectiveStrict(opts.path, opts.strict)
+	if opts.semanticMode {
+		return r.runSemanticValidate(opts.path, opts.semanticRules, opts.jsonOut)
+	}
+	return r.runStandardValidate(opts.path, opts.strict, opts.jsonOut)
+}
+
+type validateArgs struct {
+	path          string
+	strict        bool
+	semanticMode  bool
+	semanticRules string
+	jsonOut       bool
+}
+
+func (r Runner) parseValidateArgs(args []string) (validateArgs, int, bool) {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-
 	strict := fs.Bool("strict", false, "strict mode (missing required artifacts fails)")
 	semanticMode := fs.Bool("semantic", false, "run semantic validation gates (feedback semantics + trace signals)")
 	semanticRules := fs.String("semantic-rules", "", "optional semantic rules file (.json|.yaml|.yml)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
-
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("validate: invalid flags")
+		return validateArgs{}, r.failUsage("validate: invalid flags"), false
 	}
 	if *help {
 		printValidateHelp(r.Stdout)
-		return 0
+		return validateArgs{}, 0, false
 	}
-
 	paths := fs.Args()
 	if len(paths) != 1 {
 		printValidateHelp(r.Stderr)
-		return r.failUsage("validate: require exactly one <attemptDir|runDir>")
+		return validateArgs{}, r.failUsage("validate: require exactly one <attemptDir|runDir>"), false
 	}
+	return validateArgs{
+		path:          paths[0],
+		strict:        *strict,
+		semanticMode:  *semanticMode,
+		semanticRules: strings.TrimSpace(*semanticRules),
+		jsonOut:       *jsonOut,
+	}, 0, true
+}
 
-	*strict = attempt.EffectiveStrict(paths[0], *strict)
-
-	if *semanticMode {
-		res, err := semantic.ValidatePath(paths[0], semantic.Options{RulesPath: strings.TrimSpace(*semanticRules)})
-		if err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
-		}
-		if *jsonOut {
-			exit := r.writeJSON(res)
-			if exit != 0 {
-				return exit
-			}
-			if res.OK {
-				return 0
-			}
-			return 2
-		}
-		if res.OK {
-			fmt.Fprintf(r.Stdout, "validate: OK\n")
-			return 0
-		}
-		fmt.Fprintf(r.Stderr, "validate: FAIL\n")
-		for _, f := range res.Failures {
-			if f.Path != "" {
-				fmt.Fprintf(r.Stderr, "  %s: %s (%s)\n", f.Code, f.Message, f.Path)
-			} else {
-				fmt.Fprintf(r.Stderr, "  %s: %s\n", f.Code, f.Message)
-			}
-		}
-		return 2
-	}
-
-	res, err := validate.ValidatePath(paths[0], *strict)
+func (r Runner) runSemanticValidate(path string, rulesPath string, jsonOut bool) int {
+	res, err := semantic.ValidatePath(path, semantic.Options{RulesPath: rulesPath})
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
-	if *jsonOut {
+	if jsonOut {
 		exit := r.writeJSON(res)
 		if exit != 0 {
 			return exit
@@ -781,39 +808,80 @@ func (r Runner) runValidate(args []string) int {
 		if res.OK {
 			return 0
 		}
-		// Distinguish I/O-ish failures vs contract/usage failures for automation.
-		for _, f := range res.Errors {
-			if f.Code == codeIO {
-				return 1
-			}
-		}
 		return 2
 	}
 	if res.OK {
 		fmt.Fprintf(r.Stdout, "validate: OK\n")
-		for _, f := range res.Warnings {
-			if f.Path != "" {
-				fmt.Fprintf(r.Stderr, "  WARN %s: %s (%s)\n", f.Code, f.Message, f.Path)
-			} else {
-				fmt.Fprintf(r.Stderr, "  WARN %s: %s\n", f.Code, f.Message)
-			}
-		}
 		return 0
 	}
 	fmt.Fprintf(r.Stderr, "validate: FAIL\n")
-	for _, f := range res.Errors {
+	for _, f := range res.Failures {
 		if f.Path != "" {
 			fmt.Fprintf(r.Stderr, "  %s: %s (%s)\n", f.Code, f.Message, f.Path)
 		} else {
 			fmt.Fprintf(r.Stderr, "  %s: %s\n", f.Code, f.Message)
 		}
 	}
-	for _, f := range res.Errors {
-		if f.Code == codeIO {
+	return 2
+}
+
+func (r Runner) runStandardValidate(path string, strict bool, jsonOut bool) int {
+	res, err := validate.ValidatePath(path, strict)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return 1
+	}
+	if jsonOut {
+		exit := r.writeJSON(res)
+		if exit != 0 {
+			return exit
+		}
+		if res.OK {
+			return 0
+		}
+		if validateHasIOError(res.Errors) {
 			return 1
 		}
+		return 2
+	}
+	if res.OK {
+		fmt.Fprintf(r.Stdout, "validate: OK\n")
+		printValidateFindings(r.Stderr, "WARN", res.Warnings)
+		return 0
+	}
+	fmt.Fprintf(r.Stderr, "validate: FAIL\n")
+	printValidateFindings(r.Stderr, "", res.Errors)
+	if validateHasIOError(res.Errors) {
+		return 1
 	}
 	return 2
+}
+
+func printValidateFindings(w io.Writer, prefix string, findings []validate.Finding) {
+	for _, f := range findings {
+		if prefix != "" {
+			if f.Path != "" {
+				fmt.Fprintf(w, "  %s %s: %s (%s)\n", prefix, f.Code, f.Message, f.Path)
+			} else {
+				fmt.Fprintf(w, "  %s %s: %s\n", prefix, f.Code, f.Message)
+			}
+			continue
+		}
+		if f.Path != "" {
+			fmt.Fprintf(w, "  %s: %s (%s)\n", f.Code, f.Message, f.Path)
+		} else {
+			fmt.Fprintf(w, "  %s: %s\n", f.Code, f.Message)
+		}
+	}
+}
+
+func validateHasIOError(findings []validate.Finding) bool {
+	for _, f := range findings {
+		if f.Code == codeIO {
+			return true
+		}
+	}
+	return false
 }
 
 func (r Runner) runDoctor(args []string) int {
@@ -922,47 +990,52 @@ func (r Runner) runEnrich(args []string) int {
 		return r.failUsage("enrich: missing --runner")
 	}
 
-	target := ""
-	if rest := fs.Args(); len(rest) == 1 {
-		target = rest[0]
-	} else if len(rest) == 0 {
-		if env, err := trace.EnvFromProcess(); err == nil {
-			target = env.OutDirAbs
-		}
-	} else {
+	target, targetErr := resolveEnrichTarget(fs.Args())
+	if targetErr != "" {
 		printEnrichHelp(r.Stderr)
-		return r.failUsage("enrich: require at most one <attemptDir>")
+		return r.failUsage(targetErr)
 	}
 	if target == "" {
 		printEnrichHelp(r.Stderr)
 		return r.failUsage("enrich: missing <attemptDir> (or set ZCL_OUT_DIR)")
 	}
+	return r.runEnrichForRunner(*runner, target, *rollout)
+}
 
-	switch *runner {
+func resolveEnrichTarget(rest []string) (string, string) {
+	if len(rest) == 1 {
+		return rest[0], ""
+	}
+	if len(rest) > 1 {
+		return "", "enrich: require at most one <attemptDir>"
+	}
+	if env, err := trace.EnvFromProcess(); err == nil {
+		return env.OutDirAbs, ""
+	}
+	return "", ""
+}
+
+func (r Runner) runEnrichForRunner(runner, target, rollout string) int {
+	switch runner {
 	case string(runnerid.Codex):
-		if err := enrich.EnrichCodexAttempt(target, *rollout); err != nil {
-			var ce *enrich.CliError
-			if errors.As(err, &ce) {
-				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
-				return 2
-			}
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
-		}
+		return r.executeEnrich(target, rollout, enrich.EnrichCodexAttempt)
 	case string(runnerid.Claude):
-		if err := enrich.EnrichClaudeAttempt(target, *rollout); err != nil {
-			var ce *enrich.CliError
-			if errors.As(err, &ce) {
-				fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
-				return 2
-			}
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
-		}
+		return r.executeEnrich(target, rollout, enrich.EnrichClaudeAttempt)
 	default:
 		return r.failUsage("enrich: unsupported --runner (expected " + runnerid.CLIUsageValues() + ")")
 	}
+}
 
+func (r Runner) executeEnrich(target, rollout string, fn func(string, string) error) int {
+	if err := fn(target, rollout); err != nil {
+		var ce *enrich.CliError
+		if errors.As(err, &ce) {
+			fmt.Fprintf(r.Stderr, "%s: %s\n", ce.Code, ce.Message)
+			return 2
+		}
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return 1
+	}
 	fmt.Fprintf(r.Stdout, "enrich: OK\n")
 	return 0
 }
@@ -983,77 +1056,149 @@ func (r Runner) runMCP(args []string) int {
 }
 
 func (r Runner) runMCPProxy(args []string) int {
+	opts, exit, ok := r.parseMCPProxyArgs(args)
+	if !ok {
+		return exit
+	}
+	return r.executeMCPProxy(opts)
+}
+
+type mcpProxyArgs struct {
+	env                trace.Env
+	argv               []string
+	maxToolCalls       int64
+	idleTimeoutMs      int64
+	shutdownOnComplete bool
+	sequential         bool
+}
+
+func (r Runner) parseMCPProxyArgs(args []string) (mcpProxyArgs, int, bool) {
 	fs := flag.NewFlagSet("mcp proxy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-
 	maxToolCalls := fs.Int64("max-tool-calls", 0, "max tools/call responses before proxy stops (0 disables)")
 	idleTimeoutMs := fs.Int64("idle-timeout-ms", 0, "idle timeout in ms with no MCP traffic (0 disables)")
 	shutdownOnComplete := fs.Bool("shutdown-on-complete", false, "terminate MCP server when request stream is complete and in-flight calls drain")
 	sequential := fs.Bool("sequential", false, "forward MCP requests sequentially (wait for each id response before sending the next request)")
 	help := fs.Bool("help", false, "show help")
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("mcp proxy: invalid flags")
+		return mcpProxyArgs{}, r.failUsage("mcp proxy: invalid flags"), false
 	}
 	if *help {
 		printMCPProxyHelp(r.Stdout)
-		return 0
+		return mcpProxyArgs{}, 0, false
 	}
+	env, exit, ok := r.loadMCPProxyEnv()
+	if !ok {
+		return mcpProxyArgs{}, exit, false
+	}
+	if err := validateMCPProxyAttemptContext(env); err != nil {
+		printMCPProxyHelp(r.Stderr)
+		return mcpProxyArgs{}, r.failUsage(err.Error()), false
+	}
+	argv, argvErr := parseMCPProxyCommand(fs.Args())
+	if argvErr != "" {
+		printMCPProxyHelp(r.Stderr)
+		return mcpProxyArgs{}, r.failUsage(argvErr), false
+	}
+	resolvedMax, resolvedIdle, resolvedShutdown, errMsg := resolveMCPProxyRuntimeOptions(*maxToolCalls, *idleTimeoutMs, *shutdownOnComplete)
+	if errMsg != "" {
+		return mcpProxyArgs{}, r.failUsage(errMsg), false
+	}
+	return mcpProxyArgs{
+		env:                env,
+		argv:               argv,
+		maxToolCalls:       resolvedMax,
+		idleTimeoutMs:      resolvedIdle,
+		shutdownOnComplete: resolvedShutdown,
+		sequential:         *sequential,
+	}, 0, true
+}
 
+func (r Runner) loadMCPProxyEnv() (trace.Env, int, bool) {
 	env, err := trace.EnvFromProcess()
 	if err != nil {
 		printMCPProxyHelp(r.Stderr)
-		return r.failUsage("mcp proxy: missing ZCL attempt context (need ZCL_* env)")
+		return trace.Env{}, r.failUsage("mcp proxy: missing ZCL attempt context (need ZCL_* env)"), false
 	}
-	if a, err := attempt.ReadAttempt(env.OutDirAbs); err != nil {
-		printMCPProxyHelp(r.Stderr)
-		return r.failUsage("mcp proxy: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
-	} else if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
-		printMCPProxyHelp(r.Stderr)
-		return r.failUsage("mcp proxy: attempt.json ids do not match ZCL_* env (refuse to run)")
-	}
+	return env, 0, true
+}
 
-	argv := fs.Args()
+func validateMCPProxyAttemptContext(env trace.Env) error {
+	a, err := attempt.ReadAttempt(env.OutDirAbs)
+	if err != nil {
+		return fmt.Errorf("mcp proxy: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
+	}
+	if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
+		return fmt.Errorf("mcp proxy: attempt.json ids do not match ZCL_* env (refuse to run)")
+	}
+	return nil
+}
+
+func parseMCPProxyCommand(argv []string) ([]string, string) {
 	if len(argv) >= 1 && argv[0] == "--" {
 		argv = argv[1:]
 	}
 	if len(argv) == 0 {
-		printMCPProxyHelp(r.Stderr)
-		return r.failUsage("mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)")
+		return nil, "mcp proxy: missing server command (use: zcl mcp proxy -- <server-cmd> ...)"
 	}
-	if *maxToolCalls < 0 {
-		return r.failUsage("mcp proxy: --max-tool-calls must be >= 0")
-	}
-	if *idleTimeoutMs < 0 {
-		return r.failUsage("mcp proxy: --idle-timeout-ms must be >= 0")
-	}
-	if *maxToolCalls == 0 {
-		if s := strings.TrimSpace(os.Getenv("ZCL_MCP_MAX_TOOL_CALLS")); s != "" {
-			n, err := strconv.ParseInt(s, 10, 64)
-			if err != nil || n < 0 {
-				return r.failUsage("mcp proxy: invalid ZCL_MCP_MAX_TOOL_CALLS")
-			}
-			*maxToolCalls = n
-		}
-	}
-	if *idleTimeoutMs == 0 {
-		if s := strings.TrimSpace(os.Getenv("ZCL_MCP_IDLE_TIMEOUT_MS")); s != "" {
-			n, err := strconv.ParseInt(s, 10, 64)
-			if err != nil || n < 0 {
-				return r.failUsage("mcp proxy: invalid ZCL_MCP_IDLE_TIMEOUT_MS")
-			}
-			*idleTimeoutMs = n
-		}
-	}
-	if !*shutdownOnComplete && envBoolish("ZCL_MCP_SHUTDOWN_ON_COMPLETE") {
-		*shutdownOnComplete = true
-	}
+	return argv, ""
+}
 
+func resolveMCPProxyRuntimeOptions(maxToolCalls int64, idleTimeoutMs int64, shutdownOnComplete bool) (int64, int64, bool, string) {
+	if maxToolCalls < 0 {
+		return 0, 0, false, "mcp proxy: --max-tool-calls must be >= 0"
+	}
+	if idleTimeoutMs < 0 {
+		return 0, 0, false, "mcp proxy: --idle-timeout-ms must be >= 0"
+	}
+	var err string
+	maxToolCalls, err = resolveProxyLimit(maxToolCalls, "ZCL_MCP_MAX_TOOL_CALLS", "mcp proxy: invalid ZCL_MCP_MAX_TOOL_CALLS")
+	if err != "" {
+		return 0, 0, false, err
+	}
+	idleTimeoutMs, err = resolveProxyLimit(idleTimeoutMs, "ZCL_MCP_IDLE_TIMEOUT_MS", "mcp proxy: invalid ZCL_MCP_IDLE_TIMEOUT_MS")
+	if err != "" {
+		return 0, 0, false, err
+	}
+	if !shutdownOnComplete && envBoolish("ZCL_MCP_SHUTDOWN_ON_COMPLETE") {
+		shutdownOnComplete = true
+	}
+	return maxToolCalls, idleTimeoutMs, shutdownOnComplete, ""
+}
+
+func resolveProxyLimit(current int64, envKey, errMessage string) (int64, string) {
+	if current != 0 {
+		return current, ""
+	}
+	n, ok, err := parseNonNegativeInt64Env(envKey)
+	if err != nil {
+		return 0, errMessage
+	}
+	if ok {
+		return n, ""
+	}
+	return current, ""
+}
+
+func parseNonNegativeInt64Env(key string) (int64, bool, error) {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return 0, false, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, false, fmt.Errorf("invalid %s", key)
+	}
+	return n, true, nil
+}
+
+func (r Runner) executeMCPProxy(opts mcpProxyArgs) int {
 	now := r.Now()
-	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
+	if _, err := attempt.EnsureTimeoutAnchor(now, opts.env.OutDirAbs); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
-	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
+	ctx, cancel, timedOut := attemptCtxForDeadline(now, opts.env.OutDirAbs)
 	if cancel != nil {
 		defer cancel()
 	}
@@ -1061,12 +1206,12 @@ func (r Runner) runMCPProxy(args []string) int {
 		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 		return 1
 	}
-	if err := mcpproxy.ProxyWithOptions(ctx, env, argv, os.Stdin, r.Stdout, mcpproxy.Options{
+	if err := mcpproxy.ProxyWithOptions(ctx, opts.env, opts.argv, os.Stdin, r.Stdout, mcpproxy.Options{
 		MaxPreviewBytes:    schema.PreviewMaxBytesV1,
-		MaxToolCalls:       *maxToolCalls,
-		IdleTimeoutMs:      *idleTimeoutMs,
-		ShutdownOnComplete: *shutdownOnComplete,
-		SequentialRequests: *sequential,
+		MaxToolCalls:       opts.maxToolCalls,
+		IdleTimeoutMs:      opts.idleTimeoutMs,
+		ShutdownOnComplete: opts.shutdownOnComplete,
+		SequentialRequests: opts.sequential,
 	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
@@ -1153,97 +1298,123 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 		out.SuiteID = reports[0].SuiteID
 	}
 
-	var (
-		inputTotal           int64
-		outputTotal          int64
-		totalTotal           int64
-		cachedInputTotal     int64
-		reasoningOutputTotal int64
-		hasInput             bool
-		hasOutput            bool
-		hasTotal             bool
-		hasCached            bool
-		hasReasoning         bool
-	)
-
+	var tokens runReportTokenAccumulator
 	for _, rep := range reports {
-		if rep.OK != nil && *rep.OK {
-			out.Aggregate.Passed++
-			out.Aggregate.Task.Passed++
-		} else {
-			out.Aggregate.Failed++
-			out.OK = false
-			if rep.OK == nil {
-				out.Aggregate.Task.Unknown++
-			} else {
-				out.Aggregate.Task.Failed++
-			}
-		}
-		if reportEvidenceComplete(rep) {
-			out.Aggregate.Evidence.Complete++
-		} else {
-			out.Aggregate.Evidence.Incomplete++
-		}
+		applyRunAttemptOutcome(&out, rep)
+		applyRunAttemptEvidence(&out, rep)
 		if rep.TimedOutBeforeFirstToolCall {
 			out.Aggregate.TimedOutBeforeFirstToolCallTotal++
 		}
-		for code, n := range rep.FailureCodeHistogram {
-			out.Aggregate.FailureCodeHistogram[code] += n
-			if isOrchestrationInfraCode(code) {
-				out.Aggregate.Orchestration.InfraFailureByCode[code] += n
-			}
-		}
-		if attemptHasInfraFailure(rep) {
-			out.Aggregate.Orchestration.InfraFailed++
-		} else {
-			out.Aggregate.Orchestration.Healthy++
-		}
-		if rep.TokenEstimates != nil {
-			if rep.TokenEstimates.InputTokens != nil {
-				inputTotal += *rep.TokenEstimates.InputTokens
-				hasInput = true
-			}
-			if rep.TokenEstimates.OutputTokens != nil {
-				outputTotal += *rep.TokenEstimates.OutputTokens
-				hasOutput = true
-			}
-			if rep.TokenEstimates.TotalTokens != nil {
-				totalTotal += *rep.TokenEstimates.TotalTokens
-				hasTotal = true
-			}
-			if rep.TokenEstimates.CachedInputTokens != nil {
-				cachedInputTotal += *rep.TokenEstimates.CachedInputTokens
-				hasCached = true
-			}
-			if rep.TokenEstimates.ReasoningOutputTokens != nil {
-				reasoningOutputTotal += *rep.TokenEstimates.ReasoningOutputTokens
-				hasReasoning = true
-			}
+		applyRunAttemptFailures(&out, rep)
+		applyRunAttemptOrchestration(&out, rep)
+		tokens.add(rep)
+	}
+	finalizeRunReportAggregate(&out, tokens)
+	return out
+}
+
+func applyRunAttemptOutcome(out *runReportJSON, rep schema.AttemptReportJSONV1) {
+	if rep.OK != nil && *rep.OK {
+		out.Aggregate.Passed++
+		out.Aggregate.Task.Passed++
+		return
+	}
+	out.Aggregate.Failed++
+	out.OK = false
+	if rep.OK == nil {
+		out.Aggregate.Task.Unknown++
+		return
+	}
+	out.Aggregate.Task.Failed++
+}
+
+func applyRunAttemptEvidence(out *runReportJSON, rep schema.AttemptReportJSONV1) {
+	if reportEvidenceComplete(rep) {
+		out.Aggregate.Evidence.Complete++
+		return
+	}
+	out.Aggregate.Evidence.Incomplete++
+}
+
+func applyRunAttemptFailures(out *runReportJSON, rep schema.AttemptReportJSONV1) {
+	for code, n := range rep.FailureCodeHistogram {
+		out.Aggregate.FailureCodeHistogram[code] += n
+		if isOrchestrationInfraCode(code) {
+			out.Aggregate.Orchestration.InfraFailureByCode[code] += n
 		}
 	}
+}
 
+func applyRunAttemptOrchestration(out *runReportJSON, rep schema.AttemptReportJSONV1) {
+	if attemptHasInfraFailure(rep) {
+		out.Aggregate.Orchestration.InfraFailed++
+		return
+	}
+	out.Aggregate.Orchestration.Healthy++
+}
+
+type runReportTokenAccumulator struct {
+	inputTotal           int64
+	outputTotal          int64
+	totalTotal           int64
+	cachedInputTotal     int64
+	reasoningOutputTotal int64
+	hasInput             bool
+	hasOutput            bool
+	hasTotal             bool
+	hasCached            bool
+	hasReasoning         bool
+}
+
+func (t *runReportTokenAccumulator) add(rep schema.AttemptReportJSONV1) {
+	if rep.TokenEstimates == nil {
+		return
+	}
+	if rep.TokenEstimates.InputTokens != nil {
+		t.inputTotal += *rep.TokenEstimates.InputTokens
+		t.hasInput = true
+	}
+	if rep.TokenEstimates.OutputTokens != nil {
+		t.outputTotal += *rep.TokenEstimates.OutputTokens
+		t.hasOutput = true
+	}
+	if rep.TokenEstimates.TotalTokens != nil {
+		t.totalTotal += *rep.TokenEstimates.TotalTokens
+		t.hasTotal = true
+	}
+	if rep.TokenEstimates.CachedInputTokens != nil {
+		t.cachedInputTotal += *rep.TokenEstimates.CachedInputTokens
+		t.hasCached = true
+	}
+	if rep.TokenEstimates.ReasoningOutputTokens != nil {
+		t.reasoningOutputTotal += *rep.TokenEstimates.ReasoningOutputTokens
+		t.hasReasoning = true
+	}
+}
+
+func finalizeRunReportAggregate(out *runReportJSON, tokens runReportTokenAccumulator) {
 	if len(out.Aggregate.FailureCodeHistogram) == 0 {
 		out.Aggregate.FailureCodeHistogram = nil
 	}
 	if len(out.Aggregate.Orchestration.InfraFailureByCode) == 0 {
 		out.Aggregate.Orchestration.InfraFailureByCode = nil
 	}
-	if hasInput {
-		out.Aggregate.TokenEstimates.InputTokens = i64ptr(inputTotal)
+	if tokens.hasInput {
+		out.Aggregate.TokenEstimates.InputTokens = i64ptr(tokens.inputTotal)
 	}
-	if hasOutput {
-		out.Aggregate.TokenEstimates.OutputTokens = i64ptr(outputTotal)
+	if tokens.hasOutput {
+		out.Aggregate.TokenEstimates.OutputTokens = i64ptr(tokens.outputTotal)
 	}
-	if hasTotal {
-		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(totalTotal)
-	} else if hasInput || hasOutput {
-		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(inputTotal + outputTotal)
+	if tokens.hasTotal {
+		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(tokens.totalTotal)
+	} else if tokens.hasInput || tokens.hasOutput {
+		out.Aggregate.TokenEstimates.TotalTokens = i64ptr(tokens.inputTotal + tokens.outputTotal)
 	}
-	if hasCached {
-		out.Aggregate.TokenEstimates.CachedInputTokens = i64ptr(cachedInputTotal)
+	if tokens.hasCached {
+		out.Aggregate.TokenEstimates.CachedInputTokens = i64ptr(tokens.cachedInputTotal)
 	}
-	if hasReasoning {
-		out.Aggregate.TokenEstimates.ReasoningOutputTokens = i64ptr(reasoningOutputTotal)
+	if tokens.hasReasoning {
+		out.Aggregate.TokenEstimates.ReasoningOutputTokens = i64ptr(tokens.reasoningOutputTotal)
 	}
 	if out.Aggregate.TokenEstimates.TotalTokens == nil &&
 		out.Aggregate.TokenEstimates.InputTokens == nil &&
@@ -1252,7 +1423,6 @@ func buildRunReportJSON(runDir string, reports []schema.AttemptReportJSONV1) run
 		out.Aggregate.TokenEstimates.ReasoningOutputTokens == nil {
 		out.Aggregate.TokenEstimates = nil
 	}
-	return out
 }
 
 func reportEvidenceComplete(rep schema.AttemptReportJSONV1) bool {

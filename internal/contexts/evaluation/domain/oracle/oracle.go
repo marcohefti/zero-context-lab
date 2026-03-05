@@ -171,25 +171,37 @@ func AllMismatchesClass(mismatches []Mismatch, class string) bool {
 
 func evaluateRule(rule RuleV1, oracleRoot map[string]any, proof map[string]any, policyMode string) []Mismatch {
 	if len(rule.AllOf) > 0 {
-		var out []Mismatch
-		for _, sub := range rule.AllOf {
-			out = append(out, evaluateRule(sub, oracleRoot, proof, policyMode)...)
-		}
-		return out
+		return evaluateRuleAllOf(rule.AllOf, oracleRoot, proof, policyMode)
 	}
 	if len(rule.AnyOf) > 0 {
-		var best []Mismatch
-		for _, sub := range rule.AnyOf {
-			cur := evaluateRule(sub, oracleRoot, proof, policyMode)
-			if len(cur) == 0 {
-				return nil
-			}
-			if len(best) == 0 || len(cur) < len(best) {
-				best = cur
-			}
-		}
-		return best
+		return evaluateRuleAnyOf(rule.AnyOf, oracleRoot, proof, policyMode)
 	}
+	return evaluateRuleLeaf(rule, oracleRoot, proof, policyMode)
+}
+
+func evaluateRuleAllOf(rules []RuleV1, oracleRoot map[string]any, proof map[string]any, policyMode string) []Mismatch {
+	var out []Mismatch
+	for _, sub := range rules {
+		out = append(out, evaluateRule(sub, oracleRoot, proof, policyMode)...)
+	}
+	return out
+}
+
+func evaluateRuleAnyOf(rules []RuleV1, oracleRoot map[string]any, proof map[string]any, policyMode string) []Mismatch {
+	var best []Mismatch
+	for _, sub := range rules {
+		cur := evaluateRule(sub, oracleRoot, proof, policyMode)
+		if len(cur) == 0 {
+			return nil
+		}
+		if len(best) == 0 || len(cur) < len(best) {
+			best = cur
+		}
+	}
+	return best
+}
+
+func evaluateRuleLeaf(rule RuleV1, oracleRoot map[string]any, proof map[string]any, policyMode string) []Mismatch {
 	_, mm := evaluateSingle(rule, oracleRoot, proof, policyMode)
 	if mm == nil {
 		return nil
@@ -259,127 +271,65 @@ func evaluateSingle(rule RuleV1, oracleRoot map[string]any, proof map[string]any
 func evaluateSingleExpected(rule RuleV1, expectedRaw any, actualRaw any, policyMode string) (bool, *Mismatch) {
 	field := strings.TrimSpace(rule.Field)
 	op := strings.TrimSpace(strings.ToLower(rule.Op))
+	expected, actual, mm := normalizeExpectedAndActual(rule, expectedRaw, actualRaw, field, op)
+	if mm != nil {
+		return false, mm
+	}
+	return evaluateSingleExpectedOp(rule, expectedRaw, actualRaw, expected, actual, field, op, policyMode)
+}
+
+func normalizeExpectedAndActual(rule RuleV1, expectedRaw any, actualRaw any, field, op string) (any, any, *Mismatch) {
 	actual := actualRaw
 	expected := expectedRaw
+	if len(rule.Normalize) == 0 {
+		return expected, actual, nil
+	}
 	var err error
-	if len(rule.Normalize) > 0 {
-		actual, err = applyNormalizers(actual, rule.Normalize)
-		if err != nil {
-			return false, &Mismatch{
-				Field:         field,
-				Op:            op,
-				MismatchClass: MismatchType,
-				Message:       "normalizer failed for actual: " + err.Error(),
-				Expected:      expectedRaw,
-				Actual:        actualRaw,
-			}
-		}
-		expected, err = applyNormalizers(expected, rule.Normalize)
-		if err != nil {
-			return false, &Mismatch{
-				Field:         field,
-				Op:            op,
-				MismatchClass: MismatchType,
-				Message:       "normalizer failed for expected: " + err.Error(),
-				Expected:      expectedRaw,
-				Actual:        actualRaw,
-			}
+	actual, err = applyNormalizers(actual, rule.Normalize)
+	if err != nil {
+		return nil, nil, &Mismatch{
+			Field:         field,
+			Op:            op,
+			MismatchClass: MismatchType,
+			Message:       "normalizer failed for actual: " + err.Error(),
+			Expected:      expectedRaw,
+			Actual:        actualRaw,
 		}
 	}
+	expected, err = applyNormalizers(expected, rule.Normalize)
+	if err != nil {
+		return nil, nil, &Mismatch{
+			Field:         field,
+			Op:            op,
+			MismatchClass: MismatchType,
+			Message:       "normalizer failed for expected: " + err.Error(),
+			Expected:      expectedRaw,
+			Actual:        actualRaw,
+		}
+	}
+	return expected, actual, nil
+}
 
+func evaluateSingleExpectedOp(rule RuleV1, expectedRaw, actualRaw, expected, actual any, field, op, policyMode string) (bool, *Mismatch) {
 	switch op {
 	case OpEQ, OpEQRef:
-		if equalValues(actual, expected) {
-			return true, nil
-		}
-		if policyMode == PolicyModeNormalized && normalizedEquivalent(expectedRaw, actualRaw) {
-			return true, nil
-		}
-		if policyMode == PolicyModeSemantic && (normalizedEquivalent(expectedRaw, actualRaw) || phraseEquivalent(expectedRaw, actualRaw)) {
-			return true, nil
-		}
-		msg := fmt.Sprintf("%s expected %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw))
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, msg, policyMode, expected, actual)
+		return evaluateSingleExpectedEQ(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpStartsWith:
-		a, aok := actual.(string)
-		e, eok := expected.(string)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a string for starts_with", policyMode, expected, actual)
-		}
-		if strings.HasPrefix(a, e) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must start with %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+		return evaluateSingleExpectedStringOp(field, op, expectedRaw, actualRaw, expected, actual, policyMode, "must be a string for starts_with", "must start with")
 	case OpContains:
-		a, aok := actual.(string)
-		e, eok := expected.(string)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a string for contains", policyMode, expected, actual)
-		}
-		if strings.Contains(a, e) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must contain %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+		return evaluateSingleExpectedStringOp(field, op, expectedRaw, actualRaw, expected, actual, policyMode, "must be a string for contains", "must contain")
 	case OpContainsPhrase:
-		a, aok := actual.(string)
-		e, eok := expected.(string)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a string for contains_phrase", policyMode, expected, actual)
-		}
-		if strings.Contains(strings.ToLower(a), strings.ToLower(e)) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must contain phrase %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+		return evaluateSingleExpectedContainsPhrase(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpGTE:
-		av, aok := toFloat64(actual)
-		ev, eok := toFloat64(expected)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a number for gte", policyMode, expected, actual)
-		}
-		if av >= ev {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must be >= %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+		return evaluateSingleExpectedGTE(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpNumEQ:
-		av, aok := toFloat64(actual)
-		ev, eok := toFloat64(expected)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be numeric for num_eq", policyMode, expected, actual)
-		}
-		if numericEqual(av, ev) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected numeric %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+		return evaluateSingleExpectedNumEQ(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpURLEQLoose:
-		a, aok := canonicalLooseURL(actual)
-		e, eok := canonicalLooseURL(expected)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a url string for url_eq_loose", policyMode, expected, actual)
-		}
-		if a == e {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, e, a)
+		return evaluateSingleExpectedURLEQLoose(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpSetEQ:
-		as, aok := toStringSet(actual)
-		es, eok := toStringSet(expected)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be csv or array for set_eq", policyMode, expected, actual)
-		}
-		if stringSetEqual(as, es) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected set %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, sortedKeys(es), sortedKeys(as))
+		return evaluateSingleExpectedSetEQ(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	case OpCommandHeadEQ:
-		ah, aok := commandHead(actual)
-		eh, eok := commandHead(expected)
-		if !aok || !eok {
-			return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be command-like for command_head_eq", policyMode, expected, actual)
-		}
-		if strings.EqualFold(ah, eh) {
-			return true, nil
-		}
-		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected command head %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, eh, ah)
+		return evaluateSingleExpectedCommandHeadEQ(field, op, expectedRaw, actualRaw, expected, actual, policyMode)
 	default:
 		return false, &Mismatch{
 			Field:              field,
@@ -392,6 +342,111 @@ func evaluateSingleExpected(rule RuleV1, expectedRaw any, actualRaw any, policyM
 			NormalizedActual:   actual,
 		}
 	}
+}
+
+func evaluateSingleExpectedEQ(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	if equalValues(actual, expected) {
+		return true, nil
+	}
+	if policyMode == PolicyModeNormalized && normalizedEquivalent(expectedRaw, actualRaw) {
+		return true, nil
+	}
+	if policyMode == PolicyModeSemantic && (normalizedEquivalent(expectedRaw, actualRaw) || phraseEquivalent(expectedRaw, actualRaw)) {
+		return true, nil
+	}
+	msg := fmt.Sprintf("%s expected %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw))
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, msg, policyMode, expected, actual)
+}
+
+func evaluateSingleExpectedStringOp(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode, typeErrMsg, mustMsg string) (bool, *Mismatch) {
+	a, aok := actual.(string)
+	e, eok := expected.(string)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" "+typeErrMsg, policyMode, expected, actual)
+	}
+	var ok bool
+	switch op {
+	case OpStartsWith:
+		ok = strings.HasPrefix(a, e)
+	case OpContains:
+		ok = strings.Contains(a, e)
+	}
+	if ok {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s %s %s got %s", field, mustMsg, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+}
+
+func evaluateSingleExpectedContainsPhrase(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	a, aok := actual.(string)
+	e, eok := expected.(string)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a string for contains_phrase", policyMode, expected, actual)
+	}
+	if strings.Contains(strings.ToLower(a), strings.ToLower(e)) {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must contain phrase %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+}
+
+func evaluateSingleExpectedGTE(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	av, aok := toFloat64(actual)
+	ev, eok := toFloat64(expected)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a number for gte", policyMode, expected, actual)
+	}
+	if av >= ev {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s must be >= %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+}
+
+func evaluateSingleExpectedNumEQ(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	av, aok := toFloat64(actual)
+	ev, eok := toFloat64(expected)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be numeric for num_eq", policyMode, expected, actual)
+	}
+	if numericEqual(av, ev) {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected numeric %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, expected, actual)
+}
+
+func evaluateSingleExpectedURLEQLoose(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	a, aok := canonicalLooseURL(actual)
+	e, eok := canonicalLooseURL(expected)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be a url string for url_eq_loose", policyMode, expected, actual)
+	}
+	if a == e {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, e, a)
+}
+
+func evaluateSingleExpectedSetEQ(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	as, aok := toStringSet(actual)
+	es, eok := toStringSet(expected)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be csv or array for set_eq", policyMode, expected, actual)
+	}
+	if stringSetEqual(as, es) {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected set %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, sortedKeys(es), sortedKeys(as))
+}
+
+func evaluateSingleExpectedCommandHeadEQ(field, op string, expectedRaw, actualRaw, expected, actual any, policyMode string) (bool, *Mismatch) {
+	ah, aok := commandHead(actual)
+	eh, eok := commandHead(expected)
+	if !aok || !eok {
+		return false, inferPairMismatch(field, op, expectedRaw, actualRaw, field+" must be command-like for command_head_eq", policyMode, expected, actual)
+	}
+	if strings.EqualFold(ah, eh) {
+		return true, nil
+	}
+	return false, inferPairMismatch(field, op, expectedRaw, actualRaw, fmt.Sprintf("%s expected command head %s got %s", field, valueAsString(expectedRaw), valueAsString(actualRaw)), policyMode, eh, ah)
 }
 
 func inferPairMismatch(field string, op string, expected any, actual any, message string, policyMode string, normalized ...any) *Mismatch {
@@ -516,38 +571,84 @@ func normalizeNonEmptyStrings(in []string, lower bool) []string {
 func applyNormalizers(value any, names []string) (any, error) {
 	out := value
 	for _, raw := range names {
-		switch strings.TrimSpace(strings.ToLower(raw)) {
-		case NormalizerTrim:
-			if s, ok := out.(string); ok {
-				out = strings.TrimSpace(s)
-			}
-		case NormalizerLower:
-			if s, ok := out.(string); ok {
-				out = strings.ToLower(strings.TrimSpace(s))
-			}
-		case NormalizerStripTrailingSlash:
-			if s, ok := out.(string); ok {
-				out = stripTrailingSlashString(strings.TrimSpace(s))
-			}
-		case NormalizerCSSPXToNumber:
-			if s, ok := out.(string); ok {
-				if fv, ok := parseCSSPXNumber(s); ok {
-					out = fv
-				}
-			}
-		case NormalizerCSVToArray:
-			if arr, ok := toStringSliceLoose(out); ok {
-				out = arr
-			}
-		case NormalizerShellPromptStrip:
-			if s, ok := out.(string); ok {
-				out = stripShellPromptPrefix(strings.TrimSpace(s))
-			}
-		default:
-			return nil, fmt.Errorf("unknown normalizer %q", raw)
+		next, err := applySingleNormalizer(out, raw)
+		if err != nil {
+			return nil, err
 		}
+		out = next
 	}
 	return out, nil
+}
+
+func applySingleNormalizer(value any, raw string) (any, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case NormalizerTrim:
+		return normalizeTrim(value), nil
+	case NormalizerLower:
+		return normalizeLower(value), nil
+	case NormalizerStripTrailingSlash:
+		return normalizeStripTrailingSlash(value), nil
+	case NormalizerCSSPXToNumber:
+		return normalizeCSSPXToNumber(value), nil
+	case NormalizerCSVToArray:
+		return normalizeCSVToArray(value), nil
+	case NormalizerShellPromptStrip:
+		return normalizeShellPromptStrip(value), nil
+	default:
+		return nil, fmt.Errorf("unknown normalizer %q", raw)
+	}
+}
+
+func normalizeTrim(value any) any {
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	return strings.TrimSpace(s)
+}
+
+func normalizeLower(value any) any {
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func normalizeStripTrailingSlash(value any) any {
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	return stripTrailingSlashString(strings.TrimSpace(s))
+}
+
+func normalizeCSSPXToNumber(value any) any {
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	fv, ok := parseCSSPXNumber(s)
+	if !ok {
+		return value
+	}
+	return fv
+}
+
+func normalizeCSVToArray(value any) any {
+	arr, ok := toStringSliceLoose(value)
+	if !ok {
+		return value
+	}
+	return arr
+}
+
+func normalizeShellPromptStrip(value any) any {
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	return stripShellPromptPrefix(strings.TrimSpace(s))
 }
 
 func equalValues(a any, b any) bool {
@@ -567,34 +668,56 @@ func normalizedEquivalent(expected any, actual any) bool {
 	if equalValues(expected, actual) {
 		return true
 	}
-	if ef, ok := toFloat64(expected); ok {
-		if af, ok := toFloat64(actual); ok && numericEqual(ef, af) {
-			return true
-		}
+	if normalizedEquivalentNumbers(expected, actual) {
+		return true
 	}
-	es, eok := stringifyValue(expected)
-	as, aok := stringifyValue(actual)
-	if eok && aok {
-		eTrim := strings.TrimSpace(es)
-		aTrim := strings.TrimSpace(as)
-		if eTrim == aTrim || strings.EqualFold(eTrim, aTrim) {
-			return true
-		}
-		if stripTrailingSlashString(eTrim) == stripTrailingSlashString(aTrim) {
-			return true
-		}
-		if eh, ok := commandHead(eTrim); ok {
-			if ah, ok := commandHead(aTrim); ok && strings.EqualFold(eh, ah) {
-				return true
-			}
-		}
+	if normalizedEquivalentStrings(expected, actual) {
+		return true
 	}
-	if es, ok := toStringSet(expected); ok {
-		if as, ok := toStringSet(actual); ok && stringSetEqual(es, as) {
-			return true
-		}
+	if normalizedEquivalentSets(expected, actual) {
+		return true
 	}
 	return false
+}
+
+func normalizedEquivalentNumbers(expected any, actual any) bool {
+	ef, ok := toFloat64(expected)
+	if !ok {
+		return false
+	}
+	af, ok := toFloat64(actual)
+	return ok && numericEqual(ef, af)
+}
+
+func normalizedEquivalentStrings(expected any, actual any) bool {
+	es, eok := stringifyValue(expected)
+	as, aok := stringifyValue(actual)
+	if !eok || !aok {
+		return false
+	}
+	eTrim := strings.TrimSpace(es)
+	aTrim := strings.TrimSpace(as)
+	if eTrim == aTrim || strings.EqualFold(eTrim, aTrim) {
+		return true
+	}
+	if stripTrailingSlashString(eTrim) == stripTrailingSlashString(aTrim) {
+		return true
+	}
+	eh, ok := commandHead(eTrim)
+	if !ok {
+		return false
+	}
+	ah, ok := commandHead(aTrim)
+	return ok && strings.EqualFold(eh, ah)
+}
+
+func normalizedEquivalentSets(expected any, actual any) bool {
+	es, ok := toStringSet(expected)
+	if !ok {
+		return false
+	}
+	as, ok := toStringSet(actual)
+	return ok && stringSetEqual(es, as)
 }
 
 func phraseEquivalent(expected any, actual any) bool {
@@ -724,43 +847,55 @@ func stripTrailingSlashString(s string) string {
 func toStringSliceLoose(v any) ([]string, bool) {
 	switch x := v.(type) {
 	case string:
-		parts := strings.Split(x, ",")
-		out := make([]string, 0, len(parts))
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			out = append(out, p)
-		}
-		return out, true
+		return splitNonEmptyCSV(x), true
 	case []any:
-		out := make([]string, 0, len(x))
-		for _, part := range x {
-			s, ok := stringifyValue(part)
-			if !ok {
-				s = fmt.Sprintf("%v", part)
-			}
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			out = append(out, s)
-		}
-		return out, true
+		return normalizeAnySliceToStrings(x), true
 	case []string:
-		out := make([]string, 0, len(x))
-		for _, part := range x {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			out = append(out, part)
-		}
-		return out, true
+		return normalizeStringSlice(x), true
 	default:
 		return nil, false
 	}
+}
+
+func splitNonEmptyCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func normalizeAnySliceToStrings(items []any) []string {
+	out := make([]string, 0, len(items))
+	for _, part := range items {
+		s, ok := stringifyValue(part)
+		if !ok {
+			s = fmt.Sprintf("%v", part)
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func normalizeStringSlice(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, part := range items {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 func toStringSet(v any) (map[string]bool, bool) {

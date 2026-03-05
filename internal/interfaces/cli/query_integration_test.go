@@ -23,50 +23,52 @@ func TestAttemptListLatestAndRunsList(t *testing.T) {
 	start3 := startAttemptForQuery(t, r, outRoot, start1.RunID, "q-suite", "m-two")
 	runOnlyForQuery(t, r, start3.Env)
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r.Stdout = &stdout
-	r.Stderr = &stderr
+	listed := runAttemptListQuery(t, &r, outRoot, "q-suite", "m-one", "fail")
+	assertAttemptListQueryResult(t, listed)
 
-	code := r.Run([]string{
-		"attempt", "list",
-		"--out-root", outRoot,
-		"--suite", "q-suite",
-		"--mission", "m-one",
-		"--status", "fail",
-		"--json",
-	})
-	if code != 0 {
-		t.Fatalf("attempt list failed: code=%d stderr=%q", code, stderr.String())
-	}
-	var listed struct {
+	latest := runAttemptLatestQuery(t, &r, outRoot, "q-suite", "m-two", "missing_feedback")
+	assertAttemptLatestQueryResult(t, latest)
+
+	runs := runRunsListQuery(t, &r, outRoot, "q-suite")
+	assertRunsListQueryResult(t, runs, start1.RunID)
+}
+
+func runAttemptListQuery(t *testing.T, r *Runner, outRoot string, suiteID string, missionID string, status string) struct {
+	Returned int `json:"returned"`
+	Attempts []struct {
+		AttemptID string `json:"attemptId"`
+		Status    string `json:"status"`
+	} `json:"attempts"`
+} {
+	t.Helper()
+	var out struct {
 		Returned int `json:"returned"`
 		Attempts []struct {
 			AttemptID string `json:"attemptId"`
 			Status    string `json:"status"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
-		t.Fatalf("unmarshal attempt list: %v", err)
-	}
-	if listed.Returned != 1 || len(listed.Attempts) != 1 || listed.Attempts[0].Status != "fail" {
-		t.Fatalf("unexpected attempt list result: %+v", listed)
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{
-		"attempt", "latest",
+	runQueryCommandJSON(t, r, []string{
+		"attempt", "list",
 		"--out-root", outRoot,
-		"--suite", "q-suite",
-		"--mission", "m-two",
-		"--status", "missing_feedback",
+		"--suite", suiteID,
+		"--mission", missionID,
+		"--status", status,
 		"--json",
-	})
-	if code != 0 {
-		t.Fatalf("attempt latest failed: code=%d stderr=%q", code, stderr.String())
-	}
-	var latest struct {
+	}, &out, "attempt list")
+	return out
+}
+
+func runAttemptLatestQuery(t *testing.T, r *Runner, outRoot string, suiteID string, missionID string, status string) struct {
+	Found   bool `json:"found"`
+	Attempt struct {
+		AttemptID       string `json:"attemptId"`
+		Status          string `json:"status"`
+		FeedbackPresent bool   `json:"feedbackPresent"`
+	} `json:"attempt"`
+} {
+	t.Helper()
+	var out struct {
 		Found   bool `json:"found"`
 		Attempt struct {
 			AttemptID       string `json:"attemptId"`
@@ -74,25 +76,30 @@ func TestAttemptListLatestAndRunsList(t *testing.T) {
 			FeedbackPresent bool   `json:"feedbackPresent"`
 		} `json:"attempt"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &latest); err != nil {
-		t.Fatalf("unmarshal attempt latest: %v", err)
-	}
-	if !latest.Found || latest.Attempt.AttemptID == "" || latest.Attempt.Status != "missing_feedback" || latest.Attempt.FeedbackPresent {
-		t.Fatalf("unexpected attempt latest result: %+v", latest)
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{
-		"runs", "list",
+	runQueryCommandJSON(t, r, []string{
+		"attempt", "latest",
 		"--out-root", outRoot,
-		"--suite", "q-suite",
+		"--suite", suiteID,
+		"--mission", missionID,
+		"--status", status,
 		"--json",
-	})
-	if code != 0 {
-		t.Fatalf("runs list failed: code=%d stderr=%q", code, stderr.String())
-	}
-	var runs struct {
+	}, &out, "attempt latest")
+	return out
+}
+
+func runRunsListQuery(t *testing.T, r *Runner, outRoot string, suiteID string) struct {
+	Returned int `json:"returned"`
+	Runs     []struct {
+		RunID                string `json:"runId"`
+		Status               string `json:"status"`
+		AttemptsTotal        int    `json:"attemptsTotal"`
+		OKTotal              int    `json:"okTotal"`
+		FailTotal            int    `json:"failTotal"`
+		MissingFeedbackTotal int    `json:"missingFeedbackTotal"`
+	} `json:"runs"`
+} {
+	t.Helper()
+	var out struct {
 		Returned int `json:"returned"`
 		Runs     []struct {
 			RunID                string `json:"runId"`
@@ -103,14 +110,73 @@ func TestAttemptListLatestAndRunsList(t *testing.T) {
 			MissingFeedbackTotal int    `json:"missingFeedbackTotal"`
 		} `json:"runs"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &runs); err != nil {
-		t.Fatalf("unmarshal runs list: %v", err)
+	runQueryCommandJSON(t, r, []string{
+		"runs", "list",
+		"--out-root", outRoot,
+		"--suite", suiteID,
+		"--json",
+	}, &out, "runs list")
+	return out
+}
+
+func runQueryCommandJSON(t *testing.T, r *Runner, args []string, out any, label string) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r.Stdout = &stdout
+	r.Stderr = &stderr
+	if code := r.Run(args); code != 0 {
+		t.Fatalf("%s failed: code=%d stderr=%q", label, code, stderr.String())
 	}
+	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
+		t.Fatalf("unmarshal %s: %v", label, err)
+	}
+}
+
+func assertAttemptListQueryResult(t *testing.T, listed struct {
+	Returned int `json:"returned"`
+	Attempts []struct {
+		AttemptID string `json:"attemptId"`
+		Status    string `json:"status"`
+	} `json:"attempts"`
+}) {
+	t.Helper()
+	if listed.Returned != 1 || len(listed.Attempts) != 1 || listed.Attempts[0].Status != "fail" {
+		t.Fatalf("unexpected attempt list result: %+v", listed)
+	}
+}
+
+func assertAttemptLatestQueryResult(t *testing.T, latest struct {
+	Found   bool `json:"found"`
+	Attempt struct {
+		AttemptID       string `json:"attemptId"`
+		Status          string `json:"status"`
+		FeedbackPresent bool   `json:"feedbackPresent"`
+	} `json:"attempt"`
+}) {
+	t.Helper()
+	if !latest.Found || latest.Attempt.AttemptID == "" || latest.Attempt.Status != "missing_feedback" || latest.Attempt.FeedbackPresent {
+		t.Fatalf("unexpected attempt latest result: %+v", latest)
+	}
+}
+
+func assertRunsListQueryResult(t *testing.T, runs struct {
+	Returned int `json:"returned"`
+	Runs     []struct {
+		RunID                string `json:"runId"`
+		Status               string `json:"status"`
+		AttemptsTotal        int    `json:"attemptsTotal"`
+		OKTotal              int    `json:"okTotal"`
+		FailTotal            int    `json:"failTotal"`
+		MissingFeedbackTotal int    `json:"missingFeedbackTotal"`
+	} `json:"runs"`
+}, expectedRunID string) {
+	t.Helper()
 	if runs.Returned != 1 || len(runs.Runs) != 1 {
 		t.Fatalf("expected one run row, got %+v", runs)
 	}
 	row := runs.Runs[0]
-	if row.RunID != start1.RunID || row.AttemptsTotal != 3 || row.OKTotal != 1 || row.FailTotal != 1 || row.MissingFeedbackTotal != 1 || row.Status != "missing_feedback" {
+	if row.RunID != expectedRunID || row.AttemptsTotal != 3 || row.OKTotal != 1 || row.FailTotal != 1 || row.MissingFeedbackTotal != 1 || row.Status != "missing_feedback" {
 		t.Fatalf("unexpected runs row: %+v", row)
 	}
 }

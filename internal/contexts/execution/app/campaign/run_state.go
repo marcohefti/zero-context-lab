@@ -264,6 +264,15 @@ func LoadRunState(path string) (RunStateV1, error) {
 }
 
 func SaveRunState(path string, st RunStateV1) error {
+	if err := validateRunState(path, st); err != nil {
+		return err
+	}
+	st = normalizeRunState(st)
+
+	return store.WriteJSONAtomic(path, st)
+}
+
+func validateRunState(path string, st RunStateV1) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("missing campaign run-state path")
 	}
@@ -273,50 +282,60 @@ func SaveRunState(path string, st RunStateV1) error {
 	if strings.TrimSpace(st.RunID) == "" {
 		return fmt.Errorf("missing runId")
 	}
-	if st.SchemaVersion == 0 {
-		st.SchemaVersion = 1
-	}
-	if st.SchemaVersion != 1 {
+	if st.SchemaVersion != 0 && st.SchemaVersion != 1 {
 		return fmt.Errorf("unsupported campaign.run.state schemaVersion")
 	}
 	if !isValidRunStatus(st.Status) {
 		return fmt.Errorf("invalid campaign status")
 	}
+	if st.TotalMissions < 0 || st.MissionsCompleted < 0 || st.MissionOffset < 0 {
+		return fmt.Errorf("invalid mission counters")
+	}
+	return nil
+}
+
+func normalizeRunState(st RunStateV1) RunStateV1 {
+	if st.SchemaVersion == 0 {
+		st.SchemaVersion = 1
+	}
 	st.ReasonCodes = normalizeReasonCodes(st.ReasonCodes)
 	if strings.TrimSpace(st.UpdatedAt) == "" {
 		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	if st.TotalMissions < 0 || st.MissionsCompleted < 0 || st.MissionOffset < 0 {
-		return fmt.Errorf("invalid mission counters")
-	}
+	sortFlowRuns(st.FlowRuns)
+	sortMissionGates(st.MissionGates)
+	return st
+}
 
-	sort.Slice(st.FlowRuns, func(i, j int) bool {
-		return st.FlowRuns[i].FlowID < st.FlowRuns[j].FlowID
+func sortFlowRuns(flowRuns []FlowRunV1) {
+	sort.Slice(flowRuns, func(i, j int) bool {
+		return flowRuns[i].FlowID < flowRuns[j].FlowID
 	})
-	for i := range st.FlowRuns {
-		sort.Slice(st.FlowRuns[i].Attempts, func(a, b int) bool {
-			ai := st.FlowRuns[i].Attempts[a].MissionIndex
-			bi := st.FlowRuns[i].Attempts[b].MissionIndex
+	for i := range flowRuns {
+		sort.Slice(flowRuns[i].Attempts, func(a, b int) bool {
+			ai := flowRuns[i].Attempts[a].MissionIndex
+			bi := flowRuns[i].Attempts[b].MissionIndex
 			if ai != bi {
 				return ai < bi
 			}
-			return st.FlowRuns[i].Attempts[a].MissionID < st.FlowRuns[i].Attempts[b].MissionID
+			return flowRuns[i].Attempts[a].MissionID < flowRuns[i].Attempts[b].MissionID
 		})
 	}
-	sort.Slice(st.MissionGates, func(i, j int) bool {
-		if st.MissionGates[i].MissionIndex != st.MissionGates[j].MissionIndex {
-			return st.MissionGates[i].MissionIndex < st.MissionGates[j].MissionIndex
-		}
-		return st.MissionGates[i].MissionID < st.MissionGates[j].MissionID
-	})
-	for i := range st.MissionGates {
-		st.MissionGates[i].Reasons = normalizeReasonCodes(st.MissionGates[i].Reasons)
-		sort.Slice(st.MissionGates[i].Attempts, func(a, b int) bool {
-			return st.MissionGates[i].Attempts[a].FlowID < st.MissionGates[i].Attempts[b].FlowID
-		})
-	}
+}
 
-	return store.WriteJSONAtomic(path, st)
+func sortMissionGates(gates []MissionGateV1) {
+	sort.Slice(gates, func(i, j int) bool {
+		if gates[i].MissionIndex != gates[j].MissionIndex {
+			return gates[i].MissionIndex < gates[j].MissionIndex
+		}
+		return gates[i].MissionID < gates[j].MissionID
+	})
+	for i := range gates {
+		gates[i].Reasons = normalizeReasonCodes(gates[i].Reasons)
+		sort.Slice(gates[i].Attempts, func(a, b int) bool {
+			return gates[i].Attempts[a].FlowID < gates[i].Attempts[b].FlowID
+		})
+	}
 }
 
 func BuildReport(st RunStateV1) ReportV1 {
@@ -405,9 +424,32 @@ func BuildSummary(st RunStateV1) SummaryV1 {
 			ResultsMDPath: ResultsMDPath(st.OutRoot, st.CampaignID),
 		},
 	}
+	attemptByFlowMission, attemptDirs := buildAttemptIndexes(st.FlowRuns)
+	failures := map[string]int{}
+	for _, mg := range st.MissionGates {
+		ms := MissionSummaryV1{
+			MissionIndex: mg.MissionIndex,
+			MissionID:    mg.MissionID,
+			VerifiedOK:   mg.OK,
+			Reasons:      normalizeReasonCodes(mg.Reasons),
+		}
+		updateVerifiedCounts(&out, ms)
+		ms = buildMissionSummary(ms, st.FlowRuns, attemptByFlowMission, failures)
+		updateClaimMismatchCounts(&out, ms)
+		appendReasonFailures(ms.Reasons, failures)
+		sortMissionFlows(ms.Flows)
+		out.Missions = append(out.Missions, ms)
+	}
+	sortMissionSummaries(out.Missions)
+	out.TopFailureCodes = sortCodeCounts(failures)
+	out.EvidencePaths.AttemptDirs = collectAttemptDirs(attemptDirs)
+	return out
+}
+
+func buildAttemptIndexes(flowRuns []FlowRunV1) (map[string]map[int]AttemptStatusV1, map[string]bool) {
 	attemptByFlowMission := map[string]map[int]AttemptStatusV1{}
 	attemptDirs := map[string]bool{}
-	for _, fr := range st.FlowRuns {
+	for _, fr := range flowRuns {
 		if _, ok := attemptByFlowMission[fr.FlowID]; !ok {
 			attemptByFlowMission[fr.FlowID] = map[int]AttemptStatusV1{}
 		}
@@ -418,69 +460,80 @@ func BuildSummary(st RunStateV1) SummaryV1 {
 			}
 		}
 	}
-	failures := map[string]int{}
-	for _, mg := range st.MissionGates {
-		ms := MissionSummaryV1{
-			MissionIndex: mg.MissionIndex,
-			MissionID:    mg.MissionID,
-			VerifiedOK:   mg.OK,
-			Reasons:      normalizeReasonCodes(mg.Reasons),
-		}
-		if ms.VerifiedOK {
-			out.VerifiedMissionsOK++
-		}
-		claimedAll := len(st.FlowRuns) > 0
-		for _, fr := range st.FlowRuns {
-			a, ok := attemptByFlowMission[fr.FlowID][mg.MissionIndex]
-			if !ok {
-				claimedAll = false
-				ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
-					FlowID: fr.FlowID,
-					Status: AttemptStatusInvalid,
-					Errors: []string{codes.CampaignMissingAttempt},
-				})
-				failures[codes.CampaignMissingAttempt]++
-				continue
-			}
-			if a.Status != AttemptStatusValid {
-				claimedAll = false
-			}
+	return attemptByFlowMission, attemptDirs
+}
+
+func updateVerifiedCounts(out *SummaryV1, ms MissionSummaryV1) {
+	if ms.VerifiedOK {
+		out.VerifiedMissionsOK++
+	}
+}
+
+func buildMissionSummary(ms MissionSummaryV1, flowRuns []FlowRunV1, attempts map[string]map[int]AttemptStatusV1, failures map[string]int) MissionSummaryV1 {
+	claimedAll := len(flowRuns) > 0
+	for _, fr := range flowRuns {
+		a, ok := attempts[fr.FlowID][ms.MissionIndex]
+		if !ok {
+			claimedAll = false
 			ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
-				FlowID:     fr.FlowID,
-				Status:     a.Status,
-				AttemptID:  a.AttemptID,
-				AttemptDir: a.AttemptDir,
-				Errors:     normalizeReasonCodes(a.Errors),
+				FlowID: fr.FlowID,
+				Status: AttemptStatusInvalid,
+				Errors: []string{codes.CampaignMissingAttempt},
 			})
-			for _, code := range a.Errors {
-				failures[strings.TrimSpace(code)]++
-			}
+			failures[codes.CampaignMissingAttempt]++
+			continue
 		}
-		ms.ClaimedOK = claimedAll
-		if ms.ClaimedOK {
-			out.ClaimedMissionsOK++
+		if a.Status != AttemptStatusValid {
+			claimedAll = false
 		}
-		ms.Mismatch = ms.ClaimedOK != ms.VerifiedOK
-		if ms.Mismatch {
-			out.MismatchCount++
-		}
-		for _, code := range ms.Reasons {
-			failures[strings.TrimSpace(code)]++
-		}
-		sort.Slice(ms.Flows, func(i, j int) bool { return ms.Flows[i].FlowID < ms.Flows[j].FlowID })
-		out.Missions = append(out.Missions, ms)
+		ms.Flows = append(ms.Flows, MissionFlowSummaryV1{
+			FlowID:     fr.FlowID,
+			Status:     a.Status,
+			AttemptID:  a.AttemptID,
+			AttemptDir: a.AttemptDir,
+			Errors:     normalizeReasonCodes(a.Errors),
+		})
+		appendReasonFailures(a.Errors, failures)
 	}
-	sort.Slice(out.Missions, func(i, j int) bool {
-		if out.Missions[i].MissionIndex != out.Missions[j].MissionIndex {
-			return out.Missions[i].MissionIndex < out.Missions[j].MissionIndex
+	ms.ClaimedOK = claimedAll
+	ms.Mismatch = ms.ClaimedOK != ms.VerifiedOK
+	return ms
+}
+
+func updateClaimMismatchCounts(out *SummaryV1, ms MissionSummaryV1) {
+	if ms.ClaimedOK {
+		out.ClaimedMissionsOK++
+	}
+	if ms.Mismatch {
+		out.MismatchCount++
+	}
+}
+
+func appendReasonFailures(codesIn []string, failures map[string]int) {
+	for _, code := range codesIn {
+		failures[strings.TrimSpace(code)]++
+	}
+}
+
+func sortMissionFlows(flows []MissionFlowSummaryV1) {
+	sort.Slice(flows, func(i, j int) bool { return flows[i].FlowID < flows[j].FlowID })
+}
+
+func sortMissionSummaries(missions []MissionSummaryV1) {
+	sort.Slice(missions, func(i, j int) bool {
+		if missions[i].MissionIndex != missions[j].MissionIndex {
+			return missions[i].MissionIndex < missions[j].MissionIndex
 		}
-		return out.Missions[i].MissionID < out.Missions[j].MissionID
+		return missions[i].MissionID < missions[j].MissionID
 	})
-	out.TopFailureCodes = sortCodeCounts(failures)
+}
+
+func collectAttemptDirs(attemptDirs map[string]bool) []string {
+	out := make([]string, 0, len(attemptDirs))
 	for dir := range attemptDirs {
-		out.EvidencePaths.AttemptDirs = append(out.EvidencePaths.AttemptDirs, dir)
+		out = append(out, dir)
 	}
-	sort.Strings(out.EvidencePaths.AttemptDirs)
+	sort.Strings(out)
 	return out
 }
 

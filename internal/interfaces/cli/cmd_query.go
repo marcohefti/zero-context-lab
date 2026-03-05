@@ -283,7 +283,15 @@ func collectRunRows(outRoot string, suiteFilter string) ([]runIndexRow, error) {
 		}
 		return nil, err
 	}
-
+	attemptRows, err := collectAttemptRows(attemptIndexFilter{
+		SuiteID: strings.TrimSpace(suiteFilter),
+		Status:  attemptStatusAny,
+		OutRoot: absOutRoot,
+	})
+	if err != nil {
+		return nil, err
+	}
+	attemptsByRun := groupAttemptRowsByRunID(attemptRows)
 	var rows []runIndexRow
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -297,42 +305,7 @@ func collectRunRows(outRoot string, suiteFilter string) ([]runIndexRow, error) {
 		if suiteFilter != "" && runMeta.SuiteID != suiteFilter {
 			continue
 		}
-
-		row := runIndexRow{
-			RunID:     runMeta.RunID,
-			SuiteID:   runMeta.SuiteID,
-			CreatedAt: runMeta.CreatedAt,
-			RunDir:    runDir,
-		}
-		attempts, err := collectAttemptRows(attemptIndexFilter{
-			SuiteID: runMeta.SuiteID,
-			Status:  attemptStatusAny,
-			OutRoot: absOutRoot,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, a := range attempts {
-			if a.RunID != row.RunID {
-				continue
-			}
-			row.AttemptsTotal++
-			switch a.Status {
-			case attemptStatusOK:
-				row.OKTotal++
-			case attemptStatusFail:
-				row.FailTotal++
-			default:
-				row.MissingFeedbackTotal++
-			}
-			if isMoreRecentTS(a.StartedAt, row.LatestAttemptStartedAt) {
-				row.LatestAttemptID = a.AttemptID
-				row.LatestAttemptMission = a.MissionID
-				row.LatestAttemptStartedAt = a.StartedAt
-			}
-		}
-		row.Status = runStatus(row)
-		rows = append(rows, row)
+		rows = append(rows, buildRunRow(runDir, runMeta, attemptsByRun[runMeta.RunID]))
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -344,6 +317,41 @@ func collectRunRows(outRoot string, suiteFilter string) ([]runIndexRow, error) {
 		return rows[i].RunID > rows[j].RunID
 	})
 	return rows, nil
+}
+
+func groupAttemptRowsByRunID(rows []attemptIndexRow) map[string][]attemptIndexRow {
+	grouped := make(map[string][]attemptIndexRow, len(rows))
+	for _, row := range rows {
+		grouped[row.RunID] = append(grouped[row.RunID], row)
+	}
+	return grouped
+}
+
+func buildRunRow(runDir string, runMeta schema.RunJSONV1, attempts []attemptIndexRow) runIndexRow {
+	row := runIndexRow{
+		RunID:     runMeta.RunID,
+		SuiteID:   runMeta.SuiteID,
+		CreatedAt: runMeta.CreatedAt,
+		RunDir:    runDir,
+	}
+	for _, a := range attempts {
+		row.AttemptsTotal++
+		switch a.Status {
+		case attemptStatusOK:
+			row.OKTotal++
+		case attemptStatusFail:
+			row.FailTotal++
+		default:
+			row.MissingFeedbackTotal++
+		}
+		if isMoreRecentTS(a.StartedAt, row.LatestAttemptStartedAt) {
+			row.LatestAttemptID = a.AttemptID
+			row.LatestAttemptMission = a.MissionID
+			row.LatestAttemptStartedAt = a.StartedAt
+		}
+	}
+	row.Status = runStatus(row)
+	return row
 }
 
 func collectAttemptRows(filter attemptIndexFilter) ([]attemptIndexRow, error) {
@@ -362,96 +370,11 @@ func collectAttemptRows(filter attemptIndexFilter) ([]attemptIndexRow, error) {
 
 	rows := make([]attemptIndexRow, 0, 128)
 	for _, runEntry := range entries {
-		if !runEntry.IsDir() {
-			continue
-		}
-		runDir := filepath.Join(runsDir, runEntry.Name())
-		var runMeta schema.RunJSONV1
-		if !readJSONIfExists(filepath.Join(runDir, "run.json"), &runMeta) {
-			continue
-		}
-		if filter.SuiteID != "" && runMeta.SuiteID != filter.SuiteID {
-			continue
-		}
-
-		tagsByMission := loadMissionTags(filepath.Join(runDir, "suite.json"))
-		attemptsDir := filepath.Join(runDir, "attempts")
-		attemptEntries, err := os.ReadDir(attemptsDir)
+		runRows, err := collectAttemptRowsForRun(absOutRoot, runEntry, filter)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return nil, err
 		}
-		for _, aEntry := range attemptEntries {
-			if !aEntry.IsDir() {
-				continue
-			}
-			attemptDir := filepath.Join(attemptsDir, aEntry.Name())
-			var a schema.AttemptJSONV1
-			if !readJSONIfExists(filepath.Join(attemptDir, "attempt.json"), &a) {
-				continue
-			}
-			if filter.Mission != "" && a.MissionID != filter.Mission {
-				continue
-			}
-
-			row := attemptIndexRow{
-				RunID:      a.RunID,
-				SuiteID:    a.SuiteID,
-				MissionID:  a.MissionID,
-				AttemptID:  a.AttemptID,
-				Mode:       a.Mode,
-				Status:     attemptStatusMissingFeedback,
-				StartedAt:  a.StartedAt,
-				Tags:       append([]string(nil), tagsByMission[a.MissionID]...),
-				AttemptDir: attemptDir,
-			}
-			if len(filter.Tags) > 0 && !hasTagOverlap(row.Tags, filter.Tags) {
-				continue
-			}
-
-			var fb schema.FeedbackJSONV1
-			if readJSONIfExists(filepath.Join(attemptDir, "feedback.json"), &fb) {
-				row.FeedbackPresent = true
-				ok := fb.OK
-				row.OK = &ok
-				row.Status = attemptStatusFail
-				if fb.OK {
-					row.Status = attemptStatusOK
-				}
-				row.EndedAt = fb.CreatedAt
-				row.Classification = fb.Classification
-				row.DecisionTags = append([]string(nil), fb.DecisionTags...)
-			}
-
-			var rep schema.AttemptReportJSONV1
-			if readJSONIfExists(filepath.Join(attemptDir, "attempt.report.json"), &rep) {
-				if row.EndedAt == "" {
-					row.EndedAt = rep.EndedAt
-				}
-				if rep.TokenEstimates != nil {
-					row.TokenEstimates = rep.TokenEstimates
-				}
-				if rep.Integrity != nil {
-					row.TraceNonEmpty = rep.Integrity.TraceNonEmpty
-					if !row.FeedbackPresent {
-						row.FeedbackPresent = rep.Integrity.FeedbackPresent
-					}
-				}
-			}
-			if !row.TraceNonEmpty {
-				nonEmpty, err := store.JSONLHasNonEmptyLine(filepath.Join(attemptDir, "tool.calls.jsonl"))
-				if err == nil {
-					row.TraceNonEmpty = nonEmpty
-				}
-			}
-
-			if filter.Status != attemptStatusAny && row.Status != filter.Status {
-				continue
-			}
-			rows = append(rows, row)
-		}
+		rows = append(rows, runRows...)
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -466,6 +389,117 @@ func collectAttemptRows(filter attemptIndexFilter) ([]attemptIndexRow, error) {
 		return rows[i].AttemptID > rows[j].AttemptID
 	})
 	return rows, nil
+}
+
+func collectAttemptRowsForRun(absOutRoot string, runEntry os.DirEntry, filter attemptIndexFilter) ([]attemptIndexRow, error) {
+	if !runEntry.IsDir() {
+		return nil, nil
+	}
+	runDir := filepath.Join(absOutRoot, "runs", runEntry.Name())
+	var runMeta schema.RunJSONV1
+	if !readJSONIfExists(filepath.Join(runDir, "run.json"), &runMeta) {
+		return nil, nil
+	}
+	if filter.SuiteID != "" && runMeta.SuiteID != filter.SuiteID {
+		return nil, nil
+	}
+
+	tagsByMission := loadMissionTags(filepath.Join(runDir, "suite.json"))
+	attemptsDir := filepath.Join(runDir, "attempts")
+	attemptEntries, err := os.ReadDir(attemptsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	rows := make([]attemptIndexRow, 0, len(attemptEntries))
+	for _, aEntry := range attemptEntries {
+		row, ok := buildAttemptIndexRow(attemptsDir, aEntry, tagsByMission, filter)
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func buildAttemptIndexRow(attemptsDir string, entry os.DirEntry, tagsByMission map[string][]string, filter attemptIndexFilter) (attemptIndexRow, bool) {
+	if !entry.IsDir() {
+		return attemptIndexRow{}, false
+	}
+	attemptDir := filepath.Join(attemptsDir, entry.Name())
+	var a schema.AttemptJSONV1
+	if !readJSONIfExists(filepath.Join(attemptDir, "attempt.json"), &a) {
+		return attemptIndexRow{}, false
+	}
+	if filter.Mission != "" && a.MissionID != filter.Mission {
+		return attemptIndexRow{}, false
+	}
+
+	row := attemptIndexRow{
+		RunID:      a.RunID,
+		SuiteID:    a.SuiteID,
+		MissionID:  a.MissionID,
+		AttemptID:  a.AttemptID,
+		Mode:       a.Mode,
+		Status:     attemptStatusMissingFeedback,
+		StartedAt:  a.StartedAt,
+		Tags:       append([]string(nil), tagsByMission[a.MissionID]...),
+		AttemptDir: attemptDir,
+	}
+	if len(filter.Tags) > 0 && !hasTagOverlap(row.Tags, filter.Tags) {
+		return attemptIndexRow{}, false
+	}
+	applyAttemptFeedback(attemptDir, &row)
+	applyAttemptReport(attemptDir, &row)
+	if !row.TraceNonEmpty {
+		nonEmpty, err := store.JSONLHasNonEmptyLine(filepath.Join(attemptDir, "tool.calls.jsonl"))
+		if err == nil {
+			row.TraceNonEmpty = nonEmpty
+		}
+	}
+	if filter.Status != attemptStatusAny && row.Status != filter.Status {
+		return attemptIndexRow{}, false
+	}
+	return row, true
+}
+
+func applyAttemptFeedback(attemptDir string, row *attemptIndexRow) {
+	var fb schema.FeedbackJSONV1
+	if !readJSONIfExists(filepath.Join(attemptDir, "feedback.json"), &fb) {
+		return
+	}
+	row.FeedbackPresent = true
+	ok := fb.OK
+	row.OK = &ok
+	row.Status = attemptStatusFail
+	if fb.OK {
+		row.Status = attemptStatusOK
+	}
+	row.EndedAt = fb.CreatedAt
+	row.Classification = fb.Classification
+	row.DecisionTags = append([]string(nil), fb.DecisionTags...)
+}
+
+func applyAttemptReport(attemptDir string, row *attemptIndexRow) {
+	var rep schema.AttemptReportJSONV1
+	if !readJSONIfExists(filepath.Join(attemptDir, "attempt.report.json"), &rep) {
+		return
+	}
+	if row.EndedAt == "" {
+		row.EndedAt = rep.EndedAt
+	}
+	if rep.TokenEstimates != nil {
+		row.TokenEstimates = rep.TokenEstimates
+	}
+	if rep.Integrity != nil {
+		row.TraceNonEmpty = rep.Integrity.TraceNonEmpty
+		if !row.FeedbackPresent {
+			row.FeedbackPresent = rep.Integrity.FeedbackPresent
+		}
+	}
 }
 
 func parseTS(s string) (time.Time, bool) {

@@ -101,27 +101,8 @@ func (r Runner) enforceVersionFloor(args []string) (int, bool) {
 }
 
 func (r Runner) maybePrintUpdateNotice(args []string) {
-	if len(args) == 0 {
+	if shouldSkipUpdateNotice(args, r.Stderr) {
 		return
-	}
-	if args[0] == "update" {
-		return
-	}
-	force := strings.TrimSpace(os.Getenv("ZCL_ENABLE_UPDATE_NOTIFY")) == "1"
-	if !force {
-		if strings.TrimSpace(os.Getenv("ZCL_DISABLE_UPDATE_NOTIFY")) == "1" {
-			return
-		}
-		// Avoid noise for agents/automation.
-		if strings.TrimSpace(os.Getenv("CI")) != "" {
-			return
-		}
-		if strings.TrimSpace(os.Getenv("ZCL_ATTEMPT_ID")) != "" || strings.TrimSpace(os.Getenv("ZCL_OUT_DIR")) != "" {
-			return
-		}
-		if !isCharDevice(r.Stderr) {
-			return
-		}
 	}
 
 	now := r.Now()
@@ -140,6 +121,25 @@ func (r Runner) maybePrintUpdateNotice(args []string) {
 
 	fmt.Fprintf(r.Stderr, "zcl: update available %s -> %s (check: zcl update status --json)\n", res.CurrentVersion, res.LatestVersion)
 	_ = update.MarkNotified(now)
+}
+
+func shouldSkipUpdateNotice(args []string, stderr io.Writer) bool {
+	if len(args) == 0 || args[0] == "update" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv("ZCL_ENABLE_UPDATE_NOTIFY")) == "1" {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("ZCL_DISABLE_UPDATE_NOTIFY")) == "1" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv("CI")) != "" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv("ZCL_ATTEMPT_ID")) != "" || strings.TrimSpace(os.Getenv("ZCL_OUT_DIR")) != "" {
+		return true
+	}
+	return !isCharDevice(stderr)
 }
 
 func isCharDevice(w io.Writer) bool {

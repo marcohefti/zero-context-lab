@@ -17,30 +17,15 @@ type BasicSuiteOptions struct {
 }
 
 func RunBasic(ctx context.Context, rt native.Runtime, opts BasicSuiteOptions) error {
-	if rt == nil {
-		return fmt.Errorf("runtime is nil")
-	}
-	if len(opts.RequiredCapabilities) == 0 {
-		opts.RequiredCapabilities = []native.Capability{
-			native.CapabilityThreadStart,
-			native.CapabilityInterrupt,
-			native.CapabilityEventStream,
-		}
-	}
-	if opts.EventTimeout <= 0 {
-		opts.EventTimeout = 3 * time.Second
-	}
-	if strings.TrimSpace(opts.TurnPrompt) == "" {
-		opts.TurnPrompt = "conformance ping"
+	opts, err := normalizeBasicSuiteOptions(rt, opts)
+	if err != nil {
+		return err
 	}
 	if err := rt.Probe(ctx); err != nil {
 		return fmt.Errorf("probe failed: %w", err)
 	}
-	caps := rt.Capabilities()
-	for _, cap := range opts.RequiredCapabilities {
-		if !caps.Has(cap) {
-			return fmt.Errorf("runtime %s missing capability %s", rt.ID(), cap)
-		}
+	if err := requireCapabilities(rt, opts.RequiredCapabilities); err != nil {
+		return err
 	}
 
 	sess, err := rt.StartSession(ctx, opts.SessionOptions)
@@ -82,8 +67,42 @@ func RunBasic(ctx context.Context, rt native.Runtime, opts BasicSuiteOptions) er
 	if strings.TrimSpace(turn.TurnID) == "" {
 		return fmt.Errorf("start turn returned empty turn id")
 	}
+	return waitForTerminalEvent(ctx, events, opts.EventTimeout)
+}
 
-	timer := time.NewTimer(opts.EventTimeout)
+func normalizeBasicSuiteOptions(rt native.Runtime, opts BasicSuiteOptions) (BasicSuiteOptions, error) {
+	if rt == nil {
+		return BasicSuiteOptions{}, fmt.Errorf("runtime is nil")
+	}
+	if len(opts.RequiredCapabilities) == 0 {
+		opts.RequiredCapabilities = []native.Capability{
+			native.CapabilityThreadStart,
+			native.CapabilityInterrupt,
+			native.CapabilityEventStream,
+		}
+	}
+	if opts.EventTimeout <= 0 {
+		opts.EventTimeout = 3 * time.Second
+	}
+	if strings.TrimSpace(opts.TurnPrompt) == "" {
+		opts.TurnPrompt = "conformance ping"
+	}
+	return opts, nil
+}
+
+func requireCapabilities(rt native.Runtime, required []native.Capability) error {
+	caps := rt.Capabilities()
+	for _, cap := range required {
+		if caps.Has(cap) {
+			continue
+		}
+		return fmt.Errorf("runtime %s missing capability %s", rt.ID(), cap)
+	}
+	return nil
+}
+
+func waitForTerminalEvent(ctx context.Context, events <-chan native.Event, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {

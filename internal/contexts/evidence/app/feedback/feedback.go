@@ -27,22 +27,9 @@ type WriteOpts struct {
 }
 
 func Write(now time.Time, env trace.Env, opts WriteOpts) error {
-	if opts.Result != "" && opts.ResultJSON != "" {
-		return fmt.Errorf("provide only one of --result or --result-json")
-	}
-	if opts.Result == "" && opts.ResultJSON == "" {
-		return fmt.Errorf("missing --result or --result-json")
-	}
-
-	classification := strings.TrimSpace(opts.Classification)
-	if classification != "" && !schema.IsValidClassificationV1(classification) {
-		return fmt.Errorf("invalid --classification (expected missing_primitive|naming_ux|output_shape|already_possible_better_way)")
-	}
-	decisionTags := schema.NormalizeDecisionTagsV1(opts.DecisionTags)
-	for _, tag := range decisionTags {
-		if !schema.IsValidDecisionTagV1(tag) {
-			return fmt.Errorf("invalid --decision-tag %q", tag)
-		}
+	classification, decisionTags, err := validateWriteOpts(opts)
+	if err != nil {
+		return err
 	}
 
 	attemptMeta, err := requireEvidenceForMode(env)
@@ -50,32 +37,9 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 		return err
 	}
 
-	var (
-		resultText string
-		resultRaw  json.RawMessage
-		applied    []string
-	)
-
-	if opts.Result != "" {
-		red, a := redact.Text(opts.Result)
-		resultText = red
-		applied = a.Names
-		if len([]byte(resultText)) > schema.FeedbackMaxBytesV1 {
-			return fmt.Errorf("result exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
-		}
-	} else {
-		var v any
-		if err := json.Unmarshal([]byte(opts.ResultJSON), &v); err != nil {
-			return fmt.Errorf("invalid --result-json: %w", err)
-		}
-		b, err := store.CanonicalJSON(v)
-		if err != nil {
-			return err
-		}
-		if len(b) > schema.FeedbackMaxBytesV1 {
-			return fmt.Errorf("resultJson exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
-		}
-		resultRaw = b
+	resultText, resultRaw, applied, err := normalizeFeedbackResult(opts)
+	if err != nil {
+		return err
 	}
 
 	payload := schema.FeedbackJSONV1{
@@ -103,9 +67,61 @@ func Write(now time.Time, env trace.Env, opts WriteOpts) error {
 }
 
 func requireEvidenceForMode(env trace.Env) (schema.AttemptJSONV1, error) {
+	attemptMeta, err := readAttemptMetadata(env.OutDirAbs)
+	if err != nil {
+		return schema.AttemptJSONV1{}, err
+	}
+	if err := requireNonEmptyTrace(filepath.Join(env.OutDirAbs, "tool.calls.jsonl")); err != nil {
+		return schema.AttemptJSONV1{}, err
+	}
+	return attemptMeta, nil
+}
+
+func validateWriteOpts(opts WriteOpts) (string, []string, error) {
+	if opts.Result != "" && opts.ResultJSON != "" {
+		return "", nil, fmt.Errorf("provide only one of --result or --result-json")
+	}
+	if opts.Result == "" && opts.ResultJSON == "" {
+		return "", nil, fmt.Errorf("missing --result or --result-json")
+	}
+	classification := strings.TrimSpace(opts.Classification)
+	if classification != "" && !schema.IsValidClassificationV1(classification) {
+		return "", nil, fmt.Errorf("invalid --classification (expected missing_primitive|naming_ux|output_shape|already_possible_better_way)")
+	}
+	decisionTags := schema.NormalizeDecisionTagsV1(opts.DecisionTags)
+	for _, tag := range decisionTags {
+		if !schema.IsValidDecisionTagV1(tag) {
+			return "", nil, fmt.Errorf("invalid --decision-tag %q", tag)
+		}
+	}
+	return classification, decisionTags, nil
+}
+
+func normalizeFeedbackResult(opts WriteOpts) (string, json.RawMessage, []string, error) {
+	if opts.Result != "" {
+		red, applied := redact.Text(opts.Result)
+		if len([]byte(red)) > schema.FeedbackMaxBytesV1 {
+			return "", nil, nil, fmt.Errorf("result exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
+		}
+		return red, nil, applied.Names, nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(opts.ResultJSON), &v); err != nil {
+		return "", nil, nil, fmt.Errorf("invalid --result-json: %w", err)
+	}
+	b, err := store.CanonicalJSON(v)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if len(b) > schema.FeedbackMaxBytesV1 {
+		return "", nil, nil, fmt.Errorf("resultJson exceeds max bytes (%d)", schema.FeedbackMaxBytesV1)
+	}
+	return "", b, nil, nil
+}
+
+func readAttemptMetadata(attemptDir string) (schema.AttemptJSONV1, error) {
 	// Enforce "funnel-first" semantics: primary evidence must exist before we accept a final outcome.
-	// This makes it harder to accidentally record a result without funnel-backed actions.
-	rawAttempt, err := os.ReadFile(filepath.Join(env.OutDirAbs, "attempt.json"))
+	rawAttempt, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return schema.AttemptJSONV1{}, fmt.Errorf("missing attempt.json in attempt directory (need zcl attempt start context)")
@@ -116,33 +132,39 @@ func requireEvidenceForMode(env trace.Env) (schema.AttemptJSONV1, error) {
 	if err := json.Unmarshal(rawAttempt, &a); err != nil {
 		return schema.AttemptJSONV1{}, fmt.Errorf("invalid attempt.json (cannot determine mode): %w", err)
 	}
+	return a, nil
+}
 
-	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
+func requireNonEmptyTrace(tracePath string) error {
 	f, err := os.Open(tracePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return schema.AttemptJSONV1{}, fmt.Errorf("tool.calls.jsonl is required before feedback")
+			return fmt.Errorf("tool.calls.jsonl is required before feedback")
 		}
-		return schema.AttemptJSONV1{}, err
+		return err
 	}
 	defer func() { _ = f.Close() }()
+	if fileHasNonWhitespace(f) {
+		return nil
+	}
+	return fmt.Errorf("tool.calls.jsonl must be non-empty before feedback")
+}
 
-	// Cheap check: at least one non-empty line.
+func fileHasNonWhitespace(r *os.File) bool {
 	buf := make([]byte, 4096)
 	for {
-		n, rerr := f.Read(buf)
+		n, rerr := r.Read(buf)
 		if n > 0 {
 			for _, b := range buf[:n] {
 				if b != ' ' && b != '\n' && b != '\t' && b != '\r' {
-					return a, nil
+					return true
 				}
 			}
 		}
 		if rerr != nil {
-			break
+			return false
 		}
 	}
-	return schema.AttemptJSONV1{}, fmt.Errorf("tool.calls.jsonl must be non-empty before feedback")
 }
 
 func enforceSuiteResultShape(env trace.Env, attemptMeta schema.AttemptJSONV1, payload schema.FeedbackJSONV1) error {

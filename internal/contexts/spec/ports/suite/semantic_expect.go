@@ -20,42 +20,66 @@ func ValidateSemantic(sem *SemanticExpectsV1, fb schema.FeedbackJSONV1, tf *Trac
 	if sem == nil {
 		return nil
 	}
+	doc, failures := decodeSemanticDoc(fb)
+	if doc == nil {
+		return failures
+	}
+	placeholders := semanticPlaceholders(sem.PlaceholderValues)
+	failures = append(failures, validateRequiredSemanticPointers(doc, sem.RequiredJSONPointers)...)
+	nonEmptyCount, nonEmptyFailures := validateNonEmptySemanticPointers(doc, sem.NonEmptyJSONPointers, placeholders)
+	failures = append(failures, nonEmptyFailures...)
+	meaningfulCount := countMeaningfulValues(doc, placeholders)
+	failures = append(failures, validateSemanticMeaningfulCount(sem.MinMeaningfulFields, meaningfulCount)...)
+	traceFailures := validateSemanticTraceRules(sem, tf, meaningfulCount, nonEmptyCount)
+	return append(failures, traceFailures...)
+}
 
-	var failures []ExpectationFailure
+func decodeSemanticDoc(fb schema.FeedbackJSONV1) (any, []ExpectationFailure) {
 	if len(fb.ResultJSON) == 0 {
-		return []ExpectationFailure{{
+		return nil, []ExpectationFailure{{
 			Code:    "ZCL_E_EXPECT_SEMANTIC_RESULT_JSON",
 			Message: "semantic expectations require feedback.resultJson",
 		}}
 	}
-
 	var doc any
 	if err := json.Unmarshal(fb.ResultJSON, &doc); err != nil {
-		return []ExpectationFailure{{
+		return nil, []ExpectationFailure{{
 			Code:    "ZCL_E_EXPECT_SEMANTIC_RESULT_JSON",
 			Message: "feedback resultJson is not valid json",
 		}}
 	}
+	return doc, nil
+}
 
-	placeholders := map[string]bool{}
-	for _, p := range sem.PlaceholderValues {
+func semanticPlaceholders(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range values {
 		p = strings.TrimSpace(strings.ToLower(p))
 		if p != "" {
-			placeholders[p] = true
+			out[p] = true
 		}
 	}
+	return out
+}
 
-	for _, ptr := range sem.RequiredJSONPointers {
-		if _, ok := jsonPointerLookup(doc, ptr); !ok {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_REQUIRED_POINTER",
-				Message: "missing required semantic pointer " + ptr,
-			})
+func validateRequiredSemanticPointers(doc any, pointers []string) []ExpectationFailure {
+	failures := make([]ExpectationFailure, 0, len(pointers))
+	for _, ptr := range pointers {
+		if _, ok := jsonPointerLookup(doc, ptr); ok {
+			continue
 		}
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_SEMANTIC_REQUIRED_POINTER",
+			Message: "missing required semantic pointer " + ptr,
+		})
 	}
+	return failures
+}
 
+func validateNonEmptySemanticPointers(doc any, pointers []string, placeholders map[string]bool) (int64, []ExpectationFailure) {
+	failures := make([]ExpectationFailure, 0, len(pointers))
 	nonEmptyCount := int64(0)
-	for _, ptr := range sem.NonEmptyJSONPointers {
+	for _, ptr := range pointers {
 		v, ok := jsonPointerLookup(doc, ptr)
 		if !ok {
 			failures = append(failures, ExpectationFailure{
@@ -73,135 +97,126 @@ func ValidateSemantic(sem *SemanticExpectsV1, fb schema.FeedbackJSONV1, tf *Trac
 		}
 		nonEmptyCount++
 	}
+	return nonEmptyCount, failures
+}
 
-	meaningfulCount := countMeaningfulValues(doc, placeholders)
-	if sem.MinMeaningfulFields > 0 {
-		if meaningfulCount < sem.MinMeaningfulFields {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_MIN_FIELDS",
-				Message: fmt.Sprintf("meaningful fields %d < minMeaningfulFields %d", meaningfulCount, sem.MinMeaningfulFields),
-			})
-		}
+func validateSemanticMeaningfulCount(minFields int64, meaningfulCount int64) []ExpectationFailure {
+	if minFields <= 0 || meaningfulCount >= minFields {
+		return nil
 	}
+	return []ExpectationFailure{{
+		Code:    "ZCL_E_EXPECT_SEMANTIC_MIN_FIELDS",
+		Message: fmt.Sprintf("meaningful fields %d < minMeaningfulFields %d", meaningfulCount, minFields),
+	}}
+}
 
+func validateSemanticTraceRules(sem *SemanticExpectsV1, tf *TraceFacts, meaningfulCount, nonEmptyCount int64) []ExpectationFailure {
 	traceRules := len(sem.RequireToolOps) > 0 || len(sem.RequireCommandPrefix) > 0 || len(sem.RequireMCPTool) > 0 || sem.SuspiciousBoilerplate
-	if traceRules && tf == nil {
-		failures = append(failures, ExpectationFailure{
-			Code:    "ZCL_E_EXPECT_TRACE_MISSING",
-			Message: "semantic expectations require trace-derived facts",
-		})
-		return failures
+	if !traceRules {
+		return nil
 	}
 	if tf == nil {
-		return failures
+		return []ExpectationFailure{{
+			Code:    "ZCL_E_EXPECT_TRACE_MISSING",
+			Message: "semantic expectations require trace-derived facts",
+		}}
 	}
-
-	if len(sem.RequireToolOps) > 0 {
-		ok := false
-		for _, seen := range tf.ToolOpsSeen {
-			if slices.Contains(sem.RequireToolOps, seen) {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_TOOL_OP",
-				Message: "required semantic tool op not observed in trace",
-			})
-		}
+	failures := make([]ExpectationFailure, 0, 4)
+	if len(sem.RequireToolOps) > 0 && !containsAny(sem.RequireToolOps, tf.ToolOpsSeen) {
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_SEMANTIC_TOOL_OP",
+			Message: "required semantic tool op not observed in trace",
+		})
 	}
-
-	if len(sem.RequireCommandPrefix) > 0 {
-		ok := false
-		for _, seen := range tf.CommandNamesSeen {
-			for _, pref := range sem.RequireCommandPrefix {
-				if pref != "" && strings.HasPrefix(seen, pref) {
-					ok = true
-					break
-				}
-			}
-			if ok {
-				break
-			}
-		}
-		if !ok {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_COMMAND_PREFIX",
-				Message: "required semantic command prefix not observed in trace",
-			})
-		}
+	if len(sem.RequireCommandPrefix) > 0 && !hasPrefixMatch(tf.CommandNamesSeen, sem.RequireCommandPrefix) {
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_SEMANTIC_COMMAND_PREFIX",
+			Message: "required semantic command prefix not observed in trace",
+		})
 	}
-
-	if len(sem.RequireMCPTool) > 0 {
-		ok := false
-		for _, seen := range tf.MCPToolsSeen {
-			for _, req := range sem.RequireMCPTool {
-				if seen == req {
-					ok = true
-					break
-				}
-			}
-			if ok {
-				break
-			}
-		}
-		if !ok {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_MCP_TOOL",
-				Message: "required semantic MCP tool not observed in trace",
-			})
-		}
+	if len(sem.RequireMCPTool) > 0 && !containsAny(sem.RequireMCPTool, tf.MCPToolsSeen) {
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_SEMANTIC_MCP_TOOL",
+			Message: "required semantic MCP tool not observed in trace",
+		})
 	}
-
-	if sem.SuspiciousBoilerplate {
-		boilerplateMCP := sem.BoilerplateMCPTools
-		if len(boilerplateMCP) == 0 {
-			boilerplateMCP = defaultBoilerplateMCPTools
-		}
-		maxMeaningful := sem.MaxMeaningfulFieldsForBoilerplate
-		if maxMeaningful <= 0 {
-			maxMeaningful = 1
-		}
-
-		suspiciousMCP := false
-		if len(tf.MCPToolsSeen) > 0 && len(boilerplateMCP) > 0 {
-			suspiciousMCP = true
-			for _, name := range tf.MCPToolsSeen {
-				if !slices.Contains(boilerplateMCP, name) {
-					suspiciousMCP = false
-					break
-				}
-			}
-		}
-
-		suspiciousCmd := false
-		if len(tf.CommandNamesSeen) > 0 && len(sem.BoilerplateCommandPrefixes) > 0 {
-			suspiciousCmd = true
-			for _, seen := range tf.CommandNamesSeen {
-				matched := false
-				for _, pref := range sem.BoilerplateCommandPrefixes {
-					if pref != "" && strings.HasPrefix(seen, pref) {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					suspiciousCmd = false
-					break
-				}
-			}
-		}
-
-		if (suspiciousMCP || suspiciousCmd) && meaningfulCount <= maxMeaningful && nonEmptyCount <= maxMeaningful {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_SEMANTIC_BOILERPLATE",
-				Message: "trace appears boilerplate for low-semantic output",
-			})
-		}
+	if isSuspiciousBoilerplate(sem, tf, meaningfulCount, nonEmptyCount) {
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_SEMANTIC_BOILERPLATE",
+			Message: "trace appears boilerplate for low-semantic output",
+		})
 	}
-
 	return failures
+}
+
+func containsAny(required []string, seen []string) bool {
+	for _, item := range seen {
+		if slices.Contains(required, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPrefixMatch(seen []string, prefixes []string) bool {
+	for _, item := range seen {
+		for _, pref := range prefixes {
+			if pref != "" && strings.HasPrefix(item, pref) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSuspiciousBoilerplate(sem *SemanticExpectsV1, tf *TraceFacts, meaningfulCount, nonEmptyCount int64) bool {
+	if !sem.SuspiciousBoilerplate {
+		return false
+	}
+	boilerplateMCP := sem.BoilerplateMCPTools
+	if len(boilerplateMCP) == 0 {
+		boilerplateMCP = defaultBoilerplateMCPTools
+	}
+	maxMeaningful := sem.MaxMeaningfulFieldsForBoilerplate
+	if maxMeaningful <= 0 {
+		maxMeaningful = 1
+	}
+	suspiciousMCP := allInSet(tf.MCPToolsSeen, boilerplateMCP)
+	suspiciousCmd := allHavePrefix(tf.CommandNamesSeen, sem.BoilerplateCommandPrefixes)
+	return (suspiciousMCP || suspiciousCmd) && meaningfulCount <= maxMeaningful && nonEmptyCount <= maxMeaningful
+}
+
+func allInSet(values []string, allowed []string) bool {
+	if len(values) == 0 || len(allowed) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if slices.Contains(allowed, value) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func allHavePrefix(values []string, prefixes []string) bool {
+	if len(values) == 0 || len(prefixes) == 0 {
+		return false
+	}
+	for _, value := range values {
+		matched := false
+		for _, pref := range prefixes {
+			if pref != "" && strings.HasPrefix(value, pref) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isMeaningfulValue(v any, placeholders map[string]bool) bool {

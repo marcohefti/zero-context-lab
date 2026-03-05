@@ -11,58 +11,106 @@ import (
 )
 
 func EvaluateToolPolicy(policy ToolPolicySpec, attemptDir string) ([]string, error) {
-	if len(policy.Allow) == 0 && len(policy.Deny) == 0 {
+	if !hasToolPolicyRules(policy) {
 		return nil, nil
 	}
-	path := filepath.Join(strings.TrimSpace(attemptDir), "tool.calls.jsonl")
-	f, err := os.Open(path)
+	f, err := openToolPolicyTrace(attemptDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
+	if f == nil {
+		return nil, nil
+	}
 	defer func() { _ = f.Close() }()
+	return scanToolPolicyTrace(policy, f)
+}
 
+func hasToolPolicyRules(policy ToolPolicySpec) bool {
+	return len(policy.Allow) > 0 || len(policy.Deny) > 0
+}
+
+func scanToolPolicyTrace(policy ToolPolicySpec, f *os.File) ([]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var ev schema.TraceEventV1
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		violation, err := evaluateToolPolicyTraceLine(policy, sc.Text())
+		if err != nil {
 			return nil, err
 		}
-		namespace := strings.ToLower(strings.TrimSpace(ev.Tool))
-		op := strings.ToLower(strings.TrimSpace(ev.Op))
-		if !isToolPolicyActionableOp(op) || namespace == "" {
-			continue
-		}
-		target := strings.ToLower(strings.TrimSpace(toolPolicyTarget(ev)))
-		if len(policy.Allow) > 0 {
-			allowed := false
-			for _, rule := range policy.Allow {
-				if toolPolicyRuleMatches(rule, namespace, target, policy.Aliases) {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return []string{ReasonToolPolicy}, nil
-			}
-		}
-		for _, rule := range policy.Deny {
-			if toolPolicyRuleMatches(rule, namespace, target, policy.Aliases) {
-				return []string{ReasonToolPolicy}, nil
-			}
+		if violation {
+			return []string{ReasonToolPolicy}, nil
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
 	return nil, nil
+}
+
+func evaluateToolPolicyTraceLine(policy ToolPolicySpec, line string) (bool, error) {
+	ev, skip, err := parseToolPolicyTraceLine(line)
+	if err != nil || skip {
+		return false, err
+	}
+	namespace, target, actionable := toolPolicyMatchContext(ev)
+	if !actionable {
+		return false, nil
+	}
+	if !toolPolicyAllowed(policy.Allow, namespace, target, policy.Aliases) {
+		return true, nil
+	}
+	return toolPolicyDenied(policy.Deny, namespace, target, policy.Aliases), nil
+}
+
+func openToolPolicyTrace(attemptDir string) (*os.File, error) {
+	path := filepath.Join(strings.TrimSpace(attemptDir), "tool.calls.jsonl")
+	f, err := os.Open(path)
+	if err != nil && os.IsNotExist(err) {
+		return nil, nil
+	}
+	return f, err
+}
+
+func parseToolPolicyTraceLine(line string) (schema.TraceEventV1, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return schema.TraceEventV1{}, true, nil
+	}
+	var ev schema.TraceEventV1
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return schema.TraceEventV1{}, false, err
+	}
+	return ev, false, nil
+}
+
+func toolPolicyMatchContext(ev schema.TraceEventV1) (namespace, target string, actionable bool) {
+	namespace = strings.ToLower(strings.TrimSpace(ev.Tool))
+	op := strings.ToLower(strings.TrimSpace(ev.Op))
+	if !isToolPolicyActionableOp(op) || namespace == "" {
+		return "", "", false
+	}
+	return namespace, strings.ToLower(strings.TrimSpace(toolPolicyTarget(ev))), true
+}
+
+func toolPolicyAllowed(allow []ToolPolicyRuleSpec, namespace, target string, aliases map[string][]string) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	for _, rule := range allow {
+		if toolPolicyRuleMatches(rule, namespace, target, aliases) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolPolicyDenied(deny []ToolPolicyRuleSpec, namespace, target string, aliases map[string][]string) bool {
+	for _, rule := range deny {
+		if toolPolicyRuleMatches(rule, namespace, target, aliases) {
+			return true
+		}
+	}
+	return false
 }
 
 func isToolPolicyActionableOp(op string) bool {

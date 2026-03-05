@@ -88,104 +88,21 @@ func (c *countingReadCloser) Close() error { return c.rc.Close() }
 // Start starts a simple reverse proxy funnel that records one trace event per HTTP request.
 // It runs until ctx is canceled (or maxRequests is reached when > 0).
 func Start(ctx context.Context, env trace.Env, listenAddr string, upstream string, maxPreviewBytes int, maxRequests int) (*Handle, error) {
-	if strings.TrimSpace(listenAddr) == "" {
-		listenAddr = "127.0.0.1:0"
-	}
-	if strings.TrimSpace(upstream) == "" {
-		return nil, fmt.Errorf("missing upstream url")
-	}
-	if maxPreviewBytes < 0 {
-		maxPreviewBytes = 0
-	}
-
-	up, err := url.Parse(strings.TrimSpace(upstream))
+	cfg, err := newProxyStartConfig(listenAddr, upstream, maxPreviewBytes, maxRequests, env)
 	if err != nil {
 		return nil, err
 	}
-	if up.Scheme != "http" && up.Scheme != "https" {
-		return nil, fmt.Errorf("upstream url must be http(s)")
-	}
-
-	ln, err := net.Listen("tcp", listenAddr)
+	ln, err := net.Listen("tcp", cfg.listenAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	var handled int64
-	var stopOnce sync.Once
-
-	tracePath := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
-	client := &http.Client{Timeout: 60 * time.Second}
-
-	srv := &http.Server{}
-	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		idx := atomic.AddInt64(&handled, 1)
-		if maxRequests > 0 && int(idx) > maxRequests {
-			http.Error(w, "proxy request limit reached", http.StatusServiceUnavailable)
-			return
-		}
-
-		start := time.Now()
-		ctxReq := r.Context()
-
-		// Capture a small prefix for evidence, but forward the full body.
-		var head []byte
-		bodyRest := r.Body
-		if bodyRest == nil {
-			bodyRest = http.NoBody
-		}
-		if bodyRest != http.NoBody {
-			head, _ = io.ReadAll(io.LimitReader(bodyRest, int64(maxPreviewBytes)+1))
-		}
-		forwardBody := io.NopCloser(io.MultiReader(bytes.NewReader(head), bodyRest))
-		reqCounter := &countingReadCloser{rc: forwardBody}
-
-		reqURL := *up
-		reqURL.Path = singleJoiningSlash(up.Path, r.URL.Path)
-		reqURL.RawQuery = r.URL.RawQuery
-		_, urlApplied := redact.Text(reqURL.String())
-		outReq, err := http.NewRequestWithContext(ctxReq, r.Method, reqURL.String(), reqCounter)
-		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		outReq.Header = r.Header.Clone()
-
-		resp, err := client.Do(outReq)
-		if err != nil {
-			http.Error(w, "upstream error", http.StatusBadGateway)
-			writeHTTPEvent(start, env, tracePath, r.Method, reqURL.String(), reqCounter.total, 0, "", false, nil, maxPreviewBytes, err, urlApplied.Names)
-			return
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		for k, vv := range resp.Header {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-
-		var cap boundedCapture
-		cap.max = maxPreviewBytes
-		tee := io.TeeReader(resp.Body, &cap)
-		_, _ = io.Copy(w, tee)
-
-		prev, total, trunc := cap.snapshot()
-		prevRed, prevApplied := redact.Text(prev)
-		prevRed, capped := capStringBytes(prevRed, maxPreviewBytes)
-		writeHTTPEvent(start, env, tracePath, r.Method, reqURL.String(), reqCounter.total, total, prevRed, trunc || capped, &resp.StatusCode, maxPreviewBytes, nil, append(urlApplied.Names, prevApplied.Names...))
-
-		if maxRequests > 0 && int(idx) >= maxRequests {
-			stopOnce.Do(func() {
-				go func() {
-					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					_ = srv.Shutdown(shutdownCtx)
-				}()
-			})
-		}
-	})
+	server := newProxyServer(cfg)
+	srv := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           http.HandlerFunc(server.handleRequest),
+	}
+	server.srv = srv
 
 	done := make(chan error, 1)
 	go func() {
@@ -211,6 +128,191 @@ func Start(ctx context.Context, env trace.Env, listenAddr string, upstream strin
 		},
 	}
 	return h, nil
+}
+
+type proxyStartConfig struct {
+	listenAddr      string
+	maxPreviewBytes int
+	maxRequests     int
+	env             trace.Env
+	up              *url.URL
+}
+
+func newProxyStartConfig(listenAddr, upstream string, maxPreviewBytes, maxRequests int, env trace.Env) (proxyStartConfig, error) {
+	if strings.TrimSpace(listenAddr) == "" {
+		listenAddr = "127.0.0.1:0"
+	}
+	if strings.TrimSpace(upstream) == "" {
+		return proxyStartConfig{}, fmt.Errorf("missing upstream url")
+	}
+	if maxPreviewBytes < 0 {
+		maxPreviewBytes = 0
+	}
+	up, err := url.Parse(strings.TrimSpace(upstream))
+	if err != nil {
+		return proxyStartConfig{}, err
+	}
+	if up.Scheme != "http" && up.Scheme != "https" {
+		return proxyStartConfig{}, fmt.Errorf("upstream url must be http(s)")
+	}
+	return proxyStartConfig{
+		listenAddr:      listenAddr,
+		maxPreviewBytes: maxPreviewBytes,
+		maxRequests:     maxRequests,
+		env:             env,
+		up:              up,
+	}, nil
+}
+
+type proxyServer struct {
+	env             trace.Env
+	tracePath       string
+	client          *http.Client
+	up              *url.URL
+	maxPreviewBytes int
+	maxRequests     int
+	handled         int64
+	stopOnce        sync.Once
+	srv             *http.Server
+}
+
+func newProxyServer(cfg proxyStartConfig) *proxyServer {
+	return &proxyServer{
+		env:             cfg.env,
+		tracePath:       filepath.Join(cfg.env.OutDirAbs, "tool.calls.jsonl"),
+		client:          &http.Client{Timeout: 60 * time.Second},
+		up:              cfg.up,
+		maxPreviewBytes: cfg.maxPreviewBytes,
+		maxRequests:     cfg.maxRequests,
+	}
+}
+
+func (p *proxyServer) handleRequest(w http.ResponseWriter, r *http.Request) {
+	idx, blocked := p.nextRequest()
+	if blocked {
+		http.Error(w, "proxy request limit reached", http.StatusServiceUnavailable)
+		return
+	}
+	start := time.Now()
+
+	reqCtx, err := p.newUpstreamRequest(r)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	resp, err := p.client.Do(reqCtx.request)
+	if err != nil {
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		writeHTTPEvent(start, p.env, p.tracePath, r.Method, reqCtx.url, reqCtx.reqBytes(), 0, "", false, nil, p.maxPreviewBytes, err, reqCtx.urlRedactions)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	out := p.streamResponse(w, resp)
+	writeHTTPEvent(start, p.env, p.tracePath, r.Method, reqCtx.url, reqCtx.reqBytes(), out.totalBytes, out.preview, out.truncated, &resp.StatusCode, p.maxPreviewBytes, nil, append(reqCtx.urlRedactions, out.previewRedactions...))
+	p.shutdownAtLimit(idx)
+}
+
+func (p *proxyServer) nextRequest() (int64, bool) {
+	idx := atomic.AddInt64(&p.handled, 1)
+	if p.maxRequests > 0 && int(idx) > p.maxRequests {
+		return idx, true
+	}
+	return idx, false
+}
+
+type upstreamRequestContext struct {
+	request       *http.Request
+	requestBody   *countingReadCloser
+	url           string
+	urlRedactions []string
+}
+
+func (c upstreamRequestContext) reqBytes() int64 {
+	if c.requestBody == nil {
+		return 0
+	}
+	return c.requestBody.total
+}
+
+func (p *proxyServer) newUpstreamRequest(r *http.Request) (upstreamRequestContext, error) {
+	reqBody := p.captureForwardBody(r.Body)
+	reqURL := *p.up
+	reqURL.Path = singleJoiningSlash(p.up.Path, r.URL.Path)
+	reqURL.RawQuery = r.URL.RawQuery
+	_, urlApplied := redact.Text(reqURL.String())
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, reqURL.String(), reqBody)
+	if err != nil {
+		return upstreamRequestContext{}, err
+	}
+	outReq.Header = r.Header.Clone()
+	return upstreamRequestContext{
+		request:       outReq,
+		requestBody:   reqBody,
+		url:           reqURL.String(),
+		urlRedactions: urlApplied.Names,
+	}, nil
+}
+
+func (p *proxyServer) captureForwardBody(body io.ReadCloser) *countingReadCloser {
+	bodyRest := body
+	if bodyRest == nil {
+		bodyRest = http.NoBody
+	}
+	var head []byte
+	if bodyRest != http.NoBody {
+		head, _ = io.ReadAll(io.LimitReader(bodyRest, int64(p.maxPreviewBytes)+1))
+	}
+	forwardBody := io.NopCloser(io.MultiReader(bytes.NewReader(head), bodyRest))
+	return &countingReadCloser{rc: forwardBody}
+}
+
+type streamedResponse struct {
+	preview           string
+	totalBytes        int64
+	truncated         bool
+	previewRedactions []string
+}
+
+func (p *proxyServer) streamResponse(w http.ResponseWriter, resp *http.Response) streamedResponse {
+	copyResponseHeaders(w, resp.Header)
+	w.WriteHeader(resp.StatusCode)
+
+	var cap boundedCapture
+	cap.max = p.maxPreviewBytes
+	tee := io.TeeReader(resp.Body, &cap)
+	_, _ = io.Copy(w, tee)
+
+	prev, total, trunc := cap.snapshot()
+	prevRed, prevApplied := redact.Text(prev)
+	prevRed, capped := capStringBytes(prevRed, p.maxPreviewBytes)
+	return streamedResponse{
+		preview:           prevRed,
+		totalBytes:        total,
+		truncated:         trunc || capped,
+		previewRedactions: prevApplied.Names,
+	}
+}
+
+func copyResponseHeaders(w http.ResponseWriter, headers http.Header) {
+	for k, vv := range headers {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+}
+
+func (p *proxyServer) shutdownAtLimit(idx int64) {
+	if p.maxRequests <= 0 || int(idx) < p.maxRequests {
+		return
+	}
+	p.stopOnce.Do(func() {
+		go func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = p.srv.Shutdown(shutdownCtx)
+		}()
+	})
 }
 
 func singleJoiningSlash(a, b string) string {

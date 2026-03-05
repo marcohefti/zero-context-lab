@@ -27,12 +27,12 @@ func TestCampaignRun_Status_Report_PublishCheck(t *testing.T) {
 	writeSuiteFile(t, suiteB, `{
   "version": 1,
   "suiteId": "campaign-suite-b",
-  "missions": [
-    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
-  ]
-}`)
+	  "missions": [
+	    { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
+	  ]
+	}`)
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(strings.TrimSpace(fmt.Sprintf(`
+	mustWriteFile(t, specPath, strings.TrimSpace(fmt.Sprintf(`
 schemaVersion: 1
 campaignId: cmp-int
 outRoot: %q
@@ -50,9 +50,7 @@ flows:
     runner:
       type: process_cmd
       command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
-	`, outRoot))+"\n"), 0o644); err != nil {
-		t.Fatalf("write campaign spec: %v", err)
-	}
+		`, outRoot))+"\n")
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
@@ -64,18 +62,12 @@ flows:
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
-	}
 	var run struct {
 		CampaignID string `json:"campaignId"`
 		RunID      string `json:"runId"`
 		Status     string `json:"status"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
-		t.Fatalf("unmarshal campaign run json: %v stdout=%q", err, stdout.String())
-	}
+	runCLICommandJSON(t, &r, &stdout, &stderr, 0, []string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"}, &run, "campaign run")
 	if run.CampaignID != "cmp-int" || run.RunID == "" || run.Status != "valid" {
 		t.Fatalf("unexpected campaign run summary: %+v", run)
 	}
@@ -86,60 +78,27 @@ flows:
 		t.Fatalf("expected RESULTS.md: %v", err)
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{"campaign", "status", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign status expected 0, got %d stderr=%q", code, stderr.String())
-	}
 	var status struct {
 		RunID  string `json:"runId"`
 		Status string `json:"status"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
-		t.Fatalf("unmarshal campaign status json: %v", err)
-	}
+	runCLICommandJSON(t, &r, &stdout, &stderr, 0, []string{"campaign", "status", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"}, &status, "campaign status")
 	if status.RunID != run.RunID || status.Status != "valid" {
 		t.Fatalf("unexpected campaign status: %+v", status)
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{"campaign", "report", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign report expected 0, got %d stderr=%q", code, stderr.String())
-	}
 	var report struct {
 		Status      string `json:"status"`
 		GatesPassed int    `json:"gatesPassed"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
-		t.Fatalf("unmarshal campaign report json: %v", err)
-	}
+	runCLICommandJSON(t, &r, &stdout, &stderr, 0, []string{"campaign", "report", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"}, &report, "campaign report")
 	if report.Status != "valid" || report.GatesPassed != 1 {
 		t.Fatalf("unexpected campaign report: %+v", report)
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{"campaign", "publish-check", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign publish-check expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{"campaign", "report", "--spec", specPath, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign report --spec expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = r.Run([]string{"campaign", "publish-check", "--spec", specPath, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign publish-check --spec expected 0, got %d stderr=%q", code, stderr.String())
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "publish-check", "--campaign-id", "cmp-int", "--out-root", outRoot, "--json"}, "campaign publish-check")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "report", "--spec", specPath, "--json"}, "campaign report --spec")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "publish-check", "--spec", specPath, "--json"}, "campaign publish-check --spec")
 }
 
 func TestCampaignRun_NativeCodexAppServerFlow(t *testing.T) {
@@ -153,10 +112,10 @@ func TestCampaignRun_NativeCodexAppServerFlow(t *testing.T) {
   "missions": [
     { "missionId": "m1", "prompt": "p1", "expects": { "ok": true } }
   ]
-}`)
+	}`)
 
 	specPath := filepath.Join(specDir, "campaign-native.yaml")
-	if err := os.WriteFile(specPath, []byte(strings.TrimSpace(fmt.Sprintf(`
+	mustWriteFile(t, specPath, strings.TrimSpace(fmt.Sprintf(`
 schemaVersion: 1
 campaignId: cmp-native
 outRoot: %q
@@ -173,9 +132,7 @@ flows:
       cwd:
         mode: temp_empty_per_attempt
         basePath: %q
-	`, outRoot, runnerCwdBase))+"\n"), 0o644); err != nil {
-		t.Fatalf("write native campaign spec: %v", err)
-	}
+		`, outRoot, runnerCwdBase))+"\n")
 
 	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
@@ -191,37 +148,16 @@ flows:
 		Stderr:  &stderr,
 	}
 
-	if code := r.Run([]string{"campaign", "lint", "--spec", specPath, "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign lint expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "doctor", "--spec", specPath, "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign doctor expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "lint", "--spec", specPath, "--out-root", outRoot, "--json"}, "campaign lint")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "doctor", "--spec", specPath, "--out-root", outRoot, "--json"}, "campaign doctor")
 	var run struct {
 		CampaignID string `json:"campaignId"`
 		RunID      string `json:"runId"`
 		Status     string `json:"status"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
-		t.Fatalf("unmarshal campaign run json: %v stdout=%q", err, stdout.String())
-	}
+	runCLICommandJSON(t, &r, &stdout, &stderr, 0, []string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"}, &run, "campaign run")
 	if run.CampaignID != "cmp-native" || run.RunID == "" || run.Status != "valid" {
 		t.Fatalf("unexpected campaign run summary: %+v", run)
-	}
-	statePath := filepath.Join(outRoot, "campaigns", "cmp-native", "campaign.run.state.json")
-	stateRaw, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read campaign run state: %v", err)
 	}
 	var state struct {
 		FlowRuns []struct {
@@ -230,19 +166,13 @@ flows:
 			} `json:"attempts"`
 		} `json:"flowRuns"`
 	}
-	if err := json.Unmarshal(stateRaw, &state); err != nil {
-		t.Fatalf("unmarshal campaign run state: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(outRoot, "campaigns", "cmp-native", "campaign.run.state.json"), &state, "campaign run state")
 	if len(state.FlowRuns) != 1 || len(state.FlowRuns[0].Attempts) != 1 {
 		t.Fatalf("unexpected campaign run state shape: %+v", state)
 	}
 	attemptDir := state.FlowRuns[0].Attempts[0].AttemptDir
 	if strings.TrimSpace(attemptDir) == "" {
 		t.Fatalf("expected non-empty attemptDir in campaign run state")
-	}
-	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
-	if err != nil {
-		t.Fatalf("read attempt.runtime.env.json: %v", err)
 	}
 	var runtimeEnv struct {
 		Runtime struct {
@@ -251,9 +181,7 @@ flows:
 			StartCwdRetain string `json:"startCwdRetain"`
 		} `json:"runtime"`
 	}
-	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
-		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(attemptDir, "attempt.runtime.env.json"), &runtimeEnv, "attempt.runtime.env.json")
 	if runtimeEnv.Runtime.StartCwdMode != "temp_empty_per_attempt" {
 		t.Fatalf("expected temp_empty_per_attempt runner cwd mode, got %+v", runtimeEnv.Runtime)
 	}
@@ -267,35 +195,11 @@ flows:
 		t.Fatalf("expected cleaned temp runner cwd, stat err=%v path=%q", err, runtimeEnv.Runtime.StartCwd)
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "canary", "--spec", specPath, "--out-root", outRoot, "--missions", "1", "--json"}); code != 0 {
-		t.Fatalf("campaign canary expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "status", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign status expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "report", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign report expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "resume", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign resume expected 0, got %d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := r.Run([]string{"campaign", "publish-check", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}); code != 0 {
-		t.Fatalf("campaign publish-check expected 0, got %d stderr=%q", code, stderr.String())
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "canary", "--spec", specPath, "--out-root", outRoot, "--missions", "1", "--json"}, "campaign canary")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "status", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}, "campaign status")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "report", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}, "campaign report")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "resume", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}, "campaign resume")
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "publish-check", "--campaign-id", "cmp-native", "--out-root", outRoot, "--json"}, "campaign publish-check")
 }
 
 func TestCampaignRun_InvalidAndPublishCheckFails(t *testing.T) {
@@ -1223,23 +1127,14 @@ func TestCampaignRun_RuntimeEnvPromptMetadataPerFlow(t *testing.T) {
 	specDir := t.TempDir()
 	missionDefault := filepath.Join(specDir, "missions-default")
 	missionFlow := filepath.Join(specDir, "missions-flow")
-	for _, p := range []string{missionDefault, missionFlow} {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", p, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(missionDefault, "m1.md"), []byte("default prompt"), 0o644); err != nil {
-		t.Fatalf("write default prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(missionFlow, "m1.md"), []byte("flow prompt"), 0o644); err != nil {
-		t.Fatalf("write flow prompt: %v", err)
-	}
+	mustMkdirAll(t, missionDefault)
+	mustMkdirAll(t, missionFlow)
+	mustWriteFile(t, filepath.Join(missionDefault, "m1.md"), "default prompt")
+	mustWriteFile(t, filepath.Join(missionFlow, "m1.md"), "flow prompt")
 	templatePath := filepath.Join(specDir, "prompt-template.txt")
-	if err := os.WriteFile(templatePath, []byte("flow={{flowId}} prompt={{prompt}}"), 0o644); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
+	mustWriteFile(t, templatePath, "flow={{flowId}} prompt={{prompt}}")
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(`
+	mustWriteFile(t, specPath, `
 schemaVersion: 1
 campaignId: cmp-runtime-env-prompt-meta
 missionSource:
@@ -1257,9 +1152,7 @@ flows:
     runner:
       type: process_cmd
       command: ["`+os.Args[0]+`", "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok"]
-`), 0o644); err != nil {
-		t.Fatalf("write campaign spec: %v", err)
-	}
+	`)
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
 	var stdout bytes.Buffer
@@ -1270,14 +1163,7 @@ flows:
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
-	if code != 0 {
-		t.Fatalf("campaign run expected 0, got %d stderr=%q", code, stderr.String())
-	}
-	stateRaw, err := os.ReadFile(filepath.Join(outRoot, "campaigns", "cmp-runtime-env-prompt-meta", "campaign.run.state.json"))
-	if err != nil {
-		t.Fatalf("read campaign state: %v", err)
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 0, []string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"}, "campaign run")
 	var st struct {
 		Status   string `json:"status"`
 		FlowRuns []struct {
@@ -1287,19 +1173,13 @@ flows:
 			} `json:"attempts"`
 		} `json:"flowRuns"`
 	}
-	if err := json.Unmarshal(stateRaw, &st); err != nil {
-		t.Fatalf("unmarshal campaign state: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(outRoot, "campaigns", "cmp-runtime-env-prompt-meta", "campaign.run.state.json"), &st, "campaign state")
 	if st.Status != "valid" || len(st.FlowRuns) != 1 || len(st.FlowRuns[0].Attempts) != 1 {
 		t.Fatalf("unexpected campaign state: %+v", st)
 	}
 	attemptDir := st.FlowRuns[0].Attempts[0].AttemptDir
 	if strings.TrimSpace(attemptDir) == "" {
 		t.Fatalf("expected attemptDir in campaign state")
-	}
-	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
-	if err != nil {
-		t.Fatalf("read attempt.runtime.env.json: %v", err)
 	}
 	var runtimeEnv struct {
 		Prompt struct {
@@ -1311,9 +1191,7 @@ flows:
 			Explicit map[string]string `json:"explicit"`
 		} `json:"env"`
 	}
-	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
-		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(attemptDir, "attempt.runtime.env.json"), &runtimeEnv, "attempt.runtime.env.json")
 	if runtimeEnv.Prompt.SourceKind != "flow_prompt_template" {
 		t.Fatalf("unexpected prompt source kind: %+v", runtimeEnv.Prompt)
 	}
@@ -1697,20 +1575,12 @@ func TestCampaignRun_ExamModeOracleEvaluatorFailureInvalidatesAttempt(t *testing
 	specDir := t.TempDir()
 	promptDir := filepath.Join(specDir, "prompts")
 	oracleDir := filepath.Join(specDir, "oracles")
-	if err := os.MkdirAll(promptDir, 0o755); err != nil {
-		t.Fatalf("mkdir prompts: %v", err)
-	}
-	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
-		t.Fatalf("mkdir oracles: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve the task and return proof JSON."), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("expected title: hello"), 0o644); err != nil {
-		t.Fatalf("write oracle: %v", err)
-	}
+	mustMkdirAll(t, promptDir)
+	mustMkdirAll(t, oracleDir)
+	mustWriteFile(t, filepath.Join(promptDir, "m1.md"), "Solve the task and return proof JSON.")
+	mustWriteFile(t, filepath.Join(oracleDir, "m1.md"), "expected title: hello")
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(`
+	mustWriteFile(t, specPath, `
 schemaVersion: 1
 campaignId: cmp-exam-run
 promptMode: exam
@@ -1734,9 +1604,7 @@ flows:
         mode: auto_from_result_json
         resultChannel:
           kind: file_json
-`), 0o644); err != nil {
-		t.Fatalf("write campaign spec: %v", err)
-	}
+	`)
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 	t.Setenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL", "1")
 
@@ -1748,15 +1616,7 @@ flows:
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
-	if code != 2 {
-		t.Fatalf("campaign run expected 2 for oracle fail, got %d stderr=%q", code, stderr.String())
-	}
-	statePath := filepath.Join(outRoot, "campaigns", "cmp-exam-run", "campaign.run.state.json")
-	stateRaw, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 2, []string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"}, "campaign run")
 	var st struct {
 		Status       string `json:"status"`
 		MissionGates []struct {
@@ -1770,9 +1630,7 @@ flows:
 			} `json:"attempts"`
 		} `json:"flowRuns"`
 	}
-	if err := json.Unmarshal(stateRaw, &st); err != nil {
-		t.Fatalf("unmarshal state: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(outRoot, "campaigns", "cmp-exam-run", "campaign.run.state.json"), &st, "campaign run state")
 	if st.Status != "invalid" {
 		t.Fatalf("expected invalid campaign status, got %+v", st)
 	}
@@ -1786,17 +1644,11 @@ flows:
 	if attemptDir == "" {
 		t.Fatalf("expected attemptDir in run state: %+v", st.FlowRuns[0].Attempts[0])
 	}
-	verdictRaw, err := os.ReadFile(filepath.Join(attemptDir, "oracle.verdict.json"))
-	if err != nil {
-		t.Fatalf("read oracle verdict artifact: %v", err)
-	}
 	var verdict struct {
 		OK          bool     `json:"ok"`
 		ReasonCodes []string `json:"reasonCodes"`
 	}
-	if err := json.Unmarshal(verdictRaw, &verdict); err != nil {
-		t.Fatalf("unmarshal oracle verdict: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(attemptDir, "oracle.verdict.json"), &verdict, "oracle verdict")
 	if verdict.OK || !strings.Contains(strings.Join(verdict.ReasonCodes, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_FAILED") {
 		t.Fatalf("unexpected oracle verdict: %+v", verdict)
 	}
@@ -1807,20 +1659,12 @@ func TestCampaignRun_ExamModeInfraFeedbackSkipsOracleAndBucketsInfra(t *testing.
 	specDir := t.TempDir()
 	promptDir := filepath.Join(specDir, "prompts")
 	oracleDir := filepath.Join(specDir, "oracles")
-	if err := os.MkdirAll(promptDir, 0o755); err != nil {
-		t.Fatalf("mkdir prompts: %v", err)
-	}
-	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
-		t.Fatalf("mkdir oracles: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptDir, "m1.md"), []byte("Solve the task and return proof JSON."), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oracleDir, "m1.md"), []byte("expected title: hello"), 0o644); err != nil {
-		t.Fatalf("write oracle: %v", err)
-	}
+	mustMkdirAll(t, promptDir)
+	mustMkdirAll(t, oracleDir)
+	mustWriteFile(t, filepath.Join(promptDir, "m1.md"), "Solve the task and return proof JSON.")
+	mustWriteFile(t, filepath.Join(oracleDir, "m1.md"), "expected title: hello")
 	specPath := filepath.Join(specDir, "campaign.yaml")
-	if err := os.WriteFile(specPath, []byte(`
+	mustWriteFile(t, specPath, `
 schemaVersion: 1
 campaignId: cmp-exam-infra-feedback
 promptMode: exam
@@ -1844,9 +1688,7 @@ flows:
         mode: auto_from_result_json
         resultChannel:
           kind: file_json
-`), 0o644); err != nil {
-		t.Fatalf("write campaign spec: %v", err)
-	}
+	`)
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 	t.Setenv("ZCL_WANT_CAMPAIGN_ORACLE_EVAL", "1")
 
@@ -1858,16 +1700,7 @@ flows:
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	code := r.Run([]string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"})
-	if code != 2 {
-		t.Fatalf("campaign run expected 2 for infra failure, got %d stderr=%q", code, stderr.String())
-	}
-
-	statePath := filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.run.state.json")
-	stateRaw, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
+	runCLICommand(t, &r, &stdout, &stderr, 2, []string{"campaign", "run", "--spec", specPath, "--out-root", outRoot, "--json"}, "campaign run")
 	var st struct {
 		MissionGates []struct {
 			Reasons  []string `json:"reasons"`
@@ -1878,34 +1711,7 @@ flows:
 			} `json:"attempts"`
 		} `json:"missionGates"`
 	}
-	if err := json.Unmarshal(stateRaw, &st); err != nil {
-		t.Fatalf("unmarshal state: %v", err)
-	}
-	if len(st.MissionGates) != 1 || len(st.MissionGates[0].Attempts) != 1 {
-		t.Fatalf("expected one mission gate/attempt, got %+v", st)
-	}
-	attempt := st.MissionGates[0].Attempts[0]
-	if attempt.Status != "infra_failed" {
-		t.Fatalf("expected infra_failed attempt status, got %+v", attempt)
-	}
-	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_RUNTIME_TIMEOUT") {
-		t.Fatalf("expected mission gate reasons to include infra code, got %+v", st.MissionGates[0].Reasons)
-	}
-	if strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
-		t.Fatalf("did not expect oracle evaluation error reason for infra attempt, got %+v", st.MissionGates[0].Reasons)
-	}
-	if strings.Contains(strings.Join(attempt.Errors, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
-		t.Fatalf("did not expect oracle evaluation error on attempt, got %+v", attempt)
-	}
-	if _, err := os.Stat(filepath.Join(attempt.AttemptDir, "oracle.verdict.json")); !os.IsNotExist(err) {
-		t.Fatalf("expected oracle.verdict.json to be absent when oracle evaluation is skipped, err=%v", err)
-	}
-
-	summaryPath := filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.summary.json")
-	summaryRaw, err := os.ReadFile(summaryPath)
-	if err != nil {
-		t.Fatalf("read summary: %v", err)
-	}
+	mustReadJSONFile(t, filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.run.state.json"), &st, "campaign run state")
 	var sum struct {
 		FailureBuckets struct {
 			InfraFailed   int `json:"infraFailed"`
@@ -1918,15 +1724,9 @@ flows:
 			MissionFailed int `json:"missionFailed"`
 		} `json:"flows"`
 	}
-	if err := json.Unmarshal(summaryRaw, &sum); err != nil {
-		t.Fatalf("unmarshal summary: %v", err)
-	}
-	if sum.FailureBuckets.InfraFailed != 1 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 0 {
-		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
-	}
-	if len(sum.Flows) != 1 || sum.Flows[0].InfraFailed != 1 || sum.Flows[0].OracleFailed != 0 || sum.Flows[0].MissionFailed != 0 {
-		t.Fatalf("unexpected flow failure buckets: %+v", sum.Flows)
-	}
+	mustReadJSONFile(t, filepath.Join(outRoot, "campaigns", "cmp-exam-infra-feedback", "campaign.summary.json"), &sum, "campaign summary")
+	assertExamInfraFeedbackState(t, st)
+	assertExamInfraFeedbackSummary(t, sum)
 }
 
 func TestCampaignRun_ExamModeFormatOnlyMismatchCanWarnNonGating(t *testing.T) {
@@ -2084,4 +1884,138 @@ func countJSONLLines(t *testing.T, path string) int {
 		t.Fatalf("scan %s: %v", path, err)
 	}
 	return count
+}
+
+func runCLICommand(t *testing.T, r *Runner, stdout *bytes.Buffer, stderr *bytes.Buffer, expectedCode int, args []string, label string) {
+	t.Helper()
+	stdout.Reset()
+	stderr.Reset()
+	if code := r.Run(args); code != expectedCode {
+		t.Fatalf("%s expected %d, got %d stderr=%q", label, expectedCode, code, stderr.String())
+	}
+}
+
+func runCLICommandJSON(t *testing.T, r *Runner, stdout *bytes.Buffer, stderr *bytes.Buffer, expectedCode int, args []string, out any, label string) {
+	t.Helper()
+	runCLICommand(t, r, stdout, stderr, expectedCode, args, label)
+	if out == nil {
+		return
+	}
+	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
+		t.Fatalf("unmarshal %s: %v stdout=%q", label, err, stdout.String())
+	}
+}
+
+func mustReadJSONFile(t *testing.T, path string, out any, label string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", label, err)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		t.Fatalf("unmarshal %s: %v", label, err)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string, content string) {
+	t.Helper()
+	normalized := normalizeTestFileContent(content)
+	if err := os.WriteFile(path, []byte(normalized), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mustMkdirAll(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
+func normalizeTestFileContent(content string) string {
+	normalized := strings.ReplaceAll(content, "\t", "  ")
+	lines := strings.Split(normalized, "\n")
+	minIndent := -1
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := leadingSpaces(line)
+		if minIndent == -1 || indent < minIndent {
+			minIndent = indent
+		}
+	}
+	if minIndent <= 0 {
+		return normalized
+	}
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(line) >= minIndent {
+			lines[i] = line[minIndent:]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func leadingSpaces(line string) int {
+	count := 0
+	for count < len(line) && line[count] == ' ' {
+		count++
+	}
+	return count
+}
+
+func assertExamInfraFeedbackState(t *testing.T, st struct {
+	MissionGates []struct {
+		Reasons  []string `json:"reasons"`
+		Attempts []struct {
+			AttemptDir string   `json:"attemptDir"`
+			Status     string   `json:"status"`
+			Errors     []string `json:"errors"`
+		} `json:"attempts"`
+	} `json:"missionGates"`
+}) {
+	t.Helper()
+	if len(st.MissionGates) != 1 || len(st.MissionGates[0].Attempts) != 1 {
+		t.Fatalf("expected one mission gate/attempt, got %+v", st)
+	}
+	attempt := st.MissionGates[0].Attempts[0]
+	if attempt.Status != "infra_failed" {
+		t.Fatalf("expected infra_failed attempt status, got %+v", attempt)
+	}
+	if !strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_RUNTIME_TIMEOUT") {
+		t.Fatalf("expected mission gate reasons to include infra code, got %+v", st.MissionGates[0].Reasons)
+	}
+	if strings.Contains(strings.Join(st.MissionGates[0].Reasons, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
+		t.Fatalf("did not expect oracle evaluation error reason for infra attempt, got %+v", st.MissionGates[0].Reasons)
+	}
+	if strings.Contains(strings.Join(attempt.Errors, ","), "ZCL_E_CAMPAIGN_ORACLE_EVALUATION_ERROR") {
+		t.Fatalf("did not expect oracle evaluation error on attempt, got %+v", attempt)
+	}
+	if _, err := os.Stat(filepath.Join(attempt.AttemptDir, "oracle.verdict.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected oracle.verdict.json to be absent when oracle evaluation is skipped, err=%v", err)
+	}
+}
+
+func assertExamInfraFeedbackSummary(t *testing.T, sum struct {
+	FailureBuckets struct {
+		InfraFailed   int `json:"infraFailed"`
+		OracleFailed  int `json:"oracleFailed"`
+		MissionFailed int `json:"missionFailed"`
+	} `json:"failureBuckets"`
+	Flows []struct {
+		InfraFailed   int `json:"infraFailed"`
+		OracleFailed  int `json:"oracleFailed"`
+		MissionFailed int `json:"missionFailed"`
+	} `json:"flows"`
+}) {
+	t.Helper()
+	if sum.FailureBuckets.InfraFailed != 1 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 0 {
+		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
+	}
+	if len(sum.Flows) != 1 || sum.Flows[0].InfraFailed != 1 || sum.Flows[0].OracleFailed != 0 || sum.Flows[0].MissionFailed != 0 {
+		t.Fatalf("unexpected flow failure buckets: %+v", sum.Flows)
+	}
 }

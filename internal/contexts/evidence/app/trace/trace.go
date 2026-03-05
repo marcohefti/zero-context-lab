@@ -66,25 +66,10 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		return err
 	}
 
-	var exitCodePtr *int
-	if res.SpawnError == "" {
-		exitCode := res.ExitCode
-		exitCodePtr = &exitCode
-	}
-	code := res.SpawnError
-	if code == "" && res.ExitCode != 0 {
-		code = "ZCL_E_TOOL_FAILED"
-	}
-
-	outPrev, outApplied := redact.Text(res.OutPreview)
-	errPrev, errApplied := redact.Text(res.ErrPreview)
-
-	outPrev, outCapped := capStringBytes(outPrev, schema.PreviewMaxBytesV1)
-	errPrev, errCapped := capStringBytes(errPrev, schema.PreviewMaxBytesV1)
-
-	redactions := unionStrings(argvApplied, outApplied.Names, errApplied.Names)
+	result := cliTraceResult(res)
+	outPrev, errPrev, outCapped, errCapped, previewRedactions := redactedPreviews(res)
+	redactions := unionStrings(argvApplied, previewRedactions)
 	warnings := append([]schema.TraceWarningV1(nil), inputWarn...)
-	enrichmentCapped := false
 
 	ev := schema.TraceEventV1{
 		V:         schema.TraceSchemaV1,
@@ -97,12 +82,7 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		Tool:      "cli",
 		Op:        "exec",
 		Input:     input,
-		Result: schema.TraceResultV1{
-			OK:         res.SpawnError == "" && res.ExitCode == 0,
-			ExitCode:   exitCodePtr,
-			DurationMs: res.DurationMs,
-			Code:       code,
-		},
+		Result:    result,
 		IO: schema.TraceIOV1{
 			OutBytes:   res.OutBytes,
 			ErrBytes:   res.ErrBytes,
@@ -116,29 +96,9 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 		},
 	}
 
-	if strings.TrimSpace(res.CapturedStdoutPath) != "" || strings.TrimSpace(res.CapturedStderrPath) != "" {
-		en := map[string]any{
-			"capture": map[string]any{
-				"stdoutPath":      strings.TrimSpace(res.CapturedStdoutPath),
-				"stderrPath":      strings.TrimSpace(res.CapturedStderrPath),
-				"stdoutBytes":     res.CapturedStdoutBytes,
-				"stderrBytes":     res.CapturedStderrBytes,
-				"stdoutSha256":    strings.TrimSpace(res.CapturedStdoutSHA256),
-				"stderrSha256":    strings.TrimSpace(res.CapturedStderrSHA256),
-				"stdoutTruncated": res.CapturedStdoutTruncated,
-				"stderrTruncated": res.CapturedStderrTruncated,
-				"maxBytes":        res.CaptureMaxBytes,
-			},
-		}
-		if b, err := store.CanonicalJSON(en); err == nil {
-			if len(b) <= schema.EnrichmentMaxBytesV1 {
-				ev.Enrichment = b
-			} else {
-				enrichmentCapped = true
-			}
-		}
-	}
-	if enrichmentCapped {
+	if enrichment, enrichmentCapped := cliCaptureEnrichment(res); len(enrichment) > 0 {
+		ev.Enrichment = enrichment
+	} else if enrichmentCapped {
 		ev.Warnings = append(ev.Warnings, schema.TraceWarningV1{Code: "ZCL_W_ENRICHMENT_TRUNCATED", Message: "trace enrichment omitted to fit bounds"})
 		if ev.Integrity == nil {
 			ev.Integrity = &schema.TraceIntegrityV1{}
@@ -148,6 +108,60 @@ func AppendCLIRunEvent(now time.Time, env Env, argv []string, res ResultForTrace
 
 	path := filepath.Join(env.OutDirAbs, "tool.calls.jsonl")
 	return store.AppendJSONL(path, ev)
+}
+
+func cliTraceResult(res ResultForTrace) schema.TraceResultV1 {
+	var exitCodePtr *int
+	if res.SpawnError == "" {
+		exitCode := res.ExitCode
+		exitCodePtr = &exitCode
+	}
+	code := res.SpawnError
+	if code == "" && res.ExitCode != 0 {
+		code = "ZCL_E_TOOL_FAILED"
+	}
+	return schema.TraceResultV1{
+		OK:         res.SpawnError == "" && res.ExitCode == 0,
+		ExitCode:   exitCodePtr,
+		DurationMs: res.DurationMs,
+		Code:       code,
+	}
+}
+
+func redactedPreviews(res ResultForTrace) (string, string, bool, bool, []string) {
+	outPrev, outApplied := redact.Text(res.OutPreview)
+	errPrev, errApplied := redact.Text(res.ErrPreview)
+
+	outPrev, outCapped := capStringBytes(outPrev, schema.PreviewMaxBytesV1)
+	errPrev, errCapped := capStringBytes(errPrev, schema.PreviewMaxBytesV1)
+	return outPrev, errPrev, outCapped, errCapped, unionStrings(outApplied.Names, errApplied.Names)
+}
+
+func cliCaptureEnrichment(res ResultForTrace) (json.RawMessage, bool) {
+	if strings.TrimSpace(res.CapturedStdoutPath) == "" && strings.TrimSpace(res.CapturedStderrPath) == "" {
+		return nil, false
+	}
+	enrichment := map[string]any{
+		"capture": map[string]any{
+			"stdoutPath":      strings.TrimSpace(res.CapturedStdoutPath),
+			"stderrPath":      strings.TrimSpace(res.CapturedStderrPath),
+			"stdoutBytes":     res.CapturedStdoutBytes,
+			"stderrBytes":     res.CapturedStderrBytes,
+			"stdoutSha256":    strings.TrimSpace(res.CapturedStdoutSHA256),
+			"stderrSha256":    strings.TrimSpace(res.CapturedStderrSHA256),
+			"stdoutTruncated": res.CapturedStdoutTruncated,
+			"stderrTruncated": res.CapturedStderrTruncated,
+			"maxBytes":        res.CaptureMaxBytes,
+		},
+	}
+	b, err := store.CanonicalJSON(enrichment)
+	if err != nil {
+		return nil, false
+	}
+	if len(b) > schema.EnrichmentMaxBytesV1 {
+		return nil, true
+	}
+	return b, false
 }
 
 func AppendNativeRuntimeEvent(now time.Time, env Env, evIn NativeRuntimeEvent) error {
@@ -298,45 +312,62 @@ func boundedToolInputJSON(v any, maxBytes int) (json.RawMessage, bool, []schema.
 		return b, false, nil, nil
 	}
 
-	// Special-case the only input we currently emit (argv) and trim args until it fits.
 	if tc, ok := v.(ToolCallInput); ok {
-		argv := append([]string(nil), tc.Argv...)
-		for len(argv) > 1 {
-			argv = argv[:len(argv)-1]
-			b2, err := json.Marshal(ToolCallInput{Argv: argv})
-			if err != nil {
-				return nil, false, nil, err
-			}
-			if len(b2) <= maxBytes {
-				return b2, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
-			}
-		}
-		// Last resort: drop argv content entirely (still a valid shape).
-		b3, err := json.Marshal(ToolCallInput{Argv: []string{"[TRUNCATED]"}})
+		return boundedToolCallInputJSON(tc, maxBytes)
+	}
+
+	return boundedUnknownToolInputJSON(maxBytes)
+}
+
+func boundedToolCallInputJSON(tc ToolCallInput, maxBytes int) (json.RawMessage, bool, []schema.TraceWarningV1, error) {
+	argv := append([]string(nil), tc.Argv...)
+	for len(argv) > 1 {
+		argv = argv[:len(argv)-1]
+		b, err := json.Marshal(ToolCallInput{Argv: argv})
 		if err != nil {
 			return nil, false, nil, err
 		}
-		if len(b3) > maxBytes {
-			// Should be impossible, but avoid violating the contract.
-			return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
+		if len(b) <= maxBytes {
+			return b, true, traceInputTruncatedWarnings(false), nil
 		}
-		return b3, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input truncated to fit bounds"}}, nil
 	}
 
-	// Unknown input type: emit a bounded placeholder object so strict validators
-	// still see a present, valid JSON input field.
+	lastResort, err := json.Marshal(ToolCallInput{Argv: []string{"[TRUNCATED]"}})
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if len(lastResort) > maxBytes {
+		return json.RawMessage(`{}`), true, traceInputTruncatedWarnings(false), nil
+	}
+	return lastResort, true, traceInputTruncatedWarnings(false), nil
+}
+
+func boundedUnknownToolInputJSON(maxBytes int) (json.RawMessage, bool, []schema.TraceWarningV1, error) {
 	placeholder := map[string]any{
 		"truncated": true,
 		"reason":    "input_truncated_to_fit_bounds",
 	}
 	bp, err := json.Marshal(placeholder)
 	if err != nil {
-		return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
+		return json.RawMessage(`{}`), true, traceInputTruncatedWarnings(true), nil
 	}
 	if len(bp) > maxBytes {
-		return json.RawMessage(`{}`), true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
+		return json.RawMessage(`{}`), true, traceInputTruncatedWarnings(true), nil
 	}
-	return bp, true, []schema.TraceWarningV1{{Code: "ZCL_W_INPUT_TRUNCATED", Message: "tool input replaced with placeholder to fit bounds"}}, nil
+	return bp, true, traceInputTruncatedWarnings(true), nil
+}
+
+func traceInputTruncatedWarnings(placeholder bool) []schema.TraceWarningV1 {
+	if placeholder {
+		return []schema.TraceWarningV1{{
+			Code:    "ZCL_W_INPUT_TRUNCATED",
+			Message: "tool input replaced with placeholder to fit bounds",
+		}}
+	}
+	return []schema.TraceWarningV1{{
+		Code:    "ZCL_W_INPUT_TRUNCATED",
+		Message: "tool input truncated to fit bounds",
+	}}
 }
 
 func capStringBytes(s string, maxBytes int) (string, bool) {

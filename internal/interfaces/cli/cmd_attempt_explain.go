@@ -18,27 +18,87 @@ import (
 )
 
 func (r Runner) runAttemptExplain(args []string) int {
+	opts, exit, ok := r.parseAttemptExplainArgs(args)
+	if !ok {
+		return exit
+	}
+	opts.strict = attempt.EffectiveStrict(opts.attemptDir, opts.strict)
+	ids := loadAttemptExplainIDs(opts.attemptDir)
+	rep, repPresent := r.loadAttemptExplainReport(opts.attemptDir, opts.strict)
+	valRes, _ := validate.ValidatePath(opts.attemptDir, opts.strict)
+	expRes, _ := expect.ExpectPath(opts.attemptDir, false)
+	tail, tailErr := tailTraceEvents(filepath.Join(opts.attemptDir, "tool.calls.jsonl"), opts.tailN)
+	if tailErr != nil && opts.strict {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", tailErr.Error())
+		return 1
+	}
+	out := buildAttemptExplainOutput(opts.attemptDir, opts.strict, ids, rep, repPresent, valRes, expRes, tail)
+	if opts.jsonOut {
+		return r.writeJSON(out)
+	}
+	r.printAttemptExplainHuman(out)
+	return 0
+}
+
+type attemptExplainArgs struct {
+	attemptDir string
+	tailN      int
+	strict     bool
+	jsonOut    bool
+}
+
+type attemptExplainOutput struct {
+	AttemptDir string `json:"attemptDir"`
+	Strict     bool   `json:"strict"`
+
+	RunID     string `json:"runId,omitempty"`
+	SuiteID   string `json:"suiteId,omitempty"`
+	MissionID string `json:"missionId,omitempty"`
+	AttemptID string `json:"attemptId,omitempty"`
+
+	ReportPresent bool                        `json:"reportPresent"`
+	Report        *schema.AttemptReportJSONV1 `json:"report,omitempty"`
+	Validate      validate.Result             `json:"validate"`
+	Expect        expect.Result               `json:"expect"`
+
+	Tail []schema.TraceEventV1 `json:"tail,omitempty"`
+
+	RunnerCommandPath string `json:"runnerCommandPath,omitempty"`
+	RunnerStdoutPath  string `json:"runnerStdoutPath,omitempty"`
+	RunnerStderrPath  string `json:"runnerStderrPath,omitempty"`
+}
+
+func (r Runner) parseAttemptExplainArgs(args []string) (attemptExplainArgs, int, bool) {
 	fs := flag.NewFlagSet("attempt explain", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-
 	tailN := fs.Int("tail", 20, "number of tail trace events to include")
 	strict := fs.Bool("strict", false, "strict mode (defaults to true in ci attempts)")
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
-
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("attempt explain: invalid flags")
+		return attemptExplainArgs{}, r.failUsage("attempt explain: invalid flags"), false
 	}
 	if *help {
 		printAttemptExplainHelp(r.Stdout)
-		return 0
+		return attemptExplainArgs{}, 0, false
 	}
 	if *tailN < 0 {
 		printAttemptExplainHelp(r.Stderr)
-		return r.failUsage("attempt explain: --tail must be >= 0")
+		return attemptExplainArgs{}, r.failUsage("attempt explain: --tail must be >= 0"), false
 	}
+	attemptDir, exit, ok := r.resolveAttemptExplainTarget(fs.Args())
+	if !ok {
+		return attemptExplainArgs{}, exit, false
+	}
+	return attemptExplainArgs{
+		attemptDir: attemptDir,
+		tailN:      *tailN,
+		strict:     *strict,
+		jsonOut:    *jsonOut,
+	}, 0, true
+}
 
-	rest := fs.Args()
+func (r Runner) resolveAttemptExplainTarget(rest []string) (string, int, bool) {
 	attemptDir := ""
 	switch len(rest) {
 	case 0:
@@ -47,80 +107,52 @@ func (r Runner) runAttemptExplain(args []string) int {
 		attemptDir = rest[0]
 	default:
 		printAttemptExplainHelp(r.Stderr)
-		return r.failUsage("attempt explain: require at most one <attemptDir> (or use ZCL_OUT_DIR)")
+		return "", r.failUsage("attempt explain: require at most one <attemptDir> (or use ZCL_OUT_DIR)"), false
 	}
 	if attemptDir == "" {
 		printAttemptExplainHelp(r.Stderr)
-		return r.failUsage("attempt explain: missing <attemptDir> (or set ZCL_OUT_DIR)")
+		return "", r.failUsage("attempt explain: missing <attemptDir> (or set ZCL_OUT_DIR)"), false
 	}
-
 	info, err := os.Stat(attemptDir)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return "", 1, false
 	}
 	if !info.IsDir() {
-		return r.failUsage("attempt explain: target must be a directory")
+		return "", r.failUsage("attempt explain: target must be a directory"), false
 	}
+	return attemptDir, 0, true
+}
 
-	*strict = attempt.EffectiveStrict(attemptDir, *strict)
-
-	// Read attempt.json for ids even if other artifacts are missing.
-	var a schema.AttemptJSONV1
+func loadAttemptExplainIDs(attemptDir string) schema.AttemptJSONV1 {
+	var out schema.AttemptJSONV1
 	if b, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json")); err == nil {
-		_ = json.Unmarshal(b, &a)
+		_ = json.Unmarshal(b, &out)
 	}
+	return out
+}
 
+func (r Runner) loadAttemptExplainReport(attemptDir string, strict bool) (schema.AttemptReportJSONV1, bool) {
 	var rep schema.AttemptReportJSONV1
-	repPresent := false
 	if b, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json")); err == nil {
 		if err := json.Unmarshal(b, &rep); err == nil {
-			repPresent = true
+			return rep, true
 		}
 	}
-	// Best-effort compute (without writing) when report is missing or invalid.
-	if !repPresent {
-		if r2, err := report.BuildAttemptReport(r.Now(), attemptDir, *strict); err == nil {
-			rep = r2
-			repPresent = true
-		}
+	if generated, err := report.BuildAttemptReport(r.Now(), attemptDir, strict); err == nil {
+		return generated, true
 	}
+	return schema.AttemptReportJSONV1{}, false
+}
 
-	valRes, _ := validate.ValidatePath(attemptDir, *strict)
-	expRes, _ := expect.ExpectPath(attemptDir, false)
-
-	tail, tailErr := tailTraceEvents(filepath.Join(attemptDir, "tool.calls.jsonl"), *tailN)
-	if tailErr != nil && *strict {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", tailErr.Error())
-		return 1
-	}
-
-	out := struct {
-		AttemptDir string `json:"attemptDir"`
-		Strict     bool   `json:"strict"`
-
-		RunID     string `json:"runId,omitempty"`
-		SuiteID   string `json:"suiteId,omitempty"`
-		MissionID string `json:"missionId,omitempty"`
-		AttemptID string `json:"attemptId,omitempty"`
-
-		ReportPresent bool                        `json:"reportPresent"`
-		Report        *schema.AttemptReportJSONV1 `json:"report,omitempty"`
-		Validate      validate.Result             `json:"validate"`
-		Expect        expect.Result               `json:"expect"`
-
-		Tail []schema.TraceEventV1 `json:"tail,omitempty"`
-
-		RunnerCommandPath string `json:"runnerCommandPath,omitempty"`
-		RunnerStdoutPath  string `json:"runnerStdoutPath,omitempty"`
-		RunnerStderrPath  string `json:"runnerStderrPath,omitempty"`
-	}{
+func buildAttemptExplainOutput(attemptDir string, strict bool, ids schema.AttemptJSONV1, rep schema.AttemptReportJSONV1, repPresent bool, valRes validate.Result, expRes expect.Result, tail []schema.TraceEventV1) attemptExplainOutput {
+	out := attemptExplainOutput{
 		AttemptDir:    attemptDir,
-		Strict:        *strict,
-		RunID:         a.RunID,
-		SuiteID:       a.SuiteID,
-		MissionID:     a.MissionID,
-		AttemptID:     a.AttemptID,
+		Strict:        strict,
+		RunID:         ids.RunID,
+		SuiteID:       ids.SuiteID,
+		MissionID:     ids.MissionID,
+		AttemptID:     ids.AttemptID,
 		ReportPresent: repPresent,
 		Validate:      valRes,
 		Expect:        expRes,
@@ -128,7 +160,6 @@ func (r Runner) runAttemptExplain(args []string) int {
 	}
 	if repPresent {
 		out.Report = &rep
-		// If attempt.json couldn't be loaded, fall back to report ids.
 		if out.RunID == "" {
 			out.RunID = rep.RunID
 			out.SuiteID = rep.SuiteID
@@ -136,8 +167,6 @@ func (r Runner) runAttemptExplain(args []string) int {
 			out.AttemptID = rep.AttemptID
 		}
 	}
-
-	// Pointers to runner IO artifacts when present.
 	if p := filepath.Join(attemptDir, "runner.command.txt"); fileExists(p) {
 		out.RunnerCommandPath = p
 	}
@@ -147,39 +176,36 @@ func (r Runner) runAttemptExplain(args []string) int {
 	if p := filepath.Join(attemptDir, "runner.stderr.log"); fileExists(p) {
 		out.RunnerStderrPath = p
 	}
+	return out
+}
 
-	if *jsonOut {
-		return r.writeJSON(out)
-	}
-
-	// Human output: one screen, pointers + tail.
-	fmt.Fprintf(r.Stdout, "attempt explain: %s\n", attemptDir)
+func (r Runner) printAttemptExplainHuman(out attemptExplainOutput) {
+	fmt.Fprintf(r.Stdout, "attempt explain: %s\n", out.AttemptDir)
 	if out.RunID != "" {
 		fmt.Fprintf(r.Stdout, "  ids: run=%s suite=%s mission=%s attempt=%s\n", out.RunID, out.SuiteID, out.MissionID, out.AttemptID)
 	}
-	if repPresent && rep.OK != nil {
-		fmt.Fprintf(r.Stdout, "  outcome: ok=%v result=%s\n", *rep.OK, strings.TrimSpace(rep.Result))
+	if out.ReportPresent && out.Report != nil && out.Report.OK != nil {
+		fmt.Fprintf(r.Stdout, "  outcome: ok=%v result=%s\n", *out.Report.OK, strings.TrimSpace(out.Report.Result))
 	}
-	if repPresent && rep.Signals != nil && rep.Signals.NoProgressSuspected {
+	if out.ReportPresent && out.Report != nil && out.Report.Signals != nil && out.Report.Signals.NoProgressSuspected {
 		fmt.Fprintf(r.Stdout, "  signals: no_progress_suspected=true repeatMaxStreak=%d distinct=%d failureRateBps=%d\n",
-			rep.Signals.RepeatMaxStreak, rep.Signals.DistinctCommandSignatures, rep.Signals.FailureRateBps)
+			out.Report.Signals.RepeatMaxStreak, out.Report.Signals.DistinctCommandSignatures, out.Report.Signals.FailureRateBps)
 	}
-	if !valRes.OK {
-		fmt.Fprintf(r.Stdout, "  validate: FAIL (%d issues)\n", len(valRes.Errors))
+	if !out.Validate.OK {
+		fmt.Fprintf(r.Stdout, "  validate: FAIL (%d issues)\n", len(out.Validate.Errors))
 	}
-	if !expRes.OK {
-		fmt.Fprintf(r.Stdout, "  expect: FAIL evaluated=%v (%d failures)\n", expRes.Evaluated, len(expRes.Failures))
+	if !out.Expect.OK {
+		fmt.Fprintf(r.Stdout, "  expect: FAIL evaluated=%v (%d failures)\n", out.Expect.Evaluated, len(out.Expect.Failures))
 	}
 	if out.RunnerCommandPath != "" {
 		fmt.Fprintf(r.Stdout, "  runner: %s\n", out.RunnerCommandPath)
 	}
-	if len(tail) > 0 {
-		fmt.Fprintf(r.Stdout, "  tail (last %d):\n", len(tail))
-		for _, ev := range tail {
+	if len(out.Tail) > 0 {
+		fmt.Fprintf(r.Stdout, "  tail (last %d):\n", len(out.Tail))
+		for _, ev := range out.Tail {
 			fmt.Fprintf(r.Stdout, "    %s %s %s ok=%v code=%s\n", ev.Tool, ev.Op, oneLineInput(ev.Input), ev.Result.OK, ev.Result.Code)
 		}
 	}
-	return 0
 }
 
 func printAttemptExplainHelp(w io.Writer) {

@@ -451,82 +451,180 @@ func (e *OraclePolicyViolationError) Error() string {
 }
 
 func ParseSpecFile(path string) (ParsedSpec, error) {
-	absPath, err := filepath.Abs(strings.TrimSpace(path))
+	absPath, spec, err := loadSpecFromPath(path)
 	if err != nil {
 		return ParsedSpec{}, err
+	}
+	p := newSpecParser(absPath, spec)
+	if err := p.prepare(); err != nil {
+		return ParsedSpec{}, err
+	}
+	if err := p.parseFlows(); err != nil {
+		return ParsedSpec{}, err
+	}
+	return p.buildParsedSpec()
+}
+
+type specParser struct {
+	absPath                   string
+	spec                      SpecV1
+	needsInlineMissionPack    bool
+	allFlowsOmitSuiteFile     bool
+	oracleByMissionID         map[string]string
+	inlineMissionPackCache    map[string]suite.ParsedSuite
+	inlineSplitMissionPackMap map[string]SplitMissionPackResult
+	flowSuites                map[string]suite.ParsedSuite
+	flowIDs                   []string
+}
+
+func loadSpecFromPath(path string) (string, SpecV1, error) {
+	absPath, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", SpecV1{}, err
 	}
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
-		return ParsedSpec{}, err
+		return "", SpecV1{}, err
 	}
-
 	spec, err := decodeSpecStrict(absPath, raw)
 	if err != nil {
-		return ParsedSpec{}, err
+		return "", SpecV1{}, err
 	}
+	return absPath, spec, nil
+}
 
+func newSpecParser(absPath string, spec SpecV1) *specParser {
+	return &specParser{
+		absPath:                   absPath,
+		spec:                      spec,
+		oracleByMissionID:         map[string]string{},
+		inlineMissionPackCache:    map[string]suite.ParsedSuite{},
+		inlineSplitMissionPackMap: map[string]SplitMissionPackResult{},
+		flowSuites:                make(map[string]suite.ParsedSuite, len(spec.Flows)),
+		flowIDs:                   make([]string, 0, len(spec.Flows)),
+	}
+}
+
+func (p *specParser) prepare() error {
+	if err := normalizeSpecCore(&p.spec, p.absPath); err != nil {
+		return err
+	}
+	p.detectInlineMissionPackNeeds()
+	return p.validateExamPromptMode()
+}
+
+func normalizeSpecCore(spec *SpecV1, absPath string) error {
+	if err := normalizeSpecIdentity(spec); err != nil {
+		return err
+	}
+	if err := normalizeSpecPromptMode(spec); err != nil {
+		return err
+	}
+	normalizeSpecMissionSource(spec, absPath)
+	if err := normalizeSpecOracleVisibility(spec); err != nil {
+		return err
+	}
+	if err := normalizeSpecEvaluation(spec); err != nil {
+		return err
+	}
+	normalizeSpecOutputAndSemantic(spec, absPath)
+	if err := normalizeSpecTimeouts(spec); err != nil {
+		return err
+	}
+	if err := normalizeSpecExecutionAndGates(spec); err != nil {
+		return err
+	}
+	normalizeSpecCleanup(spec)
+	if len(spec.Flows) == 0 {
+		return fmt.Errorf("campaign requires at least one flow")
+	}
+	return nil
+}
+
+func normalizeSpecIdentity(spec *SpecV1) error {
 	if spec.SchemaVersion == 0 {
 		spec.SchemaVersion = 1
 	}
 	if spec.SchemaVersion != 1 {
-		return ParsedSpec{}, fmt.Errorf("unsupported campaign schemaVersion (expected 1)")
+		return fmt.Errorf("unsupported campaign schemaVersion (expected 1)")
 	}
 	spec.CampaignID = ids.SanitizeComponent(strings.TrimSpace(spec.CampaignID))
 	if spec.CampaignID == "" {
-		return ParsedSpec{}, fmt.Errorf("missing/invalid campaignId")
+		return fmt.Errorf("missing/invalid campaignId")
 	}
 	if spec.TotalMissions < 0 {
-		return ParsedSpec{}, fmt.Errorf("totalMissions must be >= 0")
+		return fmt.Errorf("totalMissions must be >= 0")
 	}
 	if spec.CanaryMissions < 0 {
-		return ParsedSpec{}, fmt.Errorf("canaryMissions must be >= 0")
+		return fmt.Errorf("canaryMissions must be >= 0")
 	}
+	return nil
+}
+
+func normalizeSpecPromptMode(spec *SpecV1) error {
 	spec.PromptMode = strings.ToLower(strings.TrimSpace(spec.PromptMode))
 	if spec.PromptMode == "" {
 		spec.PromptMode = PromptModeDefault
 	}
 	if !isValidPromptMode(spec.PromptMode) {
-		return ParsedSpec{}, fmt.Errorf("invalid promptMode (expected %s|%s|%s)", PromptModeDefault, PromptModeMissionOnly, PromptModeExam)
+		return fmt.Errorf("invalid promptMode (expected %s|%s|%s)", PromptModeDefault, PromptModeMissionOnly, PromptModeExam)
 	}
 	spec.NoContext.ForbiddenPromptTerms = normalizeTerms(spec.NoContext.ForbiddenPromptTerms)
-	if spec.PromptMode == PromptModeMissionOnly && len(spec.NoContext.ForbiddenPromptTerms) == 0 {
-		spec.NoContext.ForbiddenPromptTerms = defaultMissionOnlyForbiddenTerms()
+	switch spec.PromptMode {
+	case PromptModeMissionOnly:
+		if len(spec.NoContext.ForbiddenPromptTerms) == 0 {
+			spec.NoContext.ForbiddenPromptTerms = defaultMissionOnlyForbiddenTerms()
+		}
+	case PromptModeExam:
+		if len(spec.NoContext.ForbiddenPromptTerms) == 0 {
+			spec.NoContext.ForbiddenPromptTerms = defaultExamForbiddenTerms()
+		}
 	}
-	if spec.PromptMode == PromptModeExam && len(spec.NoContext.ForbiddenPromptTerms) == 0 {
-		spec.NoContext.ForbiddenPromptTerms = defaultExamForbiddenTerms()
+	return nil
+}
+
+func normalizeSpecMissionSource(spec *SpecV1, absPath string) {
+	spec.MissionSource.Path = resolveSpecRelativePath(absPath, spec.MissionSource.Path, false)
+	spec.MissionSource.PromptSource.Path = resolveSpecRelativePath(absPath, spec.MissionSource.PromptSource.Path, false)
+	spec.MissionSource.OracleSource.Path = resolveSpecRelativePath(absPath, spec.MissionSource.OracleSource.Path, false)
+}
+
+func resolveSpecRelativePath(absSpecPath string, raw string, allowDash bool) string {
+	val := strings.TrimSpace(raw)
+	if val == "" || filepath.IsAbs(val) {
+		return val
 	}
-	spec.MissionSource.Path = strings.TrimSpace(spec.MissionSource.Path)
-	if spec.MissionSource.Path != "" && !filepath.IsAbs(spec.MissionSource.Path) {
-		spec.MissionSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.Path))
+	if allowDash && val == "-" {
+		return val
 	}
-	spec.MissionSource.PromptSource.Path = strings.TrimSpace(spec.MissionSource.PromptSource.Path)
-	if spec.MissionSource.PromptSource.Path != "" && !filepath.IsAbs(spec.MissionSource.PromptSource.Path) {
-		spec.MissionSource.PromptSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.PromptSource.Path))
-	}
-	spec.MissionSource.OracleSource.Path = strings.TrimSpace(spec.MissionSource.OracleSource.Path)
-	if spec.MissionSource.OracleSource.Path != "" && !filepath.IsAbs(spec.MissionSource.OracleSource.Path) {
-		spec.MissionSource.OracleSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.MissionSource.OracleSource.Path))
-	}
+	return filepath.Clean(filepath.Join(filepath.Dir(absSpecPath), val))
+}
+
+func normalizeSpecOracleVisibility(spec *SpecV1) error {
 	spec.MissionSource.OracleSource.Visibility = strings.ToLower(strings.TrimSpace(spec.MissionSource.OracleSource.Visibility))
 	if spec.MissionSource.OracleSource.Visibility == "" {
 		spec.MissionSource.OracleSource.Visibility = OracleVisibilityWorkspace
 	}
 	if !isValidOracleVisibility(spec.MissionSource.OracleSource.Visibility) {
-		return ParsedSpec{}, fmt.Errorf("invalid missionSource.oracleSource.visibility (expected %s|%s)", OracleVisibilityWorkspace, OracleVisibilityHostOnly)
+		return fmt.Errorf("invalid missionSource.oracleSource.visibility (expected %s|%s)", OracleVisibilityWorkspace, OracleVisibilityHostOnly)
 	}
+	return nil
+}
+
+func normalizeSpecEvaluation(spec *SpecV1) error {
 	spec.Evaluation.Mode = strings.ToLower(strings.TrimSpace(spec.Evaluation.Mode))
 	if spec.Evaluation.Mode == "" {
 		spec.Evaluation.Mode = EvaluationModeNone
 	}
 	if !isValidEvaluationMode(spec.Evaluation.Mode) {
-		return ParsedSpec{}, fmt.Errorf("invalid evaluation.mode (expected %s|%s)", EvaluationModeNone, EvaluationModeOracle)
+		return fmt.Errorf("invalid evaluation.mode (expected %s|%s)", EvaluationModeNone, EvaluationModeOracle)
 	}
 	spec.Evaluation.Evaluator.Kind = strings.ToLower(strings.TrimSpace(spec.Evaluation.Evaluator.Kind))
 	if spec.Evaluation.Mode == EvaluationModeOracle && spec.Evaluation.Evaluator.Kind == "" {
 		spec.Evaluation.Evaluator.Kind = EvaluatorKindScript
 	}
 	if spec.Evaluation.Evaluator.Kind != "" && !isValidEvaluatorKind(spec.Evaluation.Evaluator.Kind) {
-		return ParsedSpec{}, fmt.Errorf("invalid evaluation.evaluator.kind (expected %s|%s)", EvaluatorKindScript, EvaluatorKindBuiltin)
+		return fmt.Errorf("invalid evaluation.evaluator.kind (expected %s|%s)", EvaluatorKindScript, EvaluatorKindBuiltin)
 	}
 	spec.Evaluation.Evaluator.Command = normalizeCommand(spec.Evaluation.Evaluator.Command)
 	spec.Evaluation.OraclePolicy.Mode = strings.ToLower(strings.TrimSpace(spec.Evaluation.OraclePolicy.Mode))
@@ -534,517 +632,640 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		spec.Evaluation.OraclePolicy.Mode = OraclePolicyModeStrict
 	}
 	if !isValidOraclePolicyMode(spec.Evaluation.OraclePolicy.Mode) {
-		return ParsedSpec{}, fmt.Errorf("invalid evaluation.oraclePolicy.mode (expected %s|%s|%s)", OraclePolicyModeStrict, OraclePolicyModeNormalized, OraclePolicyModeSemantic)
+		return fmt.Errorf("invalid evaluation.oraclePolicy.mode (expected %s|%s|%s)", OraclePolicyModeStrict, OraclePolicyModeNormalized, OraclePolicyModeSemantic)
 	}
 	spec.Evaluation.OraclePolicy.FormatMismatch = strings.ToLower(strings.TrimSpace(spec.Evaluation.OraclePolicy.FormatMismatch))
 	if spec.Evaluation.OraclePolicy.FormatMismatch == "" {
 		spec.Evaluation.OraclePolicy.FormatMismatch = OracleFormatMismatchFail
 	}
 	if !isValidOracleFormatMismatchPolicy(spec.Evaluation.OraclePolicy.FormatMismatch) {
-		return ParsedSpec{}, fmt.Errorf("invalid evaluation.oraclePolicy.formatMismatch (expected %s|%s|%s)", OracleFormatMismatchFail, OracleFormatMismatchWarn, OracleFormatMismatchIgnore)
+		return fmt.Errorf("invalid evaluation.oraclePolicy.formatMismatch (expected %s|%s|%s)", OracleFormatMismatchFail, OracleFormatMismatchWarn, OracleFormatMismatchIgnore)
 	}
-	spec.Semantic.RulesPath = strings.TrimSpace(spec.Semantic.RulesPath)
-	if spec.Semantic.RulesPath != "" && !filepath.IsAbs(spec.Semantic.RulesPath) {
-		spec.Semantic.RulesPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Semantic.RulesPath))
-	}
-	spec.Output.ReportPath = strings.TrimSpace(spec.Output.ReportPath)
-	if spec.Output.ReportPath != "" && !filepath.IsAbs(spec.Output.ReportPath) {
-		spec.Output.ReportPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ReportPath))
-	}
-	spec.Output.SummaryPath = strings.TrimSpace(spec.Output.SummaryPath)
-	if spec.Output.SummaryPath != "" && !filepath.IsAbs(spec.Output.SummaryPath) {
-		spec.Output.SummaryPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.SummaryPath))
-	}
-	spec.Output.ResultsMDPath = strings.TrimSpace(spec.Output.ResultsMDPath)
-	if spec.Output.ResultsMDPath != "" && !filepath.IsAbs(spec.Output.ResultsMDPath) {
-		spec.Output.ResultsMDPath = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ResultsMDPath))
-	}
-	spec.Output.ProgressJSONL = strings.TrimSpace(spec.Output.ProgressJSONL)
-	if spec.Output.ProgressJSONL != "" && spec.Output.ProgressJSONL != "-" && !filepath.IsAbs(spec.Output.ProgressJSONL) {
-		spec.Output.ProgressJSONL = filepath.Clean(filepath.Join(filepath.Dir(absPath), spec.Output.ProgressJSONL))
-	}
+	return nil
+}
+
+func normalizeSpecOutputAndSemantic(spec *SpecV1, absPath string) {
+	spec.Semantic.RulesPath = resolveSpecRelativePath(absPath, spec.Semantic.RulesPath, false)
+	spec.Output.ReportPath = resolveSpecRelativePath(absPath, spec.Output.ReportPath, false)
+	spec.Output.SummaryPath = resolveSpecRelativePath(absPath, spec.Output.SummaryPath, false)
+	spec.Output.ResultsMDPath = resolveSpecRelativePath(absPath, spec.Output.ResultsMDPath, false)
+	spec.Output.ProgressJSONL = resolveSpecRelativePath(absPath, spec.Output.ProgressJSONL, true)
+}
+
+func normalizeSpecTimeouts(spec *SpecV1) error {
 	if spec.Timeouts.CampaignGlobalTimeoutMs < 0 ||
 		spec.Timeouts.DefaultAttemptTimeoutMs < 0 ||
 		spec.Timeouts.CleanupHookTimeoutMs < 0 ||
 		spec.Timeouts.MissionEnvelopeMs < 0 ||
 		spec.Timeouts.WatchdogHeartbeatMs < 0 {
-		return ParsedSpec{}, fmt.Errorf("timeouts fields must be >= 0")
+		return fmt.Errorf("timeouts fields must be >= 0")
 	}
 	if strings.TrimSpace(spec.Timeouts.TimeoutStart) != "" && !schema.IsValidTimeoutStartV1(spec.Timeouts.TimeoutStart) {
-		return ParsedSpec{}, fmt.Errorf("invalid timeouts.timeoutStart")
+		return fmt.Errorf("invalid timeouts.timeoutStart")
 	}
+	return nil
+}
+
+func normalizeSpecExecutionAndGates(spec *SpecV1) error {
 	spec.Execution.FlowMode = strings.ToLower(strings.TrimSpace(spec.Execution.FlowMode))
 	if spec.Execution.FlowMode == "" {
 		spec.Execution.FlowMode = FlowModeSequence
 	}
-	switch spec.Execution.FlowMode {
-	case FlowModeSequence, FlowModeParallel:
-	default:
-		return ParsedSpec{}, fmt.Errorf("invalid execution.flowMode (expected %s|%s)", FlowModeSequence, FlowModeParallel)
+	if spec.Execution.FlowMode != FlowModeSequence && spec.Execution.FlowMode != FlowModeParallel {
+		return fmt.Errorf("invalid execution.flowMode (expected %s|%s)", FlowModeSequence, FlowModeParallel)
 	}
 	spec.PairGate.TraceProfile = strings.ToLower(strings.TrimSpace(spec.PairGate.TraceProfile))
 	spec.FlowGate.TraceProfile = strings.ToLower(strings.TrimSpace(spec.FlowGate.TraceProfile))
 	pairSpecified := pairGateSpecConfigured(spec.PairGate)
 	flowSpecified := pairGateSpecConfigured(spec.FlowGate)
-	switch {
-	case pairSpecified && flowSpecified && !pairGateSpecsEqual(spec.PairGate, spec.FlowGate):
-		return ParsedSpec{}, fmt.Errorf("pairGate and flowGate both set but differ; define one or keep both identical")
-	case !pairSpecified && flowSpecified:
+	if pairSpecified && flowSpecified && !pairGateSpecsEqual(spec.PairGate, spec.FlowGate) {
+		return fmt.Errorf("pairGate and flowGate both set but differ; define one or keep both identical")
+	}
+	if !pairSpecified && flowSpecified {
 		spec.PairGate = spec.FlowGate
 	}
 	if spec.PairGate.TraceProfile == "" {
 		spec.PairGate.TraceProfile = TraceProfileNone
 	}
 	if !isValidTraceProfile(spec.PairGate.TraceProfile) {
-		return ParsedSpec{}, fmt.Errorf("invalid pairGate.traceProfile (expected %s|%s|%s)", TraceProfileNone, TraceProfileStrictBrowserComp, TraceProfileMCPRequired)
+		return fmt.Errorf("invalid pairGate.traceProfile (expected %s|%s|%s)", TraceProfileNone, TraceProfileStrictBrowserComp, TraceProfileMCPRequired)
 	}
+	return nil
+}
+
+func normalizeSpecCleanup(spec *SpecV1) {
 	spec.Cleanup.BeforeMission = normalizeCommand(append(append([]string{}, spec.Cleanup.BeforeMission...), spec.Cleanup.PreMission...))
 	spec.Cleanup.AfterMission = normalizeCommand(append(append([]string{}, spec.Cleanup.AfterMission...), spec.Cleanup.PostMission...))
 	spec.Cleanup.OnFailure = normalizeCommand(spec.Cleanup.OnFailure)
 	spec.Cleanup.PreMission = nil
 	spec.Cleanup.PostMission = nil
-	if len(spec.Flows) == 0 {
-		return ParsedSpec{}, fmt.Errorf("campaign requires at least one flow")
-	}
+}
 
-	needsInlineMissionPack := false
-	allFlowsOmitSuiteFile := true
-	for i := range spec.Flows {
-		if strings.TrimSpace(spec.Flows[i].SuiteFile) == "" {
-			needsInlineMissionPack = true
+func (p *specParser) detectInlineMissionPackNeeds() {
+	p.allFlowsOmitSuiteFile = true
+	for i := range p.spec.Flows {
+		if strings.TrimSpace(p.spec.Flows[i].SuiteFile) == "" {
+			p.needsInlineMissionPack = true
 			continue
 		}
-		allFlowsOmitSuiteFile = false
+		p.allFlowsOmitSuiteFile = false
 	}
-	if spec.PromptMode == PromptModeExam {
-		if strings.TrimSpace(spec.MissionSource.Path) != "" {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonExamPromptPolicy,
-				Violation: OraclePolicyViolation{
-					Field:       "missionSource.path",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires missionSource.promptSource.path and forbids missionSource.path",
-				},
-			}
-		}
-		if strings.TrimSpace(spec.MissionSource.PromptSource.Path) == "" {
-			missingFlowPromptSource := false
-			for i := range spec.Flows {
-				if strings.TrimSpace(spec.Flows[i].SuiteFile) != "" {
-					continue
-				}
-				if strings.TrimSpace(spec.Flows[i].PromptSource.Path) == "" {
-					missingFlowPromptSource = true
-					break
-				}
-			}
-			if missingFlowPromptSource {
-				return ParsedSpec{}, &OraclePolicyViolationError{
-					Code: ReasonExamPromptPolicy,
-					Violation: OraclePolicyViolation{
-						Field:       "missionSource.promptSource.path",
-						PromptMode:  spec.PromptMode,
-						Description: "promptMode=exam requires missionSource.promptSource.path or flows[].promptSource.path for inline mission-pack flows",
-					},
-				}
-			}
-		}
-		if strings.TrimSpace(spec.MissionSource.OracleSource.Path) == "" {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonOracleEvaluator,
-				Violation: OraclePolicyViolation{
-					Field:       "missionSource.oracleSource.path",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires missionSource.oracleSource.path",
-				},
-			}
-		}
-		if spec.Evaluation.Mode != EvaluationModeOracle {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonOracleEvaluator,
-				Violation: OraclePolicyViolation{
-					Field:       "evaluation.mode",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires evaluation.mode=oracle",
-				},
-			}
-		}
-		if spec.Evaluation.Evaluator.Kind == "" {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonOracleEvaluator,
-				Violation: OraclePolicyViolation{
-					Field:       "evaluation.evaluator.kind",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires evaluation.evaluator.kind",
-				},
-			}
-		}
-		if spec.Evaluation.Evaluator.Kind == EvaluatorKindScript && len(spec.Evaluation.Evaluator.Command) == 0 {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonOracleEvaluator,
-				Violation: OraclePolicyViolation{
-					Field:       "evaluation.evaluator.command",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam with evaluation.evaluator.kind=script requires non-empty evaluation.evaluator.command",
-				},
-			}
-		}
-		if !allFlowsOmitSuiteFile {
-			return ParsedSpec{}, &OraclePolicyViolationError{
-				Code: ReasonExamPromptPolicy,
-				Violation: OraclePolicyViolation{
-					Field:       "flows[].suiteFile",
-					PromptMode:  spec.PromptMode,
-					Description: "promptMode=exam requires missionSource prompt/oracle split; remove flows[].suiteFile",
-				},
-			}
-		}
-		if spec.MissionSource.OracleSource.Visibility == OracleVisibilityHostOnly {
-			agentRoot := resolveAgentReadableRoot(absPath)
-			within, cerr := pathWithinRoot(agentRoot, spec.MissionSource.OracleSource.Path)
-			if cerr != nil {
-				return ParsedSpec{}, cerr
-			}
-			if within {
-				return ParsedSpec{}, &OraclePolicyViolationError{
-					Code: ReasonOracleVisibility,
-					Violation: OraclePolicyViolation{
-						Field:       "missionSource.oracleSource.path",
-						PromptMode:  spec.PromptMode,
-						Visibility:  spec.MissionSource.OracleSource.Visibility,
-						OraclePath:  spec.MissionSource.OracleSource.Path,
-						AgentRoot:   agentRoot,
-						Description: "oracleSource.visibility=host_only requires missionSource.oracleSource.path outside the agent-readable workspace root",
-					},
-				}
-			}
-		}
-		needsInlineMissionPack = true
+}
+
+func (p *specParser) validateExamPromptMode() error {
+	if p.spec.PromptMode != PromptModeExam {
+		return nil
 	}
+	if strings.TrimSpace(p.spec.MissionSource.Path) != "" {
+		return newOraclePolicyViolation(ReasonExamPromptPolicy, "missionSource.path", p.spec.PromptMode, "promptMode=exam requires missionSource.promptSource.path and forbids missionSource.path")
+	}
+	if err := p.validateExamPromptSource(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(p.spec.MissionSource.OracleSource.Path) == "" {
+		return newOraclePolicyViolation(ReasonOracleEvaluator, "missionSource.oracleSource.path", p.spec.PromptMode, "promptMode=exam requires missionSource.oracleSource.path")
+	}
+	if p.spec.Evaluation.Mode != EvaluationModeOracle {
+		return newOraclePolicyViolation(ReasonOracleEvaluator, "evaluation.mode", p.spec.PromptMode, "promptMode=exam requires evaluation.mode=oracle")
+	}
+	if err := validateExamEvaluatorSettings(p.spec); err != nil {
+		return err
+	}
+	if !p.allFlowsOmitSuiteFile {
+		return newOraclePolicyViolation(ReasonExamPromptPolicy, "flows[].suiteFile", p.spec.PromptMode, "promptMode=exam requires missionSource prompt/oracle split; remove flows[].suiteFile")
+	}
+	if err := validateExamOracleVisibility(p.spec, p.absPath); err != nil {
+		return err
+	}
+	p.needsInlineMissionPack = true
+	return nil
+}
 
-	oracleByMissionID := map[string]string{}
-	inlineMissionPackCache := map[string]suite.ParsedSuite{}
-	inlineSplitMissionPackCache := map[string]SplitMissionPackResult{}
+func (p *specParser) validateExamPromptSource() error {
+	if strings.TrimSpace(p.spec.MissionSource.PromptSource.Path) != "" {
+		return nil
+	}
+	for i := range p.spec.Flows {
+		if strings.TrimSpace(p.spec.Flows[i].SuiteFile) != "" {
+			continue
+		}
+		if strings.TrimSpace(p.spec.Flows[i].PromptSource.Path) == "" {
+			return newOraclePolicyViolation(ReasonExamPromptPolicy, "missionSource.promptSource.path", p.spec.PromptMode, "promptMode=exam requires missionSource.promptSource.path or flows[].promptSource.path for inline mission-pack flows")
+		}
+	}
+	return nil
+}
 
-	flowSuites := make(map[string]suite.ParsedSuite, len(spec.Flows))
-	flowIDs := make([]string, 0, len(spec.Flows))
-	for i := range spec.Flows {
-		f := &spec.Flows[i]
-		f.FlowID = ids.SanitizeComponent(strings.TrimSpace(f.FlowID))
-		if f.FlowID == "" {
-			return ParsedSpec{}, fmt.Errorf("flow[%d]: missing/invalid flowId", i)
+func validateExamEvaluatorSettings(spec SpecV1) error {
+	if spec.Evaluation.Evaluator.Kind == "" {
+		return newOraclePolicyViolation(ReasonOracleEvaluator, "evaluation.evaluator.kind", spec.PromptMode, "promptMode=exam requires evaluation.evaluator.kind")
+	}
+	if spec.Evaluation.Evaluator.Kind == EvaluatorKindScript && len(spec.Evaluation.Evaluator.Command) == 0 {
+		return newOraclePolicyViolation(ReasonOracleEvaluator, "evaluation.evaluator.command", spec.PromptMode, "promptMode=exam with evaluation.evaluator.kind=script requires non-empty evaluation.evaluator.command")
+	}
+	return nil
+}
+
+func validateExamOracleVisibility(spec SpecV1, absPath string) error {
+	if spec.MissionSource.OracleSource.Visibility != OracleVisibilityHostOnly {
+		return nil
+	}
+	agentRoot := resolveAgentReadableRoot(absPath)
+	within, err := pathWithinRoot(agentRoot, spec.MissionSource.OracleSource.Path)
+	if err != nil {
+		return err
+	}
+	if !within {
+		return nil
+	}
+	return &OraclePolicyViolationError{
+		Code: ReasonOracleVisibility,
+		Violation: OraclePolicyViolation{
+			Field:       "missionSource.oracleSource.path",
+			PromptMode:  spec.PromptMode,
+			Visibility:  spec.MissionSource.OracleSource.Visibility,
+			OraclePath:  spec.MissionSource.OracleSource.Path,
+			AgentRoot:   agentRoot,
+			Description: "oracleSource.visibility=host_only requires missionSource.oracleSource.path outside the agent-readable workspace root",
+		},
+	}
+}
+
+func newOraclePolicyViolation(code string, field string, promptMode string, description string) error {
+	return &OraclePolicyViolationError{
+		Code: code,
+		Violation: OraclePolicyViolation{
+			Field:       field,
+			PromptMode:  promptMode,
+			Description: description,
+		},
+	}
+}
+
+func (p *specParser) parseFlows() error {
+	for i := range p.spec.Flows {
+		if err := p.parseFlow(i); err != nil {
+			return err
 		}
-		if _, ok := flowSuites[f.FlowID]; ok {
-			return ParsedSpec{}, fmt.Errorf("duplicate flowId %q", f.FlowID)
+	}
+	sort.Strings(p.flowIDs)
+	return nil
+}
+
+func (p *specParser) parseFlow(index int) error {
+	flow := &p.spec.Flows[index]
+	hasInlineMissionPack, err := p.normalizeFlowBasics(index, flow)
+	if err != nil {
+		return err
+	}
+	if err := p.normalizeFlowRunner(flow); err != nil {
+		return err
+	}
+	if err := p.normalizeFlowPolicy(flow); err != nil {
+		return err
+	}
+	parsedSuite, err := p.loadFlowSuite(*flow, hasInlineMissionPack)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(flow.PromptTemplate.Path) != "" {
+		parsedSuite, err = applyFlowPromptTemplate(parsedSuite, p.spec, *flow)
+		if err != nil {
+			return fmt.Errorf("flow %q: %w", flow.FlowID, err)
 		}
-		f.SuiteFile = strings.TrimSpace(f.SuiteFile)
-		f.PromptSource.Path = strings.TrimSpace(f.PromptSource.Path)
-		if f.PromptSource.Path != "" && !filepath.IsAbs(f.PromptSource.Path) {
-			f.PromptSource.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.PromptSource.Path))
+	}
+	p.flowSuites[flow.FlowID] = parsedSuite
+	p.flowIDs = append(p.flowIDs, flow.FlowID)
+	return nil
+}
+
+func (p *specParser) normalizeFlowBasics(index int, flow *FlowSpec) (bool, error) {
+	flow.FlowID = ids.SanitizeComponent(strings.TrimSpace(flow.FlowID))
+	if flow.FlowID == "" {
+		return false, fmt.Errorf("flow[%d]: missing/invalid flowId", index)
+	}
+	if _, ok := p.flowSuites[flow.FlowID]; ok {
+		return false, fmt.Errorf("duplicate flowId %q", flow.FlowID)
+	}
+	flow.SuiteFile = strings.TrimSpace(flow.SuiteFile)
+	flow.PromptSource.Path = resolveSpecRelativePath(p.absPath, flow.PromptSource.Path, false)
+	flow.PromptTemplate.Path = resolveSpecRelativePath(p.absPath, flow.PromptTemplate.Path, false)
+	if flow.SuiteFile == "" {
+		if !p.needsInlineMissionPack {
+			return false, fmt.Errorf("flow %q: missing suiteFile (set flows[].suiteFile or mission source path)", flow.FlowID)
 		}
-		f.PromptTemplate.Path = strings.TrimSpace(f.PromptTemplate.Path)
-		if f.PromptTemplate.Path != "" && !filepath.IsAbs(f.PromptTemplate.Path) {
-			f.PromptTemplate.Path = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.PromptTemplate.Path))
+		return true, nil
+	}
+	if flow.PromptSource.Path != "" {
+		return false, fmt.Errorf("flow %q: promptSource.path is only supported when suiteFile is omitted", flow.FlowID)
+	}
+	if !filepath.IsAbs(flow.SuiteFile) {
+		flow.SuiteFile = filepath.Clean(filepath.Join(filepath.Dir(p.absPath), flow.SuiteFile))
+	}
+	return false, nil
+}
+
+func (p *specParser) normalizeFlowRunner(flow *FlowSpec) error {
+	flow.Runner.Type = strings.TrimSpace(strings.ToLower(flow.Runner.Type))
+	if flow.Runner.Type == "" {
+		flow.Runner.Type = RunnerTypeProcessCmd
+	}
+	if !isValidRunnerType(flow.Runner.Type) {
+		return fmt.Errorf("flow %q: invalid runner.type (expected %s|%s|%s|%s|%s)", flow.FlowID, RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub, RunnerTypeCodexAppSrv)
+	}
+	if err := normalizeFlowRunnerModel(flow); err != nil {
+		return err
+	}
+	normalizeFlowRunnerDefaults(flow, p.spec.Timeouts, p.absPath)
+	if err := validateFlowRunnerBasics(flow); err != nil {
+		return err
+	}
+	if err := validateFlowRunnerCwd(flow); err != nil {
+		return err
+	}
+	if err := normalizeFlowResultChannel(flow); err != nil {
+		return err
+	}
+	return validateFlowPromptModeRunnerRequirements(flow, p.spec.PromptMode)
+}
+
+func normalizeFlowRunnerModel(flow *FlowSpec) error {
+	flow.Runner.Command = normalizeCommand(flow.Runner.Command)
+	flow.Runner.RuntimeStrategies = normalizeLowerTerms(flow.Runner.RuntimeStrategies)
+	flow.Runner.Model = strings.TrimSpace(flow.Runner.Model)
+	flow.Runner.ModelReasoningEffort = strings.ToLower(strings.TrimSpace(flow.Runner.ModelReasoningEffort))
+	flow.Runner.ModelReasoningPolicy = strings.ToLower(strings.TrimSpace(flow.Runner.ModelReasoningPolicy))
+	if len(flow.Runner.Command) == 0 && flow.Runner.Type != RunnerTypeCodexAppSrv {
+		return fmt.Errorf("flow %q: runner.command is required", flow.FlowID)
+	}
+	if flow.Runner.Type != RunnerTypeCodexAppSrv {
+		if flow.Runner.Model != "" || flow.Runner.ModelReasoningEffort != "" || flow.Runner.ModelReasoningPolicy != "" {
+			return fmt.Errorf("flow %q: runner.model and runner.modelReasoning* are supported only for runner.type=%s", flow.FlowID, RunnerTypeCodexAppSrv)
 		}
-		hasInlineMissionPack := f.SuiteFile == ""
-		if hasInlineMissionPack {
-			if !needsInlineMissionPack {
-				return ParsedSpec{}, fmt.Errorf("flow %q: missing suiteFile (set flows[].suiteFile or mission source path)", f.FlowID)
-			}
+	}
+	if flow.Runner.ModelReasoningEffort == "" && flow.Runner.ModelReasoningPolicy != "" {
+		return fmt.Errorf("flow %q: runner.modelReasoningPolicy requires runner.modelReasoningEffort", flow.FlowID)
+	}
+	if flow.Runner.ModelReasoningEffort != "" && !isValidModelReasoningEffort(flow.Runner.ModelReasoningEffort) {
+		return fmt.Errorf("flow %q: invalid runner.modelReasoningEffort (expected %s|%s|%s|%s|%s|%s)", flow.FlowID, ModelReasoningEffortNone, ModelReasoningEffortMinimal, ModelReasoningEffortLow, ModelReasoningEffortMedium, ModelReasoningEffortHigh, ModelReasoningEffortXHigh)
+	}
+	if flow.Runner.ModelReasoningEffort != "" && flow.Runner.ModelReasoningPolicy == "" {
+		flow.Runner.ModelReasoningPolicy = ModelReasoningPolicyBestEffort
+	}
+	if flow.Runner.ModelReasoningPolicy != "" && !isValidModelReasoningPolicy(flow.Runner.ModelReasoningPolicy) {
+		return fmt.Errorf("flow %q: invalid runner.modelReasoningPolicy (expected %s|%s)", flow.FlowID, ModelReasoningPolicyBestEffort, ModelReasoningPolicyRequired)
+	}
+	return nil
+}
+
+func normalizeFlowRunnerDefaults(flow *FlowSpec, timeouts TimeoutsSpec, absPath string) {
+	if strings.TrimSpace(flow.Runner.SessionIsolation) == "" {
+		if flow.Runner.Type == RunnerTypeCodexAppSrv {
+			flow.Runner.SessionIsolation = "native"
 		} else {
-			if f.PromptSource.Path != "" {
-				return ParsedSpec{}, fmt.Errorf("flow %q: promptSource.path is only supported when suiteFile is omitted", f.FlowID)
-			}
-			if !filepath.IsAbs(f.SuiteFile) {
-				f.SuiteFile = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.SuiteFile))
-			}
-		}
-		f.Runner.Type = strings.TrimSpace(strings.ToLower(f.Runner.Type))
-		if f.Runner.Type == "" {
-			f.Runner.Type = RunnerTypeProcessCmd
-		}
-		if !isValidRunnerType(f.Runner.Type) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.type (expected %s|%s|%s|%s|%s)", f.FlowID, RunnerTypeProcessCmd, RunnerTypeCodexExec, RunnerTypeCodexSub, RunnerTypeClaudeSub, RunnerTypeCodexAppSrv)
-		}
-		f.Runner.Command = normalizeCommand(f.Runner.Command)
-		f.Runner.RuntimeStrategies = normalizeLowerTerms(f.Runner.RuntimeStrategies)
-		f.Runner.Model = strings.TrimSpace(f.Runner.Model)
-		f.Runner.ModelReasoningEffort = strings.ToLower(strings.TrimSpace(f.Runner.ModelReasoningEffort))
-		f.Runner.ModelReasoningPolicy = strings.ToLower(strings.TrimSpace(f.Runner.ModelReasoningPolicy))
-		if len(f.Runner.Command) == 0 && f.Runner.Type != RunnerTypeCodexAppSrv {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.command is required", f.FlowID)
-		}
-		if f.Runner.Type != RunnerTypeCodexAppSrv {
-			if f.Runner.Model != "" || f.Runner.ModelReasoningEffort != "" || f.Runner.ModelReasoningPolicy != "" {
-				return ParsedSpec{}, fmt.Errorf("flow %q: runner.model and runner.modelReasoning* are supported only for runner.type=%s", f.FlowID, RunnerTypeCodexAppSrv)
-			}
-		}
-		if f.Runner.ModelReasoningEffort == "" && f.Runner.ModelReasoningPolicy != "" {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.modelReasoningPolicy requires runner.modelReasoningEffort", f.FlowID)
-		}
-		if f.Runner.ModelReasoningEffort != "" {
-			if !isValidModelReasoningEffort(f.Runner.ModelReasoningEffort) {
-				return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.modelReasoningEffort (expected %s|%s|%s|%s|%s|%s)", f.FlowID, ModelReasoningEffortNone, ModelReasoningEffortMinimal, ModelReasoningEffortLow, ModelReasoningEffortMedium, ModelReasoningEffortHigh, ModelReasoningEffortXHigh)
-			}
-			if f.Runner.ModelReasoningPolicy == "" {
-				f.Runner.ModelReasoningPolicy = ModelReasoningPolicyBestEffort
-			}
-		}
-		if f.Runner.ModelReasoningPolicy != "" && !isValidModelReasoningPolicy(f.Runner.ModelReasoningPolicy) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.modelReasoningPolicy (expected %s|%s)", f.FlowID, ModelReasoningPolicyBestEffort, ModelReasoningPolicyRequired)
-		}
-		if strings.TrimSpace(f.Runner.SessionIsolation) == "" {
-			if f.Runner.Type == RunnerTypeCodexAppSrv {
-				f.Runner.SessionIsolation = "native"
-			} else {
-				f.Runner.SessionIsolation = "process"
-			}
-		}
-		if strings.TrimSpace(f.Runner.FeedbackPolicy) == "" {
-			f.Runner.FeedbackPolicy = schema.FeedbackPolicyAutoFailV1
-		}
-		if !schema.IsValidFeedbackPolicyV1(f.Runner.FeedbackPolicy) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.feedbackPolicy", f.FlowID)
-		}
-		f.Runner.ToolDriver.Kind = strings.ToLower(strings.TrimSpace(f.Runner.ToolDriver.Kind))
-		if f.Runner.ToolDriver.Kind == "" {
-			f.Runner.ToolDriver.Kind = ToolDriverShell
-		}
-		if !isValidToolDriverKind(f.Runner.ToolDriver.Kind) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.toolDriver.kind (expected %s|%s|%s|%s)", f.FlowID, ToolDriverShell, ToolDriverCLIFunnel, ToolDriverMCPProxy, ToolDriverHTTPProxy)
-		}
-		f.Runner.ToolDriver.Shims = normalizeCommand(f.Runner.ToolDriver.Shims)
-		if strings.TrimSpace(f.Runner.TimeoutStart) == "" && strings.TrimSpace(spec.Timeouts.TimeoutStart) != "" {
-			f.Runner.TimeoutStart = spec.Timeouts.TimeoutStart
-		}
-		if !schema.IsValidTimeoutStartV1(f.Runner.TimeoutStart) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.timeoutStart", f.FlowID)
-		}
-		if f.Runner.TimeoutMs <= 0 && spec.Timeouts.DefaultAttemptTimeoutMs > 0 {
-			f.Runner.TimeoutMs = spec.Timeouts.DefaultAttemptTimeoutMs
-		}
-		if f.Runner.MCP.MaxToolCalls < 0 || f.Runner.MCP.IdleTimeoutMs < 0 {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.mcp fields must be >= 0", f.FlowID)
-		}
-		f.PromptTemplate.AllowRunnerEnvKeys = dedupeStringsStable(normalizeCommand(f.PromptTemplate.AllowRunnerEnvKeys))
-		f.Runner.Shims = dedupeStringsStable(normalizeCommand(append(append([]string{}, f.Runner.Shims...), f.Runner.ToolDriver.Shims...)))
-		f.Runner.Finalization.Mode = strings.ToLower(strings.TrimSpace(f.Runner.Finalization.Mode))
-		if f.Runner.Finalization.Mode == "" {
-			switch schema.NormalizeFeedbackPolicyV1(f.Runner.FeedbackPolicy) {
-			case schema.FeedbackPolicyStrictV1:
-				f.Runner.Finalization.Mode = FinalizationModeStrict
-			default:
-				f.Runner.Finalization.Mode = FinalizationModeAutoFail
-			}
-		}
-		if !isValidFinalizationMode(f.Runner.Finalization.Mode) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.mode (expected %s|%s|%s)", f.FlowID, FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON)
-		}
-		f.Runner.Cwd.Mode = strings.ToLower(strings.TrimSpace(f.Runner.Cwd.Mode))
-		if f.Runner.Cwd.Mode == "" {
-			f.Runner.Cwd.Mode = RunnerCwdModeInherit
-		}
-		if !isValidRunnerCwdMode(f.Runner.Cwd.Mode) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.cwd.mode (expected %s|%s)", f.FlowID, RunnerCwdModeInherit, RunnerCwdModeTempEmptyPerAttempt)
-		}
-		f.Runner.Cwd.BasePath = strings.TrimSpace(f.Runner.Cwd.BasePath)
-		if f.Runner.Cwd.BasePath != "" {
-			if !filepath.IsAbs(f.Runner.Cwd.BasePath) {
-				f.Runner.Cwd.BasePath = filepath.Clean(filepath.Join(filepath.Dir(absPath), f.Runner.Cwd.BasePath))
-			} else {
-				f.Runner.Cwd.BasePath = filepath.Clean(f.Runner.Cwd.BasePath)
-			}
-		}
-		if f.Runner.Cwd.Mode == RunnerCwdModeInherit && f.Runner.Cwd.BasePath != "" {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.basePath requires runner.cwd.mode=%s", f.FlowID, RunnerCwdModeTempEmptyPerAttempt)
-		}
-		f.Runner.Cwd.Retain = strings.ToLower(strings.TrimSpace(f.Runner.Cwd.Retain))
-		if f.Runner.Cwd.Retain == "" {
-			f.Runner.Cwd.Retain = RunnerCwdRetainNever
-		}
-		if !isValidRunnerCwdRetain(f.Runner.Cwd.Retain) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.cwd.retain (expected %s|%s|%s)", f.FlowID, RunnerCwdRetainNever, RunnerCwdRetainOnFailure, RunnerCwdRetainAlways)
-		}
-		if f.Runner.Cwd.Mode == RunnerCwdModeInherit && f.Runner.Cwd.Retain != RunnerCwdRetainNever {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.retain requires runner.cwd.mode=%s", f.FlowID, RunnerCwdModeTempEmptyPerAttempt)
-		}
-		if f.Runner.Cwd.Mode != RunnerCwdModeInherit && f.Runner.Type != RunnerTypeCodexAppSrv {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.cwd.mode=%s is supported only for runner.type=%s", f.FlowID, f.Runner.Cwd.Mode, RunnerTypeCodexAppSrv)
-		}
-		if f.Runner.Finalization.MinResultTurn < 0 {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.minResultTurn must be >= 1 when set", f.FlowID)
-		}
-		if f.Runner.Finalization.MinResultTurn == 0 {
-			f.Runner.Finalization.MinResultTurn = DefaultMinResultTurn
-		}
-		f.Runner.Finalization.ResultChannel.Kind = strings.ToLower(strings.TrimSpace(f.Runner.Finalization.ResultChannel.Kind))
-		if f.Runner.Finalization.ResultChannel.Kind == "" {
-			if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON {
-				f.Runner.Finalization.ResultChannel.Kind = ResultChannelFileJSON
-			} else {
-				f.Runner.Finalization.ResultChannel.Kind = ResultChannelNone
-			}
-		}
-		if !isValidResultChannelKind(f.Runner.Finalization.ResultChannel.Kind) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: invalid runner.finalization.resultChannel.kind (expected %s|%s|%s)", f.FlowID, ResultChannelNone, ResultChannelFileJSON, ResultChannelStdoutJSON)
-		}
-		switch f.Runner.Finalization.ResultChannel.Kind {
-		case ResultChannelFileJSON:
-			f.Runner.Finalization.ResultChannel.Path = strings.TrimSpace(f.Runner.Finalization.ResultChannel.Path)
-			if f.Runner.Finalization.ResultChannel.Path == "" {
-				f.Runner.Finalization.ResultChannel.Path = DefaultResultChannelPath
-			}
-			if filepath.IsAbs(f.Runner.Finalization.ResultChannel.Path) {
-				return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.resultChannel.path must be attempt-relative", f.FlowID)
-			}
-			f.Runner.Finalization.ResultChannel.Marker = ""
-		case ResultChannelStdoutJSON:
-			f.Runner.Finalization.ResultChannel.Marker = strings.TrimSpace(f.Runner.Finalization.ResultChannel.Marker)
-			if f.Runner.Finalization.ResultChannel.Marker == "" {
-				f.Runner.Finalization.ResultChannel.Marker = DefaultResultChannelMarker
-			}
-			f.Runner.Finalization.ResultChannel.Path = ""
-		default:
-			f.Runner.Finalization.ResultChannel.Path = ""
-			f.Runner.Finalization.ResultChannel.Marker = ""
-		}
-		if f.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON && f.Runner.Finalization.ResultChannel.Kind == ResultChannelNone {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.finalization.mode=%s requires runner.finalization.resultChannel.kind", f.FlowID, FinalizationModeAutoFromResultJSON)
-		}
-		if spec.PromptMode == PromptModeMissionOnly || spec.PromptMode == PromptModeExam {
-			if f.Runner.Finalization.Mode != FinalizationModeAutoFromResultJSON {
-				return ParsedSpec{}, fmt.Errorf("flow %q: promptMode=%s requires runner.finalization.mode=%s", f.FlowID, spec.PromptMode, FinalizationModeAutoFromResultJSON)
-			}
-			if f.Runner.ToolDriver.Kind == ToolDriverCLIFunnel && len(f.Runner.Shims) == 0 {
-				return ParsedSpec{}, &ToolDriverShimRequirementError{
-					Code: ReasonToolDriverShim,
-					Violation: ToolDriverShimRequirement{
-						FlowID:         f.FlowID,
-						PromptMode:     spec.PromptMode,
-						ToolDriverKind: f.Runner.ToolDriver.Kind,
-						RequiredOneOf:  []string{"runner.shims", "runner.toolDriver.shims"},
-						Snippet:        "runner.shims: [\"tool-cli\"]\n# or\nrunner.toolDriver.shims: [\"tool-cli\"]",
-					},
-				}
-			}
-		}
-		if f.Runner.FreshAgentPerAttempt == nil {
-			def := true
-			f.Runner.FreshAgentPerAttempt = &def
-		}
-		if !*f.Runner.FreshAgentPerAttempt {
-			return ParsedSpec{}, fmt.Errorf("flow %q: runner.freshAgentPerAttempt=false is not supported (fresh sessions are required)", f.FlowID)
-		}
-		if err := normalizeToolPolicySpec(&f.ToolPolicy); err != nil {
-			return ParsedSpec{}, &ToolPolicyConfigError{
-				Code: ReasonToolPolicyConfig,
-				Violation: ToolPolicyConfigViolation{
-					FlowID:      f.FlowID,
-					Description: err.Error(),
-				},
-			}
-		}
-		f.AdapterContract.RequiredOutputFields = normalizeCommand(f.AdapterContract.RequiredOutputFields)
-		if len(f.AdapterContract.RequiredOutputFields) == 0 {
-			f.AdapterContract.RequiredOutputFields = []string{"attemptDir", "status", "errors"}
-		}
-		if !containsAllRequiredFields(f.AdapterContract.RequiredOutputFields) {
-			return ParsedSpec{}, fmt.Errorf("flow %q: adapterContract.requiredOutputFields must include attemptDir,status,errors", f.FlowID)
-		}
-
-		var ps suite.ParsedSuite
-		if hasInlineMissionPack {
-			switch spec.PromptMode {
-			case PromptModeExam:
-				promptSourcePath := strings.TrimSpace(f.PromptSource.Path)
-				if promptSourcePath == "" {
-					promptSourcePath = strings.TrimSpace(spec.MissionSource.PromptSource.Path)
-				}
-				if promptSourcePath == "" {
-					return ParsedSpec{}, fmt.Errorf("flow %q: missing promptSource.path for exam mission-pack flow", f.FlowID)
-				}
-				loaded, ok := inlineSplitMissionPackCache[promptSourcePath]
-				if !ok {
-					var err error
-					loaded, err = LoadMissionPackSplit(promptSourcePath, spec.MissionSource.OracleSource.Path, spec.CampaignID)
-					if err != nil {
-						return ParsedSpec{}, fmt.Errorf("flow %q: %w", f.FlowID, err)
-					}
-					inlineSplitMissionPackCache[promptSourcePath] = loaded
-				}
-				ps = loaded.Parsed
-				if len(oracleByMissionID) == 0 {
-					oracleByMissionID = cloneOracleByMissionID(loaded.OracleByMissionID)
-				} else if !oracleByMissionIDEqual(oracleByMissionID, loaded.OracleByMissionID) {
-					return ParsedSpec{}, fmt.Errorf("flow %q: oracle mission mapping mismatch across prompt sources", f.FlowID)
-				}
-			default:
-				missionSourcePath := strings.TrimSpace(f.PromptSource.Path)
-				if missionSourcePath == "" {
-					missionSourcePath = strings.TrimSpace(spec.MissionSource.Path)
-				}
-				if missionSourcePath == "" {
-					return ParsedSpec{}, fmt.Errorf("flow %q: missing suiteFile (set flows[].suiteFile, missionSource.path, or flows[].promptSource.path)", f.FlowID)
-				}
-				loaded, ok := inlineMissionPackCache[missionSourcePath]
-				if !ok {
-					var err error
-					loaded, err = LoadMissionPack(missionSourcePath, spec.CampaignID)
-					if err != nil {
-						return ParsedSpec{}, fmt.Errorf("flow %q: %w", f.FlowID, err)
-					}
-					inlineMissionPackCache[missionSourcePath] = loaded
-				}
-				ps = loaded
-			}
-		} else {
-			var err error
-			ps, err = suite.ParseFile(f.SuiteFile)
-			if err != nil {
-				return ParsedSpec{}, fmt.Errorf("flow %q: parse suite: %w", f.FlowID, err)
-			}
-		}
-		if strings.TrimSpace(f.PromptTemplate.Path) != "" {
-			rendered, err := applyFlowPromptTemplate(ps, spec, *f)
-			if err != nil {
-				return ParsedSpec{}, fmt.Errorf("flow %q: %w", f.FlowID, err)
-			}
-			ps = rendered
-		}
-		flowSuites[f.FlowID] = ps
-		flowIDs = append(flowIDs, f.FlowID)
-	}
-
-	sort.Strings(flowIDs)
-	baseFlow := spec.Flows[0].FlowID
-	base := flowSuites[baseFlow]
-	baseMissionCount := len(base.Suite.Missions)
-	if baseMissionCount == 0 {
-		return ParsedSpec{}, fmt.Errorf("base flow suite has no missions")
-	}
-
-	for _, id := range flowIDs {
-		cur := flowSuites[id]
-		if len(cur.Suite.Missions) != baseMissionCount {
-			return ParsedSpec{}, fmt.Errorf("flow %q mission count %d does not match base flow %d", id, len(cur.Suite.Missions), baseMissionCount)
-		}
-		for i := 0; i < baseMissionCount; i++ {
-			baseID := strings.TrimSpace(base.Suite.Missions[i].MissionID)
-			curID := strings.TrimSpace(cur.Suite.Missions[i].MissionID)
-			if baseID != curID {
-				return ParsedSpec{}, fmt.Errorf("flow %q mission order mismatch at index %d (base=%q flow=%q)", id, i, baseID, curID)
-			}
+			flow.Runner.SessionIsolation = "process"
 		}
 	}
+	if strings.TrimSpace(flow.Runner.FeedbackPolicy) == "" {
+		flow.Runner.FeedbackPolicy = schema.FeedbackPolicyAutoFailV1
+	}
+	normalizeFlowToolDriverDefaults(flow)
+	applyFlowTimeoutDefaults(flow, timeouts)
+	normalizeFlowRunnerShims(flow)
+	normalizeFlowFinalizationDefaults(flow)
+	normalizeFlowRunnerCwdDefaults(flow, absPath)
+	if flow.Runner.FreshAgentPerAttempt == nil {
+		def := true
+		flow.Runner.FreshAgentPerAttempt = &def
+	}
+}
 
-	indexes, err := ResolveMissionIndexes(base.Suite, spec.MissionSource.Selection)
+func normalizeFlowToolDriverDefaults(flow *FlowSpec) {
+	flow.Runner.ToolDriver.Kind = strings.ToLower(strings.TrimSpace(flow.Runner.ToolDriver.Kind))
+	if flow.Runner.ToolDriver.Kind == "" {
+		flow.Runner.ToolDriver.Kind = ToolDriverShell
+	}
+	flow.Runner.ToolDriver.Shims = normalizeCommand(flow.Runner.ToolDriver.Shims)
+}
+
+func applyFlowTimeoutDefaults(flow *FlowSpec, timeouts TimeoutsSpec) {
+	if strings.TrimSpace(flow.Runner.TimeoutStart) == "" && strings.TrimSpace(timeouts.TimeoutStart) != "" {
+		flow.Runner.TimeoutStart = timeouts.TimeoutStart
+	}
+	if flow.Runner.TimeoutMs <= 0 && timeouts.DefaultAttemptTimeoutMs > 0 {
+		flow.Runner.TimeoutMs = timeouts.DefaultAttemptTimeoutMs
+	}
+}
+
+func normalizeFlowRunnerShims(flow *FlowSpec) {
+	flow.PromptTemplate.AllowRunnerEnvKeys = dedupeStringsStable(normalizeCommand(flow.PromptTemplate.AllowRunnerEnvKeys))
+	flow.Runner.Shims = dedupeStringsStable(normalizeCommand(append(append([]string{}, flow.Runner.Shims...), flow.Runner.ToolDriver.Shims...)))
+}
+
+func normalizeFlowFinalizationDefaults(flow *FlowSpec) {
+	flow.Runner.Finalization.Mode = strings.ToLower(strings.TrimSpace(flow.Runner.Finalization.Mode))
+	if flow.Runner.Finalization.Mode == "" {
+		flow.Runner.Finalization.Mode = normalizedFinalizationMode(flow.Runner.FeedbackPolicy)
+	}
+	if flow.Runner.Finalization.MinResultTurn == 0 {
+		flow.Runner.Finalization.MinResultTurn = DefaultMinResultTurn
+	}
+	flow.Runner.Finalization.ResultChannel.Kind = strings.ToLower(strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Kind))
+	if flow.Runner.Finalization.ResultChannel.Kind == "" {
+		flow.Runner.Finalization.ResultChannel.Kind = defaultResultChannelKind(flow.Runner.Finalization.Mode)
+	}
+}
+
+func normalizeFlowRunnerCwdDefaults(flow *FlowSpec, absPath string) {
+	flow.Runner.Cwd.Mode = strings.ToLower(strings.TrimSpace(flow.Runner.Cwd.Mode))
+	if flow.Runner.Cwd.Mode == "" {
+		flow.Runner.Cwd.Mode = RunnerCwdModeInherit
+	}
+	flow.Runner.Cwd.BasePath = strings.TrimSpace(flow.Runner.Cwd.BasePath)
+	if flow.Runner.Cwd.BasePath != "" {
+		flow.Runner.Cwd.BasePath = normalizeCwdBasePath(flow.Runner.Cwd.BasePath, absPath)
+	}
+	flow.Runner.Cwd.Retain = strings.ToLower(strings.TrimSpace(flow.Runner.Cwd.Retain))
+	if flow.Runner.Cwd.Retain == "" {
+		flow.Runner.Cwd.Retain = RunnerCwdRetainNever
+	}
+}
+
+func normalizedFinalizationMode(feedbackPolicy string) string {
+	switch schema.NormalizeFeedbackPolicyV1(feedbackPolicy) {
+	case schema.FeedbackPolicyStrictV1:
+		return FinalizationModeStrict
+	default:
+		return FinalizationModeAutoFail
+	}
+}
+
+func normalizeCwdBasePath(basePath string, absPath string) string {
+	if filepath.IsAbs(basePath) {
+		return filepath.Clean(basePath)
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(absPath), basePath))
+}
+
+func defaultResultChannelKind(mode string) string {
+	if mode == FinalizationModeAutoFromResultJSON {
+		return ResultChannelFileJSON
+	}
+	return ResultChannelNone
+}
+
+func validateFlowRunnerBasics(flow *FlowSpec) error {
+	if !schema.IsValidFeedbackPolicyV1(flow.Runner.FeedbackPolicy) {
+		return fmt.Errorf("flow %q: invalid runner.feedbackPolicy", flow.FlowID)
+	}
+	if !isValidToolDriverKind(flow.Runner.ToolDriver.Kind) {
+		return fmt.Errorf("flow %q: invalid runner.toolDriver.kind (expected %s|%s|%s|%s)", flow.FlowID, ToolDriverShell, ToolDriverCLIFunnel, ToolDriverMCPProxy, ToolDriverHTTPProxy)
+	}
+	if !schema.IsValidTimeoutStartV1(flow.Runner.TimeoutStart) {
+		return fmt.Errorf("flow %q: invalid runner.timeoutStart", flow.FlowID)
+	}
+	if flow.Runner.MCP.MaxToolCalls < 0 || flow.Runner.MCP.IdleTimeoutMs < 0 {
+		return fmt.Errorf("flow %q: runner.mcp fields must be >= 0", flow.FlowID)
+	}
+	if !isValidFinalizationMode(flow.Runner.Finalization.Mode) {
+		return fmt.Errorf("flow %q: invalid runner.finalization.mode (expected %s|%s|%s)", flow.FlowID, FinalizationModeStrict, FinalizationModeAutoFail, FinalizationModeAutoFromResultJSON)
+	}
+	if flow.Runner.Finalization.MinResultTurn < 0 {
+		return fmt.Errorf("flow %q: runner.finalization.minResultTurn must be >= 1 when set", flow.FlowID)
+	}
+	return nil
+}
+
+func validateFlowRunnerCwd(flow *FlowSpec) error {
+	if !isValidRunnerCwdMode(flow.Runner.Cwd.Mode) {
+		return fmt.Errorf("flow %q: invalid runner.cwd.mode (expected %s|%s)", flow.FlowID, RunnerCwdModeInherit, RunnerCwdModeTempEmptyPerAttempt)
+	}
+	if !isValidRunnerCwdRetain(flow.Runner.Cwd.Retain) {
+		return fmt.Errorf("flow %q: invalid runner.cwd.retain (expected %s|%s|%s)", flow.FlowID, RunnerCwdRetainNever, RunnerCwdRetainOnFailure, RunnerCwdRetainAlways)
+	}
+	if flow.Runner.Cwd.Mode == RunnerCwdModeInherit && flow.Runner.Cwd.BasePath != "" {
+		return fmt.Errorf("flow %q: runner.cwd.basePath requires runner.cwd.mode=%s", flow.FlowID, RunnerCwdModeTempEmptyPerAttempt)
+	}
+	if flow.Runner.Cwd.Mode == RunnerCwdModeInherit && flow.Runner.Cwd.Retain != RunnerCwdRetainNever {
+		return fmt.Errorf("flow %q: runner.cwd.retain requires runner.cwd.mode=%s", flow.FlowID, RunnerCwdModeTempEmptyPerAttempt)
+	}
+	if flow.Runner.Cwd.Mode != RunnerCwdModeInherit && flow.Runner.Type != RunnerTypeCodexAppSrv {
+		return fmt.Errorf("flow %q: runner.cwd.mode=%s is supported only for runner.type=%s", flow.FlowID, flow.Runner.Cwd.Mode, RunnerTypeCodexAppSrv)
+	}
+	return nil
+}
+
+func normalizeFlowResultChannel(flow *FlowSpec) error {
+	if !isValidResultChannelKind(flow.Runner.Finalization.ResultChannel.Kind) {
+		return fmt.Errorf("flow %q: invalid runner.finalization.resultChannel.kind (expected %s|%s|%s)", flow.FlowID, ResultChannelNone, ResultChannelFileJSON, ResultChannelStdoutJSON)
+	}
+	switch flow.Runner.Finalization.ResultChannel.Kind {
+	case ResultChannelFileJSON:
+		flow.Runner.Finalization.ResultChannel.Path = strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path)
+		if flow.Runner.Finalization.ResultChannel.Path == "" {
+			flow.Runner.Finalization.ResultChannel.Path = DefaultResultChannelPath
+		}
+		if filepath.IsAbs(flow.Runner.Finalization.ResultChannel.Path) {
+			return fmt.Errorf("flow %q: runner.finalization.resultChannel.path must be attempt-relative", flow.FlowID)
+		}
+		flow.Runner.Finalization.ResultChannel.Marker = ""
+	case ResultChannelStdoutJSON:
+		flow.Runner.Finalization.ResultChannel.Marker = strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker)
+		if flow.Runner.Finalization.ResultChannel.Marker == "" {
+			flow.Runner.Finalization.ResultChannel.Marker = DefaultResultChannelMarker
+		}
+		flow.Runner.Finalization.ResultChannel.Path = ""
+	default:
+		flow.Runner.Finalization.ResultChannel.Path = ""
+		flow.Runner.Finalization.ResultChannel.Marker = ""
+	}
+	if flow.Runner.Finalization.Mode == FinalizationModeAutoFromResultJSON && flow.Runner.Finalization.ResultChannel.Kind == ResultChannelNone {
+		return fmt.Errorf("flow %q: runner.finalization.mode=%s requires runner.finalization.resultChannel.kind", flow.FlowID, FinalizationModeAutoFromResultJSON)
+	}
+	return nil
+}
+
+func validateFlowPromptModeRunnerRequirements(flow *FlowSpec, promptMode string) error {
+	if promptMode != PromptModeMissionOnly && promptMode != PromptModeExam {
+		return nil
+	}
+	if flow.Runner.Finalization.Mode != FinalizationModeAutoFromResultJSON {
+		return fmt.Errorf("flow %q: promptMode=%s requires runner.finalization.mode=%s", flow.FlowID, promptMode, FinalizationModeAutoFromResultJSON)
+	}
+	if flow.Runner.ToolDriver.Kind == ToolDriverCLIFunnel && len(flow.Runner.Shims) == 0 {
+		return &ToolDriverShimRequirementError{
+			Code: ReasonToolDriverShim,
+			Violation: ToolDriverShimRequirement{
+				FlowID:         flow.FlowID,
+				PromptMode:     promptMode,
+				ToolDriverKind: flow.Runner.ToolDriver.Kind,
+				RequiredOneOf:  []string{"runner.shims", "runner.toolDriver.shims"},
+				Snippet:        "runner.shims: [\"tool-cli\"]\n# or\nrunner.toolDriver.shims: [\"tool-cli\"]",
+			},
+		}
+	}
+	return nil
+}
+
+func (p *specParser) normalizeFlowPolicy(flow *FlowSpec) error {
+	if !*flow.Runner.FreshAgentPerAttempt {
+		return fmt.Errorf("flow %q: runner.freshAgentPerAttempt=false is not supported (fresh sessions are required)", flow.FlowID)
+	}
+	if err := normalizeToolPolicySpec(&flow.ToolPolicy); err != nil {
+		return &ToolPolicyConfigError{
+			Code: ReasonToolPolicyConfig,
+			Violation: ToolPolicyConfigViolation{
+				FlowID:      flow.FlowID,
+				Description: err.Error(),
+			},
+		}
+	}
+	flow.AdapterContract.RequiredOutputFields = normalizeCommand(flow.AdapterContract.RequiredOutputFields)
+	if len(flow.AdapterContract.RequiredOutputFields) == 0 {
+		flow.AdapterContract.RequiredOutputFields = []string{"attemptDir", "status", "errors"}
+	}
+	if !containsAllRequiredFields(flow.AdapterContract.RequiredOutputFields) {
+		return fmt.Errorf("flow %q: adapterContract.requiredOutputFields must include attemptDir,status,errors", flow.FlowID)
+	}
+	return nil
+}
+
+func (p *specParser) loadFlowSuite(flow FlowSpec, hasInlineMissionPack bool) (suite.ParsedSuite, error) {
+	if hasInlineMissionPack {
+		return p.loadInlineFlowSuite(flow)
+	}
+	parsed, err := suite.ParseFile(flow.SuiteFile)
+	if err != nil {
+		return suite.ParsedSuite{}, fmt.Errorf("flow %q: parse suite: %w", flow.FlowID, err)
+	}
+	return parsed, nil
+}
+
+func (p *specParser) loadInlineFlowSuite(flow FlowSpec) (suite.ParsedSuite, error) {
+	if p.spec.PromptMode == PromptModeExam {
+		return p.loadExamFlowSuite(flow)
+	}
+	return p.loadMissionSourceFlowSuite(flow)
+}
+
+func (p *specParser) loadExamFlowSuite(flow FlowSpec) (suite.ParsedSuite, error) {
+	promptSourcePath := strings.TrimSpace(flow.PromptSource.Path)
+	if promptSourcePath == "" {
+		promptSourcePath = strings.TrimSpace(p.spec.MissionSource.PromptSource.Path)
+	}
+	if promptSourcePath == "" {
+		return suite.ParsedSuite{}, fmt.Errorf("flow %q: missing promptSource.path for exam mission-pack flow", flow.FlowID)
+	}
+	loaded, ok := p.inlineSplitMissionPackMap[promptSourcePath]
+	if !ok {
+		var err error
+		loaded, err = LoadMissionPackSplit(promptSourcePath, p.spec.MissionSource.OracleSource.Path, p.spec.CampaignID)
+		if err != nil {
+			return suite.ParsedSuite{}, fmt.Errorf("flow %q: %w", flow.FlowID, err)
+		}
+		p.inlineSplitMissionPackMap[promptSourcePath] = loaded
+	}
+	if err := p.mergeOracleByMissionID(flow.FlowID, loaded.OracleByMissionID); err != nil {
+		return suite.ParsedSuite{}, err
+	}
+	return loaded.Parsed, nil
+}
+
+func (p *specParser) loadMissionSourceFlowSuite(flow FlowSpec) (suite.ParsedSuite, error) {
+	missionSourcePath := strings.TrimSpace(flow.PromptSource.Path)
+	if missionSourcePath == "" {
+		missionSourcePath = strings.TrimSpace(p.spec.MissionSource.Path)
+	}
+	if missionSourcePath == "" {
+		return suite.ParsedSuite{}, fmt.Errorf("flow %q: missing suiteFile (set flows[].suiteFile, missionSource.path, or flows[].promptSource.path)", flow.FlowID)
+	}
+	loaded, ok := p.inlineMissionPackCache[missionSourcePath]
+	if !ok {
+		var err error
+		loaded, err = LoadMissionPack(missionSourcePath, p.spec.CampaignID)
+		if err != nil {
+			return suite.ParsedSuite{}, fmt.Errorf("flow %q: %w", flow.FlowID, err)
+		}
+		p.inlineMissionPackCache[missionSourcePath] = loaded
+	}
+	return loaded, nil
+}
+
+func (p *specParser) mergeOracleByMissionID(flowID string, incoming map[string]string) error {
+	if len(p.oracleByMissionID) == 0 {
+		p.oracleByMissionID = cloneOracleByMissionID(incoming)
+		return nil
+	}
+	if oracleByMissionIDEqual(p.oracleByMissionID, incoming) {
+		return nil
+	}
+	return fmt.Errorf("flow %q: oracle mission mapping mismatch across prompt sources", flowID)
+}
+
+func (p *specParser) buildParsedSpec() (ParsedSpec, error) {
+	base, err := p.baseFlowSuite()
+	if err != nil {
+		return ParsedSpec{}, err
+	}
+	if err := validateFlowSuiteAlignment(base, p.flowSuites, p.flowIDs); err != nil {
+		return ParsedSpec{}, err
+	}
+	indexes, err := ResolveMissionIndexes(base.Suite, p.spec.MissionSource.Selection)
 	if err != nil {
 		return ParsedSpec{}, err
 	}
 	if len(indexes) == 0 {
 		return ParsedSpec{}, fmt.Errorf("campaign selection resolved to zero missions")
 	}
+	if err := applyTotalMissionWindow(&p.spec, indexes); err != nil {
+		return ParsedSpec{}, err
+	}
+	parsed := ParsedSpec{
+		SpecPath:          p.absPath,
+		Spec:              p.spec,
+		BaseSuite:         base,
+		FlowSuites:        p.flowSuites,
+		MissionIndexes:    indexes,
+		OracleByMissionID: p.oracleByMissionID,
+	}
+	return validatePromptModeViolations(parsed)
+}
 
+func (p *specParser) baseFlowSuite() (suite.ParsedSuite, error) {
+	baseFlowID := p.spec.Flows[0].FlowID
+	base := p.flowSuites[baseFlowID]
+	if len(base.Suite.Missions) == 0 {
+		return suite.ParsedSuite{}, fmt.Errorf("base flow suite has no missions")
+	}
+	return base, nil
+}
+
+func validateFlowSuiteAlignment(base suite.ParsedSuite, flowSuites map[string]suite.ParsedSuite, flowIDs []string) error {
+	baseMissionCount := len(base.Suite.Missions)
+	for _, flowID := range flowIDs {
+		cur := flowSuites[flowID]
+		if len(cur.Suite.Missions) != baseMissionCount {
+			return fmt.Errorf("flow %q mission count %d does not match base flow %d", flowID, len(cur.Suite.Missions), baseMissionCount)
+		}
+		if err := validateMissionOrder(base, cur, flowID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMissionOrder(base suite.ParsedSuite, cur suite.ParsedSuite, flowID string) error {
+	for i := range base.Suite.Missions {
+		baseID := strings.TrimSpace(base.Suite.Missions[i].MissionID)
+		curID := strings.TrimSpace(cur.Suite.Missions[i].MissionID)
+		if baseID != curID {
+			return fmt.Errorf("flow %q mission order mismatch at index %d (base=%q flow=%q)", flowID, i, baseID, curID)
+		}
+	}
+	return nil
+}
+
+func applyTotalMissionWindow(spec *SpecV1, indexes []int) error {
 	if spec.TotalMissions == 0 {
 		spec.TotalMissions = len(indexes)
 	}
@@ -1052,33 +1273,29 @@ func ParseSpecFile(path string) (ParsedSpec, error) {
 		spec.TotalMissions = len(indexes)
 	}
 	if spec.TotalMissions > 0 && spec.TotalMissions < 1 {
-		return ParsedSpec{}, fmt.Errorf("totalMissions must be >= 1 when set")
+		return fmt.Errorf("totalMissions must be >= 1 when set")
 	}
-	parsed := ParsedSpec{
-		SpecPath:          absPath,
-		Spec:              spec,
-		BaseSuite:         base,
-		FlowSuites:        flowSuites,
-		MissionIndexes:    indexes,
-		OracleByMissionID: oracleByMissionID,
-	}
-	if spec.PromptMode == PromptModeMissionOnly || spec.PromptMode == PromptModeExam {
-		violations := EvaluatePromptModeViolations(parsed)
-		if len(violations) > 0 {
-			code := ReasonPromptModePolicy
-			if spec.PromptMode == PromptModeExam {
-				code = ReasonExamPromptPolicy
-			}
-			return ParsedSpec{}, &PromptModeViolationError{
-				Code:       code,
-				PromptMode: spec.PromptMode,
-				Violations: violations,
-			}
-		}
-	}
-	return parsed, nil
+	return nil
 }
 
+func validatePromptModeViolations(parsed ParsedSpec) (ParsedSpec, error) {
+	if parsed.Spec.PromptMode != PromptModeMissionOnly && parsed.Spec.PromptMode != PromptModeExam {
+		return parsed, nil
+	}
+	violations := EvaluatePromptModeViolations(parsed)
+	if len(violations) == 0 {
+		return parsed, nil
+	}
+	code := ReasonPromptModePolicy
+	if parsed.Spec.PromptMode == PromptModeExam {
+		code = ReasonExamPromptPolicy
+	}
+	return ParsedSpec{}, &PromptModeViolationError{
+		Code:       code,
+		PromptMode: parsed.Spec.PromptMode,
+		Violations: violations,
+	}
+}
 func (s SpecV1) PairGateEnabled() bool {
 	if s.PairGate.Enabled == nil {
 		return true
@@ -1130,26 +1347,9 @@ func normalizeToolPolicySpec(policy *ToolPolicySpec) error {
 	}
 	policy.Allow = normalizeToolPolicyRules(policy.Allow)
 	policy.Deny = normalizeToolPolicyRules(policy.Deny)
-	aliases := map[string][]string{}
-	for rawKey, rawValues := range policy.Aliases {
-		key := strings.ToLower(strings.TrimSpace(rawKey))
-		if key == "" {
-			return fmt.Errorf("toolPolicy.aliases keys must be non-empty")
-		}
-		values := make([]string, 0, len(rawValues))
-		seen := map[string]bool{}
-		for _, raw := range rawValues {
-			val := strings.ToLower(strings.TrimSpace(raw))
-			if val == "" || seen[val] {
-				continue
-			}
-			seen[val] = true
-			values = append(values, val)
-		}
-		if len(values) > 0 {
-			sort.Strings(values)
-			aliases[key] = values
-		}
+	aliases, err := normalizeToolPolicyAliases(policy.Aliases)
+	if err != nil {
+		return err
 	}
 	policy.Aliases = aliases
 	if err := validateToolPolicyRules(policy.Allow); err != nil {
@@ -1162,6 +1362,36 @@ func normalizeToolPolicySpec(policy *ToolPolicySpec) error {
 		policy.Aliases = nil
 	}
 	return nil
+}
+
+func normalizeToolPolicyAliases(in map[string][]string) (map[string][]string, error) {
+	aliases := map[string][]string{}
+	for rawKey, rawValues := range in {
+		key := strings.ToLower(strings.TrimSpace(rawKey))
+		if key == "" {
+			return nil, fmt.Errorf("toolPolicy.aliases keys must be non-empty")
+		}
+		values := normalizeToolPolicyAliasValues(rawValues)
+		if len(values) > 0 {
+			aliases[key] = values
+		}
+	}
+	return aliases, nil
+}
+
+func normalizeToolPolicyAliasValues(in []string) []string {
+	values := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		val := strings.ToLower(strings.TrimSpace(raw))
+		if val == "" || seen[val] {
+			continue
+		}
+		seen[val] = true
+		values = append(values, val)
+	}
+	sort.Strings(values)
+	return values
 }
 
 func normalizeToolPolicyRules(in []ToolPolicyRuleSpec) []ToolPolicyRuleSpec {
@@ -1271,64 +1501,93 @@ func ResolveMissionIndexes(sf suite.SuiteFileV1, sel MissionSelectionSpec) ([]in
 	if mode == "" {
 		mode = SelectionModeAll
 	}
-
-	out := make([]int, 0, missionCount)
-	appendIndex := func(idx int) error {
-		if idx < 0 || idx >= missionCount {
-			return fmt.Errorf("mission selection index out of range: %d", idx)
-		}
-		out = append(out, idx)
-		return nil
+	out, err := resolveMissionIndexesByMode(sf, sel, mode, missionCount)
+	if err != nil {
+		return nil, err
 	}
-
-	switch mode {
-	case SelectionModeAll:
-		for i := 0; i < missionCount; i++ {
-			out = append(out, i)
-		}
-	case SelectionModeMissionID:
-		if len(sel.MissionIDs) == 0 {
-			return nil, fmt.Errorf("mission selection mode %q requires missionIds", mode)
-		}
-		indexByID := map[string]int{}
-		for i := range sf.Missions {
-			indexByID[sf.Missions[i].MissionID] = i
-		}
-		for _, raw := range sel.MissionIDs {
-			id := strings.TrimSpace(raw)
-			idx, ok := indexByID[id]
-			if !ok {
-				return nil, fmt.Errorf("mission selection id not found: %q", id)
-			}
-			out = append(out, idx)
-		}
-	case SelectionModeIndex:
-		if len(sel.Indexes) == 0 {
-			return nil, fmt.Errorf("mission selection mode %q requires indexes", mode)
-		}
-		for _, idx := range sel.Indexes {
-			if err := appendIndex(idx); err != nil {
-				return nil, err
-			}
-		}
-	case SelectionModeRange:
-		if sel.Range.End < sel.Range.Start {
-			return nil, fmt.Errorf("mission selection range end must be >= start")
-		}
-		for idx := sel.Range.Start; idx <= sel.Range.End; idx++ {
-			if err := appendIndex(idx); err != nil {
-				return nil, err
-			}
-		}
-	default:
-		return nil, fmt.Errorf("invalid mission selection mode %q (expected all|mission_id|index|range)", mode)
-	}
-
 	out = dedupeIntsStable(out)
 	if len(out) == 0 {
 		return nil, fmt.Errorf("mission selection resolved to zero missions")
 	}
 	return out, nil
+}
+
+func resolveMissionIndexesByMode(sf suite.SuiteFileV1, sel MissionSelectionSpec, mode string, missionCount int) ([]int, error) {
+	switch mode {
+	case SelectionModeAll:
+		return resolveMissionIndexesAll(missionCount), nil
+	case SelectionModeMissionID:
+		return resolveMissionIndexesByMissionID(sf, sel.MissionIDs, mode)
+	case SelectionModeIndex:
+		return resolveMissionIndexesByIndex(sel.Indexes, mode, missionCount)
+	case SelectionModeRange:
+		return resolveMissionIndexesByRange(sel.Range, missionCount)
+	default:
+		return nil, fmt.Errorf("invalid mission selection mode %q (expected all|mission_id|index|range)", mode)
+	}
+}
+
+func resolveMissionIndexesAll(missionCount int) []int {
+	out := make([]int, 0, missionCount)
+	for i := 0; i < missionCount; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+func resolveMissionIndexesByMissionID(sf suite.SuiteFileV1, missionIDs []string, mode string) ([]int, error) {
+	if len(missionIDs) == 0 {
+		return nil, fmt.Errorf("mission selection mode %q requires missionIds", mode)
+	}
+	indexByID := map[string]int{}
+	for i := range sf.Missions {
+		indexByID[sf.Missions[i].MissionID] = i
+	}
+	out := make([]int, 0, len(missionIDs))
+	for _, raw := range missionIDs {
+		id := strings.TrimSpace(raw)
+		idx, ok := indexByID[id]
+		if !ok {
+			return nil, fmt.Errorf("mission selection id not found: %q", id)
+		}
+		out = append(out, idx)
+	}
+	return out, nil
+}
+
+func resolveMissionIndexesByIndex(indexes []int, mode string, missionCount int) ([]int, error) {
+	if len(indexes) == 0 {
+		return nil, fmt.Errorf("mission selection mode %q requires indexes", mode)
+	}
+	out := make([]int, 0, len(indexes))
+	for _, idx := range indexes {
+		if err := validateMissionIndexBounds(idx, missionCount); err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, nil
+}
+
+func resolveMissionIndexesByRange(window MissionRangeWindow, missionCount int) ([]int, error) {
+	if window.End < window.Start {
+		return nil, fmt.Errorf("mission selection range end must be >= start")
+	}
+	out := make([]int, 0, window.End-window.Start+1)
+	for idx := window.Start; idx <= window.End; idx++ {
+		if err := validateMissionIndexBounds(idx, missionCount); err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, nil
+}
+
+func validateMissionIndexBounds(index int, missionCount int) error {
+	if index < 0 || index >= missionCount {
+		return fmt.Errorf("mission selection index out of range: %d", index)
+	}
+	return nil
 }
 
 func WindowMissionIndexes(indexes []int, missionOffset int, totalMissions int) ([]int, error) {
@@ -1354,17 +1613,25 @@ func EvaluatePromptModeViolations(parsed ParsedSpec) []PromptModeViolation {
 	if parsed.Spec.PromptMode != PromptModeMissionOnly && parsed.Spec.PromptMode != PromptModeExam {
 		return nil
 	}
-	terms := parsed.Spec.NoContext.ForbiddenPromptTerms
-	if len(terms) == 0 {
-		if parsed.Spec.PromptMode == PromptModeExam {
-			terms = defaultExamForbiddenTerms()
-		} else {
-			terms = defaultMissionOnlyForbiddenTerms()
-		}
-	}
+	terms := resolvePromptModeTerms(parsed.Spec)
 	if len(terms) == 0 || len(parsed.MissionIndexes) == 0 || len(parsed.FlowSuites) == 0 {
 		return nil
 	}
+	return collectPromptModeViolations(parsed, terms)
+}
+
+func resolvePromptModeTerms(spec SpecV1) []string {
+	terms := spec.NoContext.ForbiddenPromptTerms
+	if len(terms) > 0 {
+		return terms
+	}
+	if spec.PromptMode == PromptModeExam {
+		return defaultExamForbiddenTerms()
+	}
+	return defaultMissionOnlyForbiddenTerms()
+}
+
+func collectPromptModeViolations(parsed ParsedSpec, terms []string) []PromptModeViolation {
 	seen := map[string]bool{}
 	out := make([]PromptModeViolation, 0, 8)
 	for _, flow := range parsed.Spec.Flows {
@@ -1372,34 +1639,7 @@ func EvaluatePromptModeViolations(parsed ParsedSpec) []PromptModeViolation {
 		if !ok {
 			continue
 		}
-		for _, idx := range parsed.MissionIndexes {
-			if idx < 0 || idx >= len(ps.Suite.Missions) {
-				continue
-			}
-			m := ps.Suite.Missions[idx]
-			promptLower := strings.ToLower(m.Prompt)
-			for _, term := range terms {
-				term = strings.TrimSpace(term)
-				if term == "" {
-					continue
-				}
-				needle := strings.ToLower(term)
-				if !strings.Contains(promptLower, needle) {
-					continue
-				}
-				key := flow.FlowID + "|" + strconv.Itoa(idx) + "|" + m.MissionID + "|" + needle
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				out = append(out, PromptModeViolation{
-					FlowID:       flow.FlowID,
-					MissionID:    m.MissionID,
-					MissionIndex: idx,
-					Term:         term,
-				})
-			}
-		}
+		out = append(out, collectFlowPromptModeViolations(flow.FlowID, ps, parsed.MissionIndexes, terms, seen)...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].FlowID != out[j].FlowID {
@@ -1413,6 +1653,36 @@ func EvaluatePromptModeViolations(parsed ParsedSpec) []PromptModeViolation {
 		}
 		return out[i].Term < out[j].Term
 	})
+	return out
+}
+
+func collectFlowPromptModeViolations(flowID string, parsedSuite suite.ParsedSuite, indexes []int, terms []string, seen map[string]bool) []PromptModeViolation {
+	out := make([]PromptModeViolation, 0, 4)
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(parsedSuite.Suite.Missions) {
+			continue
+		}
+		mission := parsedSuite.Suite.Missions[idx]
+		promptLower := strings.ToLower(mission.Prompt)
+		for _, term := range terms {
+			trimmed := strings.TrimSpace(term)
+			needle := strings.ToLower(trimmed)
+			if trimmed == "" || !strings.Contains(promptLower, needle) {
+				continue
+			}
+			key := flowID + "|" + strconv.Itoa(idx) + "|" + mission.MissionID + "|" + needle
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, PromptModeViolation{
+				FlowID:       flowID,
+				MissionID:    mission.MissionID,
+				MissionIndex: idx,
+				Term:         trimmed,
+			})
+		}
+	}
 	return out
 }
 

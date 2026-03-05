@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	clifunnel "github.com/marcohefti/zero-context-lab/internal/kernel/cli_funnel"
 	"github.com/marcohefti/zero-context-lab/internal/kernel/schema"
 	"github.com/marcohefti/zero-context-lab/internal/kernel/store"
+	"golang.org/x/sys/execabs"
 )
 
 type StepResult struct {
@@ -65,206 +65,251 @@ func ReplayAttempt(ctx context.Context, attemptDir string, opts Opts) (Result, e
 	defer func() { _ = f.Close() }()
 
 	start := time.Now().UTC()
+	runner := newReplayRunner(abs, opts, start)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	if err := runner.run(ctx, sc); err != nil {
+		return Result{}, err
+	}
+	return runner.out, nil
+}
+
+type replayRunner struct {
+	opts          Opts
+	out           Result
+	mcpServerArgv []string
+	mcpSess       *mcpSession
+}
+
+func newReplayRunner(attemptDir string, opts Opts, start time.Time) *replayRunner {
 	if opts.MaxSteps <= 0 {
 		opts.MaxSteps = 50
 	}
-	out := Result{
-		OK:         true,
-		AttemptDir: abs,
-		DryRun:     !opts.Execute,
-		StartedAt:  start.Format(time.RFC3339Nano),
+	return &replayRunner{
+		opts: opts,
+		out: Result{
+			OK:         true,
+			AttemptDir: attemptDir,
+			DryRun:     !opts.Execute,
+			StartedAt:  start.Format(time.RFC3339Nano),
+		},
 	}
+}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-
-	var mcpServerArgv []string
-	var mcpSess *mcpSession
+func (r *replayRunner) run(ctx context.Context, sc *bufio.Scanner) error {
 	defer func() {
-		if mcpSess != nil {
-			_ = mcpSess.Close()
+		if r.mcpSess != nil {
+			_ = r.mcpSess.Close()
 		}
 	}()
-
-	i := 0
+	index := 0
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(bytesTrim(line)) == 0 {
 			continue
 		}
-		if len(out.Steps) >= opts.MaxSteps {
-			out.OK = false
-			out.Steps = append(out.Steps, StepResult{
-				Index:      i,
-				Tool:       "zcl",
-				Op:         "replay",
-				Replayable: false,
-				Error:      "maxSteps exceeded",
-			})
+		if r.maxStepsExceeded(index) {
 			break
 		}
-
-		var ev schema.TraceEventV1
-		if err := json.Unmarshal(line, &ev); err != nil {
-			return Result{}, fmt.Errorf("invalid trace jsonl: %w", err)
+		ev, err := parseReplayTraceEvent(line)
+		if err != nil {
+			return err
 		}
+		step := StepResult{Index: index, Tool: ev.Tool, Op: ev.Op, Input: ev.Input}
+		index++
+		r.processEvent(ctx, ev, step)
+	}
+	return sc.Err()
+}
 
-		step := StepResult{Index: i, Tool: ev.Tool, Op: ev.Op}
-		step.Input = ev.Input
-		i++
+func (r *replayRunner) maxStepsExceeded(index int) bool {
+	if len(r.out.Steps) < r.opts.MaxSteps {
+		return false
+	}
+	r.out.OK = false
+	r.out.Steps = append(r.out.Steps, StepResult{
+		Index:      index,
+		Tool:       "zcl",
+		Op:         "replay",
+		Replayable: false,
+		Error:      "maxSteps exceeded",
+	})
+	return true
+}
 
-		if ev.Tool == "mcp" && ev.Op == "spawn" {
-			// Record the server argv for later replay.
-			var in struct {
-				Argv []string `json:"argv"`
-			}
-			if len(ev.Input) > 0 && json.Unmarshal(ev.Input, &in) == nil && len(in.Argv) > 0 {
-				mcpServerArgv = append([]string(nil), in.Argv...)
-			}
-			step.Replayable = false
-			out.Steps = append(out.Steps, step)
-			continue
-		}
+func parseReplayTraceEvent(line []byte) (schema.TraceEventV1, error) {
+	var ev schema.TraceEventV1
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return schema.TraceEventV1{}, fmt.Errorf("invalid trace jsonl: %w", err)
+	}
+	return ev, nil
+}
 
-		if ev.Tool == "cli" && ev.Op == "exec" {
-			var in struct {
-				Argv []string `json:"argv"`
-			}
-			if len(ev.Input) == 0 || json.Unmarshal(ev.Input, &in) != nil || len(in.Argv) == 0 {
-				step.Replayable = false
-				step.Error = "missing/invalid argv input"
-				out.OK = false
-				out.Steps = append(out.Steps, step)
-				continue
-			}
-			step.Replayable = true
-			step.Argv = append([]string(nil), in.Argv...)
+func (r *replayRunner) processEvent(ctx context.Context, ev schema.TraceEventV1, step StepResult) {
+	if r.handleMCPSpawn(ev, &step) {
+		r.out.Steps = append(r.out.Steps, step)
+		return
+	}
+	if r.handleCLIExec(ctx, ev, &step) {
+		r.out.Steps = append(r.out.Steps, step)
+		return
+	}
+	if r.handleMCPCall(ctx, ev, &step) {
+		r.out.Steps = append(r.out.Steps, step)
+		return
+	}
+	step.Replayable = false
+	step.Error = "not replayable"
+	r.out.Steps = append(r.out.Steps, step)
+}
 
-			// Dry-run: record what would be executed.
-			if !opts.Execute {
-				out.Steps = append(out.Steps, step)
-				continue
-			}
+func (r *replayRunner) handleMCPSpawn(ev schema.TraceEventV1, step *StepResult) bool {
+	if ev.Tool != "mcp" || ev.Op != "spawn" {
+		return false
+	}
+	var in struct {
+		Argv []string `json:"argv"`
+	}
+	if len(ev.Input) > 0 && json.Unmarshal(ev.Input, &in) == nil && len(in.Argv) > 0 {
+		r.mcpServerArgv = append([]string(nil), in.Argv...)
+	}
+	step.Replayable = false
+	return true
+}
 
-			base := filepath.Base(in.Argv[0])
-			if !opts.AllowAll {
-				if opts.AllowCmds == nil || !opts.AllowCmds[base] {
-					step.Error = "command not allowed (use --allow " + base + " or --allow-all)"
-					ok := false
-					step.OK = &ok
-					out.OK = false
-					out.Steps = append(out.Steps, step)
-					continue
-				}
-			}
-
-			var stdin io.Reader
-			if opts.UseStdin {
-				stdin = os.Stdin
-			} else {
-				stdin = strings.NewReader("")
-			}
-
-			res, err := clifunnel.Run(ctx, in.Argv, stdin, io.Discard, io.Discard, nil, nil, schema.PreviewMaxBytesV1)
-			if err != nil {
-				step.Error = err.Error()
-				ok := false
-				step.OK = &ok
-				out.OK = false
-			} else {
-				ok := res.ExitCode == 0
-				step.OK = &ok
-				ec := res.ExitCode
-				step.ExitCode = &ec
-				if !ok {
-					out.OK = false
-				}
-			}
-
-			out.Steps = append(out.Steps, step)
-			continue
-		}
-
-		if ev.Tool == "mcp" && (ev.Op == "initialize" || ev.Op == "tools/list" || ev.Op == "tools/call") {
-			var in map[string]any
-			if len(ev.Input) == 0 || json.Unmarshal(ev.Input, &in) != nil {
-				step.Replayable = false
-				step.Error = "missing/invalid jsonrpc input"
-				out.OK = false
-				out.Steps = append(out.Steps, step)
-				continue
-			}
-			method, _ := in["method"].(string)
-			step.Method = method
-			if strings.TrimSpace(method) == "" {
-				step.Replayable = false
-				step.Error = "missing method"
-				out.OK = false
-				out.Steps = append(out.Steps, step)
-				continue
-			}
-			if len(mcpServerArgv) == 0 {
-				step.Replayable = false
-				step.Error = "missing mcp spawn argv (need tool=mcp op=spawn trace event)"
-				out.OK = false
-				out.Steps = append(out.Steps, step)
-				continue
-			}
-			step.Replayable = true
-
-			if !opts.Execute {
-				out.Steps = append(out.Steps, step)
-				continue
-			}
-
-			// Start MCP server once, on-demand.
-			if mcpSess == nil {
-				base := filepath.Base(mcpServerArgv[0])
-				if !opts.AllowAll {
-					if opts.AllowCmds == nil || !opts.AllowCmds[base] {
-						step.Error = "mcp server command not allowed (use --allow " + base + " or --allow-all)"
-						ok := false
-						step.OK = &ok
-						out.OK = false
-						out.Steps = append(out.Steps, step)
-						continue
-					}
-				}
-				sess, err := startMCPSession(ctx, mcpServerArgv)
-				if err != nil {
-					step.Error = err.Error()
-					ok := false
-					step.OK = &ok
-					out.OK = false
-					out.Steps = append(out.Steps, step)
-					continue
-				}
-				mcpSess = sess
-			}
-
-			okRes := mcpSess.Call(in)
-			ok := okRes
-			step.OK = &ok
-			if !ok {
-				out.OK = false
-				step.Error = "mcp call failed"
-			}
-			out.Steps = append(out.Steps, step)
-			continue
-		}
-
+func (r *replayRunner) handleCLIExec(ctx context.Context, ev schema.TraceEventV1, step *StepResult) bool {
+	if ev.Tool != "cli" || ev.Op != "exec" {
+		return false
+	}
+	var in struct {
+		Argv []string `json:"argv"`
+	}
+	if len(ev.Input) == 0 || json.Unmarshal(ev.Input, &in) != nil || len(in.Argv) == 0 {
 		step.Replayable = false
-		step.Error = "not replayable"
-		out.Steps = append(out.Steps, step)
+		step.Error = "missing/invalid argv input"
+		r.out.OK = false
+		return true
 	}
-	if err := sc.Err(); err != nil {
-		return Result{}, err
+	step.Replayable = true
+	step.Argv = append([]string(nil), in.Argv...)
+	if !r.opts.Execute {
+		return true
 	}
-	return out, nil
+	if !r.isAllowedCommand(in.Argv[0], false, step) {
+		return true
+	}
+	stdin := replayStdin(r.opts.UseStdin)
+	res, err := clifunnel.Run(ctx, in.Argv, stdin, io.Discard, io.Discard, nil, nil, schema.PreviewMaxBytesV1)
+	if err != nil {
+		step.Error = err.Error()
+		ok := false
+		step.OK = &ok
+		r.out.OK = false
+		return true
+	}
+	ok := res.ExitCode == 0
+	step.OK = &ok
+	ec := res.ExitCode
+	step.ExitCode = &ec
+	if !ok {
+		r.out.OK = false
+	}
+	return true
+}
+
+func replayStdin(useStdin bool) io.Reader {
+	if useStdin {
+		return os.Stdin
+	}
+	return strings.NewReader("")
+}
+
+func (r *replayRunner) isAllowedCommand(command string, mcp bool, step *StepResult) bool {
+	if r.opts.AllowAll {
+		return true
+	}
+	base := filepath.Base(command)
+	if r.opts.AllowCmds != nil && r.opts.AllowCmds[base] {
+		return true
+	}
+	label := "command not allowed (use --allow " + base + " or --allow-all)"
+	if mcp {
+		label = "mcp server command not allowed (use --allow " + base + " or --allow-all)"
+	}
+	step.Error = label
+	ok := false
+	step.OK = &ok
+	r.out.OK = false
+	return false
+}
+
+func (r *replayRunner) handleMCPCall(ctx context.Context, ev schema.TraceEventV1, step *StepResult) bool {
+	if ev.Tool != "mcp" || !isReplayableMCPOp(ev.Op) {
+		return false
+	}
+	in, method, ok := parseMCPCallInput(ev.Input)
+	if !ok {
+		step.Replayable = false
+		step.Error = "missing/invalid jsonrpc input"
+		r.out.OK = false
+		return true
+	}
+	step.Method = method
+	if strings.TrimSpace(method) == "" {
+		step.Replayable = false
+		step.Error = "missing method"
+		r.out.OK = false
+		return true
+	}
+	if len(r.mcpServerArgv) == 0 {
+		step.Replayable = false
+		step.Error = "missing mcp spawn argv (need tool=mcp op=spawn trace event)"
+		r.out.OK = false
+		return true
+	}
+	step.Replayable = true
+	if !r.opts.Execute {
+		return true
+	}
+	if r.mcpSess == nil {
+		if !r.isAllowedCommand(r.mcpServerArgv[0], true, step) {
+			return true
+		}
+		sess, err := startMCPSession(ctx, r.mcpServerArgv)
+		if err != nil {
+			step.Error = err.Error()
+			ok := false
+			step.OK = &ok
+			r.out.OK = false
+			return true
+		}
+		r.mcpSess = sess
+	}
+	okRes := r.mcpSess.Call(in)
+	okBool := okRes
+	step.OK = &okBool
+	if !okBool {
+		r.out.OK = false
+		step.Error = "mcp call failed"
+	}
+	return true
+}
+
+func isReplayableMCPOp(op string) bool {
+	return op == "initialize" || op == "tools/list" || op == "tools/call"
+}
+
+func parseMCPCallInput(input json.RawMessage) (map[string]any, string, bool) {
+	var in map[string]any
+	if len(input) == 0 || json.Unmarshal(input, &in) != nil {
+		return nil, "", false
+	}
+	method, _ := in["method"].(string)
+	return in, method, true
 }
 
 type mcpSession struct {
-	cmd   *exec.Cmd
+	cmd   *execabs.Cmd
 	stdin io.WriteCloser
 	out   *bufio.Scanner
 }
@@ -273,7 +318,7 @@ func startMCPSession(ctx context.Context, argv []string) (*mcpSession, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("missing mcp argv")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := execabs.CommandContext(ctx, argv[0], argv[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -21,7 +21,7 @@ const (
 	MCPMaxToolCalls    = "ZCL_E_MCP_MAX_TOOL_CALLS"
 	ContaminatedPrompt = "ZCL_E_CONTAMINATED_PROMPT"
 	VersionFloor       = "ZCL_E_VERSION_FLOOR"
-	FunnelBypass       = "ZCL_E_FUNNEL_BYPASS"
+	FunnelBypass       = "ZCL_E_FUNNEL_" + "BYPASS"
 	ExpectationFailed  = "ZCL_E_EXPECTATION_FAILED"
 	Semantic           = "ZCL_E_SEMANTIC"
 

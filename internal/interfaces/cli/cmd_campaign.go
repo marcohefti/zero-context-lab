@@ -223,6 +223,34 @@ func (r Runner) runCampaignLint(args []string) int {
 }
 
 func (r Runner) runCampaignRun(args []string) int {
+	opts, exit, ok := r.parseCampaignRunOptions(args)
+	if !ok {
+		return exit
+	}
+	parsed, resolvedOutRoot, exit, ok := r.loadCampaignSpecForExecution(opts.spec, opts.outRoot, opts.jsonOut)
+	if !ok {
+		return exit
+	}
+	indexes, msg, ok := resolveCampaignRunIndexes(parsed, opts.missionOffset, opts.missions)
+	if !ok {
+		return r.failUsage("campaign run: " + msg)
+	}
+	return r.executeCampaignAndWrite(parsed, resolvedOutRoot, campaignExecutionInput{
+		MissionOffset:  opts.missionOffset,
+		MissionIndexes: indexes,
+		Canary:         false,
+	}, opts.jsonOut, "campaign run")
+}
+
+type campaignRunOptions struct {
+	spec          string
+	outRoot       string
+	missions      int
+	missionOffset int
+	jsonOut       bool
+}
+
+func (r Runner) parseCampaignRunOptions(args []string) (campaignRunOptions, int, bool) {
 	fs := flag.NewFlagSet("campaign run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -234,64 +262,90 @@ func (r Runner) runCampaignRun(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("campaign run: invalid flags")
+		return campaignRunOptions{}, r.failUsage("campaign run: invalid flags"), false
 	}
 	if *help {
 		printCampaignRunHelp(r.Stdout)
-		return 0
+		return campaignRunOptions{}, 0, false
 	}
 	if strings.TrimSpace(*spec) == "" {
 		printCampaignRunHelp(r.Stderr)
-		return r.failUsage("campaign run: missing --spec")
+		return campaignRunOptions{}, r.failUsage("campaign run: missing --spec"), false
 	}
 	if *missionOffset < 0 {
-		return r.failUsage("campaign run: --mission-offset must be >= 0")
+		return campaignRunOptions{}, r.failUsage("campaign run: --mission-offset must be >= 0"), false
 	}
 	if *missions < 0 {
-		return r.failUsage("campaign run: --missions must be >= 0")
+		return campaignRunOptions{}, r.failUsage("campaign run: --missions must be >= 0"), false
 	}
+	return campaignRunOptions{
+		spec:          *spec,
+		outRoot:       *outRoot,
+		missions:      *missions,
+		missionOffset: *missionOffset,
+		jsonOut:       *jsonOut,
+	}, 0, true
+}
 
-	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
+func (r Runner) loadCampaignSpecForExecution(spec, outRoot string, jsonOut bool) (campaign.ParsedSpec, string, int, bool) {
+	parsed, resolvedOutRoot, err := r.loadCampaignSpec(spec, outRoot)
 	if err != nil {
-		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
-			return exit
+		if exit, handled := r.writeCampaignSpecPolicyError(err, jsonOut); handled {
+			return campaign.ParsedSpec{}, "", exit, false
 		}
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return campaign.ParsedSpec{}, "", 1, false
 	}
-	total := *missions
+	return parsed, resolvedOutRoot, 0, true
+}
+
+func resolveCampaignRunIndexes(parsed campaign.ParsedSpec, missionOffset, missions int) ([]int, string, bool) {
+	total := missions
 	if total == 0 {
 		total = parsed.Spec.TotalMissions
 	}
 	if total <= 0 {
 		total = len(parsed.MissionIndexes)
 	}
-	indexes, err := campaign.WindowMissionIndexes(parsed.MissionIndexes, *missionOffset, total)
+	indexes, err := campaign.WindowMissionIndexes(parsed.MissionIndexes, missionOffset, total)
 	if err != nil {
-		return r.failUsage("campaign run: " + err.Error())
+		return nil, err.Error(), false
 	}
 	if len(indexes) == 0 {
-		return r.failUsage("campaign run: no missions to run")
+		return nil, "no missions to run", false
 	}
-
-	st, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
-		MissionOffset:  *missionOffset,
-		MissionIndexes: indexes,
-		Canary:         false,
-	})
-	if *jsonOut {
-		writeExit := r.writeJSON(st)
-		if writeExit != 0 {
-			return writeExit
-		}
-	}
-	if !*jsonOut {
-		fmt.Fprintf(r.Stdout, "campaign run: %s (%s)\n", st.Status, st.RunID)
-	}
-	return exit
+	return indexes, "", true
 }
 
 func (r Runner) runCampaignCanary(args []string) int {
+	opts, exit, ok := r.parseCampaignCanaryOptions(args)
+	if !ok {
+		return exit
+	}
+	parsed, resolvedOutRoot, exit, ok := r.loadCampaignSpecForExecution(opts.spec, opts.outRoot, opts.jsonOut)
+	if !ok {
+		return exit
+	}
+	indexes, msg, ok := resolveCampaignCanaryIndexes(parsed, opts.missionOffset, opts.missions)
+	if !ok {
+		return r.failUsage("campaign canary: " + msg)
+	}
+	return r.executeCampaignAndWrite(parsed, resolvedOutRoot, campaignExecutionInput{
+		MissionOffset:  opts.missionOffset,
+		MissionIndexes: indexes,
+		Canary:         true,
+	}, opts.jsonOut, "campaign canary")
+}
+
+type campaignCanaryOptions struct {
+	spec          string
+	outRoot       string
+	missions      int
+	missionOffset int
+	jsonOut       bool
+}
+
+func (r Runner) parseCampaignCanaryOptions(args []string) (campaignCanaryOptions, int, bool) {
 	fs := flag.NewFlagSet("campaign canary", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -303,32 +357,33 @@ func (r Runner) runCampaignCanary(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("campaign canary: invalid flags")
+		return campaignCanaryOptions{}, r.failUsage("campaign canary: invalid flags"), false
 	}
 	if *help {
 		printCampaignCanaryHelp(r.Stdout)
-		return 0
+		return campaignCanaryOptions{}, 0, false
 	}
 	if strings.TrimSpace(*spec) == "" {
 		printCampaignCanaryHelp(r.Stderr)
-		return r.failUsage("campaign canary: missing --spec")
+		return campaignCanaryOptions{}, r.failUsage("campaign canary: missing --spec"), false
 	}
 	if *missionOffset < 0 {
-		return r.failUsage("campaign canary: --mission-offset must be >= 0")
+		return campaignCanaryOptions{}, r.failUsage("campaign canary: --mission-offset must be >= 0"), false
 	}
 	if *missions < 0 {
-		return r.failUsage("campaign canary: --missions must be >= 0")
+		return campaignCanaryOptions{}, r.failUsage("campaign canary: --missions must be >= 0"), false
 	}
+	return campaignCanaryOptions{
+		spec:          *spec,
+		outRoot:       *outRoot,
+		missions:      *missions,
+		missionOffset: *missionOffset,
+		jsonOut:       *jsonOut,
+	}, 0, true
+}
 
-	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
-	if err != nil {
-		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
-			return exit
-		}
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-	total := *missions
+func resolveCampaignCanaryIndexes(parsed campaign.ParsedSpec, missionOffset, missions int) ([]int, string, bool) {
+	total := missions
 	if total == 0 {
 		total = parsed.Spec.CanaryMissions
 	}
@@ -339,34 +394,50 @@ func (r Runner) runCampaignCanary(args []string) int {
 		total = len(parsed.MissionIndexes)
 	}
 	if total <= 0 {
-		return r.failUsage("campaign canary: no missions to run")
+		return nil, "no missions to run", false
 	}
-	indexes, err := campaign.WindowMissionIndexes(parsed.MissionIndexes, *missionOffset, total)
+	indexes, err := campaign.WindowMissionIndexes(parsed.MissionIndexes, missionOffset, total)
 	if err != nil {
-		return r.failUsage("campaign canary: " + err.Error())
+		return nil, err.Error(), false
 	}
 	if len(indexes) == 0 {
-		return r.failUsage("campaign canary: no missions to run")
+		return nil, "no missions to run", false
 	}
+	return indexes, "", true
+}
 
-	st, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
-		MissionOffset:  *missionOffset,
-		MissionIndexes: indexes,
-		Canary:         true,
-	})
-	if *jsonOut {
+func (r Runner) executeCampaignAndWrite(parsed campaign.ParsedSpec, resolvedOutRoot string, in campaignExecutionInput, jsonOut bool, label string) int {
+	st, exit := r.executeCampaign(parsed, resolvedOutRoot, in)
+	if jsonOut {
 		writeExit := r.writeJSON(st)
 		if writeExit != 0 {
 			return writeExit
 		}
 	}
-	if !*jsonOut {
-		fmt.Fprintf(r.Stdout, "campaign canary: %s (%s)\n", st.Status, st.RunID)
+	if !jsonOut {
+		fmt.Fprintf(r.Stdout, "%s: %s (%s)\n", label, st.Status, st.RunID)
 	}
 	return exit
 }
 
 func (r Runner) runCampaignResume(args []string) int {
+	opts, cid, exit, ok := r.parseCampaignResumeOptions(args)
+	if !ok {
+		return exit
+	}
+	st, resolvedOutRoot, exit, ok := r.loadCampaignResumeState(cid, opts.outRoot)
+	if !ok {
+		return exit
+	}
+	return r.resumeCampaignFromState(opts.jsonOut, cid, st, resolvedOutRoot)
+}
+
+type campaignResumeOptions struct {
+	outRoot string
+	jsonOut bool
+}
+
+func (r Runner) parseCampaignResumeOptions(args []string) (campaignResumeOptions, string, int, bool) {
 	fs := flag.NewFlagSet("campaign resume", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -376,58 +447,64 @@ func (r Runner) runCampaignResume(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("campaign resume: invalid flags")
+		return campaignResumeOptions{}, "", r.failUsage("campaign resume: invalid flags"), false
 	}
 	if *help {
 		printCampaignResumeHelp(r.Stdout)
-		return 0
+		return campaignResumeOptions{}, "", 0, false
 	}
 	cid := ids.SanitizeComponent(strings.TrimSpace(*campaignID))
 	if cid == "" {
 		printCampaignResumeHelp(r.Stderr)
-		return r.failUsage("campaign resume: missing/invalid --campaign-id")
+		return campaignResumeOptions{}, "", r.failUsage("campaign resume: missing/invalid --campaign-id"), false
 	}
+	return campaignResumeOptions{outRoot: *outRoot, jsonOut: *jsonOut}, cid, 0, true
+}
 
-	m, err := config.LoadMerged(*outRoot)
+func (r Runner) loadCampaignResumeState(campaignID, outRoot string) (campaign.RunStateV1, string, int, bool) {
+	m, err := config.LoadMerged(outRoot)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return campaign.RunStateV1{}, "", 1, false
 	}
 	resolvedOutRoot := m.OutRoot
-	statePath := campaign.RunStatePath(resolvedOutRoot, cid)
+	statePath := campaign.RunStatePath(resolvedOutRoot, campaignID)
 	st, err := campaign.LoadRunState(statePath)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return campaign.RunStateV1{}, "", 1, false
 	}
-	if strings.TrimSpace(st.OutRoot) != "" && strings.TrimSpace(*outRoot) == "" {
+	if strings.TrimSpace(st.OutRoot) != "" && strings.TrimSpace(outRoot) == "" {
 		resolvedOutRoot = st.OutRoot
-		statePath = campaign.RunStatePath(resolvedOutRoot, cid)
+		statePath = campaign.RunStatePath(resolvedOutRoot, campaignID)
 		st, err = campaign.LoadRunState(statePath)
 		if err != nil {
 			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return 1
+			return campaign.RunStateV1{}, "", 1, false
 		}
 	}
 	if strings.TrimSpace(st.SpecPath) == "" {
-		return r.failUsage("campaign resume: existing campaign state is missing specPath")
+		return campaign.RunStateV1{}, "", r.failUsage("campaign resume: existing campaign state is missing specPath"), false
 	}
+	return st, resolvedOutRoot, 0, true
+}
+
+func (r Runner) resumeCampaignFromState(jsonOut bool, campaignID string, st campaign.RunStateV1, resolvedOutRoot string) int {
 	parsed, resolvedOutRoot, err := r.loadCampaignSpec(st.SpecPath, resolvedOutRoot)
 	if err != nil {
-		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, jsonOut); handled {
 			return exit
 		}
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
 	}
-	if parsed.Spec.CampaignID != cid {
+	if parsed.Spec.CampaignID != campaignID {
 		return r.failUsage("campaign resume: campaign-id does not match stored spec")
 	}
 	if msg, drift := campaignStateDriftMessage(st); drift {
-		return r.writeCampaignStateDrift(*jsonOut, st.CampaignID, st.RunID, msg)
+		return r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg)
 	}
-	missionCount := len(parsed.MissionIndexes)
-	if missionCount == 0 {
+	if len(parsed.MissionIndexes) == 0 {
 		return r.failUsage("campaign resume: spec has no missions")
 	}
 	next, exit := r.executeCampaign(parsed, resolvedOutRoot, campaignExecutionInput{
@@ -436,13 +513,13 @@ func (r Runner) runCampaignResume(args []string) int {
 		Canary:           false,
 		ResumedFromRunID: st.RunID,
 	})
-	if *jsonOut {
+	if jsonOut {
 		writeExit := r.writeJSON(next)
 		if writeExit != 0 {
 			return writeExit
 		}
 	}
-	if !*jsonOut {
+	if !jsonOut {
 		fmt.Fprintf(r.Stdout, "campaign resume: %s (%s)\n", next.Status, next.RunID)
 	}
 	return exit
@@ -543,6 +620,36 @@ func (r Runner) runCampaignReport(args []string) int {
 }
 
 func (r Runner) runCampaignPublishCheck(args []string) int {
+	opts, exit, ok := r.parseCampaignPublishCheckOptions(args)
+	if !ok {
+		return exit
+	}
+	st, exit, resolved := r.resolveCampaignRunState(opts.campaignID, opts.spec, opts.outRoot, opts.jsonOut, "campaign publish-check", printCampaignPublishCheckHelp)
+	if !resolved {
+		return exit
+	}
+	outcome, exit, ok := r.evaluateCampaignPublishCheckOutcome(st, opts.force)
+	if !ok {
+		return exit
+	}
+	return r.writeCampaignPublishCheckOutcome(outcome, opts.jsonOut)
+}
+
+type campaignPublishCheckOptions struct {
+	campaignID string
+	spec       string
+	outRoot    string
+	force      bool
+	jsonOut    bool
+}
+
+type campaignPublishCheckOutcome struct {
+	publishOK bool
+	state     campaign.RunStateV1
+	payload   map[string]any
+}
+
+func (r Runner) parseCampaignPublishCheckOptions(args []string) (campaignPublishCheckOptions, int, bool) {
 	fs := flag.NewFlagSet("campaign publish-check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -554,147 +661,240 @@ func (r Runner) runCampaignPublishCheck(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("campaign publish-check: invalid flags")
+		return campaignPublishCheckOptions{}, r.failUsage("campaign publish-check: invalid flags"), false
 	}
 	if *help {
 		printCampaignPublishCheckHelp(r.Stdout)
-		return 0
+		return campaignPublishCheckOptions{}, 0, false
 	}
-	st, exit, resolved := r.resolveCampaignRunState(*campaignID, *spec, *outRoot, *jsonOut, "campaign publish-check", printCampaignPublishCheckHelp)
-	if !resolved {
-		return exit
-	}
+	return campaignPublishCheckOptions{
+		campaignID: *campaignID,
+		spec:       *spec,
+		outRoot:    *outRoot,
+		force:      *force,
+		jsonOut:    *jsonOut,
+	}, 0, true
+}
+
+func (r Runner) evaluateCampaignPublishCheckOutcome(st campaign.RunStateV1, force bool) (campaignPublishCheckOutcome, int, bool) {
 	policy := resolveCampaignInvalidRunPolicy(st)
-	publishOK := st.Status == campaign.RunStatusValid
-	if !policy.PublishRequiresValid {
-		publishOK = st.Status != campaign.RunStatusAborted
+	publishOK := campaignPublishStatusOK(policy, st.Status)
+	promptModeCompliance := map[string]any{"ok": true, "code": campaign.ReasonPromptModePolicy, "promptMode": ""}
+	oraclePolicyCompliance := map[string]any{"ok": true}
+	toolDriverCompliance := map[string]any{"ok": true, "code": campaign.ReasonToolDriverShim}
+
+	nextState, publishOK, exit, ok := r.applyCampaignPublishSpecCompliance(st, publishOK, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance)
+	if !ok {
+		return campaignPublishCheckOutcome{}, exit, false
 	}
-	if len(policy.Statuses) > 0 && !containsString(policy.Statuses, st.Status) {
-		publishOK = false
-	}
-	promptModeCompliance := map[string]any{
-		"ok":         true,
-		"code":       campaign.ReasonPromptModePolicy,
-		"promptMode": "",
-	}
-	oraclePolicyCompliance := map[string]any{
-		"ok": true,
-	}
-	toolDriverCompliance := map[string]any{
-		"ok":   true,
-		"code": campaign.ReasonToolDriverShim,
-	}
-	if strings.TrimSpace(st.SpecPath) != "" {
-		parsed, perr := campaign.ParseSpecFile(st.SpecPath)
-		if perr != nil {
-			if policyPayload, policyErr := campaignPolicyErrorPayload(perr); policyErr {
-				publishOK = false
-				code, _ := policyPayload["code"].(string)
-				if code != "" {
-					st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
-				}
-				switch code {
-				case campaign.ReasonPromptModePolicy:
-					promptModeCompliance["ok"] = false
-					promptModeCompliance["code"] = code
-					promptModeCompliance["error"] = policyPayload["error"]
-					promptModeCompliance["promptMode"] = policyPayload["promptMode"]
-					promptModeCompliance["violations"] = policyPayload["violations"]
-				case campaign.ReasonExamPromptPolicy:
-					promptModeCompliance["ok"] = false
-					promptModeCompliance["code"] = code
-					promptModeCompliance["error"] = policyPayload["error"]
-					promptModeCompliance["promptMode"] = policyPayload["promptMode"]
-					promptModeCompliance["violations"] = policyPayload["violations"]
-				case campaign.ReasonToolDriverShim:
-					toolDriverCompliance["ok"] = false
-					toolDriverCompliance["error"] = policyPayload["error"]
-					toolDriverCompliance["violation"] = policyPayload["violation"]
-				case campaign.ReasonOracleVisibility, campaign.ReasonOracleEvaluator:
-					oraclePolicyCompliance["ok"] = false
-					oraclePolicyCompliance["code"] = code
-					oraclePolicyCompliance["error"] = policyPayload["error"]
-					oraclePolicyCompliance["violation"] = policyPayload["violation"]
-				default:
-					toolDriverCompliance["ok"] = false
-					toolDriverCompliance["error"] = policyPayload["error"]
-				}
-			} else {
-				fmt.Fprintf(r.Stderr, codeIO+": %s\n", perr.Error())
-				return 1
-			}
-		} else {
-			violations := campaign.EvaluatePromptModeViolations(parsed)
-			promptModeCompliance["promptMode"] = parsed.Spec.PromptMode
-			if parsed.Spec.PromptMode == campaign.PromptModeExam {
-				promptModeCompliance["code"] = campaign.ReasonExamPromptPolicy
-			}
-			if len(violations) > 0 {
-				publishOK = false
-				promptModeCompliance["ok"] = false
-				code := campaign.ReasonPromptModePolicy
-				if parsed.Spec.PromptMode == campaign.PromptModeExam {
-					code = campaign.ReasonExamPromptPolicy
-				}
-				promptModeCompliance["code"] = code
-				promptModeCompliance["violations"] = violations
-				promptModeCompliance["error"] = (&campaign.PromptModeViolationError{
-					Code:       code,
-					PromptMode: parsed.Spec.PromptMode,
-					Violations: violations,
-				}).Error()
-				st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
-			}
-		}
-	}
-	if *force && !publishOK {
+	if force && !publishOK {
 		publishOK = true
 	}
 	out := map[string]any{
 		"ok":                     publishOK,
-		"campaignId":             st.CampaignID,
-		"runId":                  st.RunID,
-		"status":                 st.Status,
-		"reasonCodes":            st.ReasonCodes,
+		"campaignId":             nextState.CampaignID,
+		"runId":                  nextState.RunID,
+		"status":                 nextState.Status,
+		"reasonCodes":            nextState.ReasonCodes,
 		"promptModeCompliance":   promptModeCompliance,
 		"oraclePolicyCompliance": oraclePolicyCompliance,
 		"toolDriverCompliance":   toolDriverCompliance,
 	}
-	if *jsonOut {
-		writeExit := r.writeJSON(out)
+	return campaignPublishCheckOutcome{publishOK: publishOK, state: nextState, payload: out}, 0, true
+}
+
+func campaignPublishStatusOK(policy resolvedInvalidRunPolicy, status string) bool {
+	publishOK := status == campaign.RunStatusValid
+	if !policy.PublishRequiresValid {
+		publishOK = status != campaign.RunStatusAborted
+	}
+	if len(policy.Statuses) > 0 && !containsString(policy.Statuses, status) {
+		publishOK = false
+	}
+	return publishOK
+}
+
+func (r Runner) writeCampaignPublishCheckOutcome(outcome campaignPublishCheckOutcome, jsonOut bool) int {
+	if jsonOut {
+		writeExit := r.writeJSON(outcome.payload)
 		if writeExit != 0 {
 			return writeExit
 		}
-	} else if publishOK {
-		fmt.Fprintf(r.Stdout, "publish-check: OK campaign=%s run=%s\n", st.CampaignID, st.RunID)
+	} else if outcome.publishOK {
+		fmt.Fprintf(r.Stdout, "publish-check: OK campaign=%s run=%s\n", outcome.state.CampaignID, outcome.state.RunID)
 	} else {
-		for _, code := range st.ReasonCodes {
+		for _, code := range outcome.state.ReasonCodes {
 			fmt.Fprintf(r.Stderr, "%s\n", code)
 		}
-		fmt.Fprintf(r.Stderr, "publish-check: FAIL campaign=%s run=%s status=%s\n", st.CampaignID, st.RunID, st.Status)
+		fmt.Fprintf(r.Stderr, "publish-check: FAIL campaign=%s run=%s status=%s\n", outcome.state.CampaignID, outcome.state.RunID, outcome.state.Status)
 	}
-	if publishOK {
+	if outcome.publishOK {
 		return 0
 	}
 	return 2
 }
 
-type campaignDoctorCheck struct {
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Message string `json:"message,omitempty"`
+func (r Runner) applyCampaignPublishSpecCompliance(st campaign.RunStateV1, publishOK bool, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance map[string]any) (campaign.RunStateV1, bool, int, bool) {
+	if strings.TrimSpace(st.SpecPath) == "" {
+		return st, publishOK, 0, true
+	}
+	parsed, perr := campaign.ParseSpecFile(st.SpecPath)
+	if perr != nil {
+		return r.applyCampaignPublishPolicyError(st, perr, publishOK, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance)
+	}
+	nextState, nextPublishOK := r.applyCampaignPublishPromptCompliance(st, parsed, publishOK, promptModeCompliance)
+	return nextState, nextPublishOK, 0, true
 }
 
-type campaignDoctorResult struct {
-	OK            bool                          `json:"ok"`
-	CampaignID    string                        `json:"campaignId"`
-	SpecPath      string                        `json:"specPath"`
-	OutRoot       string                        `json:"outRoot"`
-	ExecutionMode campaign.ExecutionModeSummary `json:"executionMode"`
-	Checks        []campaignDoctorCheck         `json:"checks"`
+func (r Runner) applyCampaignPublishPolicyError(st campaign.RunStateV1, perr error, publishOK bool, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance map[string]any) (campaign.RunStateV1, bool, int, bool) {
+	policyPayload, policyErr := campaignPolicyErrorPayload(perr)
+	if !policyErr {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", perr.Error())
+		return st, publishOK, 1, false
+	}
+	publishOK = false
+	code, _ := policyPayload["code"].(string)
+	if code != "" {
+		st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
+	}
+	applyCampaignPublishPolicyPayload(code, policyPayload, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance)
+	return st, publishOK, 0, true
+}
+
+func applyCampaignPublishPolicyPayload(code string, policyPayload, promptModeCompliance, oraclePolicyCompliance, toolDriverCompliance map[string]any) {
+	switch code {
+	case campaign.ReasonPromptModePolicy, campaign.ReasonExamPromptPolicy:
+		promptModeCompliance["ok"] = false
+		promptModeCompliance["code"] = code
+		promptModeCompliance["error"] = policyPayload["error"]
+		promptModeCompliance["promptMode"] = policyPayload["promptMode"]
+		promptModeCompliance["violations"] = policyPayload["violations"]
+	case campaign.ReasonToolDriverShim:
+		toolDriverCompliance["ok"] = false
+		toolDriverCompliance["error"] = policyPayload["error"]
+		toolDriverCompliance["violation"] = policyPayload["violation"]
+	case campaign.ReasonOracleVisibility, campaign.ReasonOracleEvaluator:
+		oraclePolicyCompliance["ok"] = false
+		oraclePolicyCompliance["code"] = code
+		oraclePolicyCompliance["error"] = policyPayload["error"]
+		oraclePolicyCompliance["violation"] = policyPayload["violation"]
+	default:
+		toolDriverCompliance["ok"] = false
+		toolDriverCompliance["error"] = policyPayload["error"]
+	}
+}
+
+func (r Runner) applyCampaignPublishPromptCompliance(st campaign.RunStateV1, parsed campaign.ParsedSpec, publishOK bool, promptModeCompliance map[string]any) (campaign.RunStateV1, bool) {
+	violations := campaign.EvaluatePromptModeViolations(parsed)
+	promptModeCompliance["promptMode"] = parsed.Spec.PromptMode
+	if parsed.Spec.PromptMode == campaign.PromptModeExam {
+		promptModeCompliance["code"] = campaign.ReasonExamPromptPolicy
+	}
+	if len(violations) == 0 {
+		return st, publishOK
+	}
+	publishOK = false
+	promptModeCompliance["ok"] = false
+	code := campaign.ReasonPromptModePolicy
+	if parsed.Spec.PromptMode == campaign.PromptModeExam {
+		code = campaign.ReasonExamPromptPolicy
+	}
+	promptModeCompliance["code"] = code
+	promptModeCompliance["violations"] = violations
+	promptModeCompliance["error"] = (&campaign.PromptModeViolationError{
+		Code:       code,
+		PromptMode: parsed.Spec.PromptMode,
+		Violations: violations,
+	}).Error()
+	st.ReasonCodes = dedupeSortedStrings(append(st.ReasonCodes, code))
+	return st, publishOK
+}
+
+func (r Runner) resolveCampaignRunState(campaignID string, specPath string, outRoot string, jsonOut bool, cmdName string, printHelp func(io.Writer)) (campaign.RunStateV1, int, bool) {
+	rawSpec := strings.TrimSpace(specPath)
+	if rawSpec != "" {
+		return r.resolveCampaignRunStateBySpec(rawSpec, campaignID, outRoot, jsonOut, cmdName, printHelp)
+	}
+	return r.resolveCampaignRunStateByCampaignID(campaignID, outRoot, jsonOut, cmdName, printHelp)
+}
+
+func (r Runner) resolveCampaignRunStateBySpec(rawSpec, campaignID, outRoot string, jsonOut bool, cmdName string, printHelp func(io.Writer)) (campaign.RunStateV1, int, bool) {
+	parsed, resolvedOutRoot, err := r.loadCampaignSpec(rawSpec, outRoot)
+	if err != nil {
+		if exit, handled := r.writeCampaignSpecPolicyError(err, jsonOut); handled {
+			return campaign.RunStateV1{}, exit, false
+		}
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return campaign.RunStateV1{}, 1, false
+	}
+	cid := parsed.Spec.CampaignID
+	if !campaignIDMatchesRequested(campaignID, cid) {
+		if printHelp != nil {
+			printHelp(r.Stderr)
+		}
+		return campaign.RunStateV1{}, r.failUsage(cmdName + ": --campaign-id does not match --spec campaignId"), false
+	}
+	return r.loadCampaignStateWithDriftGuard(campaign.RunStatePath(resolvedOutRoot, cid), jsonOut)
+}
+
+func (r Runner) resolveCampaignRunStateByCampaignID(campaignID, outRoot string, jsonOut bool, cmdName string, printHelp func(io.Writer)) (campaign.RunStateV1, int, bool) {
+	cid := ids.SanitizeComponent(strings.TrimSpace(campaignID))
+	if cid == "" {
+		if printHelp != nil {
+			printHelp(r.Stderr)
+		}
+		return campaign.RunStateV1{}, r.failUsage(cmdName + ": missing/invalid --campaign-id (or pass --spec)"), false
+	}
+	m, err := config.LoadMerged(outRoot)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return campaign.RunStateV1{}, 1, false
+	}
+	return r.loadCampaignStateWithDriftGuard(campaign.RunStatePath(m.OutRoot, cid), jsonOut)
+}
+
+func campaignIDMatchesRequested(requested, actual string) bool {
+	rawCampaignID := strings.TrimSpace(requested)
+	if rawCampaignID == "" {
+		return true
+	}
+	sanitized := ids.SanitizeComponent(rawCampaignID)
+	return sanitized != "" && sanitized == actual
+}
+
+func (r Runner) loadCampaignStateWithDriftGuard(statePath string, jsonOut bool) (campaign.RunStateV1, int, bool) {
+	st, err := campaign.LoadRunState(statePath)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return campaign.RunStateV1{}, 1, false
+	}
+	if msg, drift := campaignStateDriftMessage(st); drift {
+		return campaign.RunStateV1{}, r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg), false
+	}
+	return st, 0, true
 }
 
 func (r Runner) runCampaignDoctor(args []string) int {
+	opts, exit, ok := r.parseCampaignDoctorOptions(args)
+	if !ok {
+		return exit
+	}
+	parsed, resolvedOutRoot, exit, ok := r.loadCampaignSpecForExecution(opts.spec, opts.outRoot, opts.jsonOut)
+	if !ok {
+		return exit
+	}
+	res := r.buildCampaignDoctorResult(parsed, resolvedOutRoot)
+	r.runCampaignDoctorChecks(parsed, resolvedOutRoot, &res)
+	return r.writeCampaignDoctorResult(parsed, res, opts.jsonOut)
+}
+
+type campaignDoctorOptions struct {
+	spec    string
+	outRoot string
+	jsonOut bool
+}
+
+func (r Runner) parseCampaignDoctorOptions(args []string) (campaignDoctorOptions, int, bool) {
 	fs := flag.NewFlagSet("campaign doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -703,27 +903,21 @@ func (r Runner) runCampaignDoctor(args []string) int {
 	jsonOut := fs.Bool("json", false, "print JSON output")
 	help := fs.Bool("help", false, "show help")
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("campaign doctor: invalid flags")
+		return campaignDoctorOptions{}, r.failUsage("campaign doctor: invalid flags"), false
 	}
 	if *help {
 		printCampaignDoctorHelp(r.Stdout)
-		return 0
+		return campaignDoctorOptions{}, 0, false
 	}
 	if strings.TrimSpace(*spec) == "" {
 		printCampaignDoctorHelp(r.Stderr)
-		return r.failUsage("campaign doctor: missing --spec")
+		return campaignDoctorOptions{}, r.failUsage("campaign doctor: missing --spec"), false
 	}
+	return campaignDoctorOptions{spec: *spec, outRoot: *outRoot, jsonOut: *jsonOut}, 0, true
+}
 
-	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
-	if err != nil {
-		if exit, handled := r.writeCampaignSpecPolicyError(err, *jsonOut); handled {
-			return exit
-		}
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-
-	res := campaignDoctorResult{
+func (r Runner) buildCampaignDoctorResult(parsed campaign.ParsedSpec, resolvedOutRoot string) campaignDoctorResult {
+	return campaignDoctorResult{
 		OK:            true,
 		CampaignID:    parsed.Spec.CampaignID,
 		SpecPath:      parsed.SpecPath,
@@ -731,6 +925,9 @@ func (r Runner) runCampaignDoctor(args []string) int {
 		ExecutionMode: campaign.ResolveExecutionMode(parsed),
 		Checks:        make([]campaignDoctorCheck, 0, 16),
 	}
+}
+
+func (r Runner) runCampaignDoctorChecks(parsed campaign.ParsedSpec, resolvedOutRoot string, res *campaignDoctorResult) {
 	addCheck := func(id string, ok bool, message string) {
 		res.Checks = append(res.Checks, campaignDoctorCheck{
 			ID:      id,
@@ -741,81 +938,115 @@ func (r Runner) runCampaignDoctor(args []string) int {
 			res.OK = false
 		}
 	}
+	r.runCampaignDoctorOutRootCheck(resolvedOutRoot, addCheck)
+	requiredBins := r.runCampaignDoctorFlowChecks(parsed, addCheck)
+	r.runCampaignDoctorRequiredBinaryChecks(requiredBins, addCheck)
+	r.runCampaignDoctorLockCheck(parsed, resolvedOutRoot, addCheck)
+}
 
+func (r Runner) runCampaignDoctorOutRootCheck(resolvedOutRoot string, addCheck func(string, bool, string)) {
 	if err := os.MkdirAll(filepath.Join(resolvedOutRoot, "runs"), 0o755); err != nil {
 		addCheck("out_root_write_access", false, err.Error())
-	} else {
-		tmp := filepath.Join(resolvedOutRoot, ".campaign-doctor.tmp")
-		if err := os.WriteFile(tmp, []byte("ok\n"), 0o644); err != nil {
-			addCheck("out_root_write_access", false, err.Error())
-		} else {
-			_ = os.Remove(tmp)
-			addCheck("out_root_write_access", true, "")
-		}
+		return
 	}
+	tmp := filepath.Join(resolvedOutRoot, ".campaign-doctor.tmp")
+	if err := os.WriteFile(tmp, []byte("ok\n"), 0o644); err != nil {
+		addCheck("out_root_write_access", false, err.Error())
+		return
+	}
+	_ = os.Remove(tmp)
+	addCheck("out_root_write_access", true, "")
+}
 
+func (r Runner) runCampaignDoctorFlowChecks(parsed campaign.ParsedSpec, addCheck func(string, bool, string)) map[string]bool {
 	requiredBins := map[string]bool{}
 	for _, flow := range parsed.Spec.Flows {
-		if flow.Runner.Type == campaign.RunnerTypeCodexAppSrv {
-			addCheck("runner_command_"+flow.FlowID, true, "native runtime mode (no runner.command required)")
-			runtime := codexappserver.NewRuntime(codexappserver.Config{
-				Command: codexappserver.DefaultCommandFromEnv(),
-			})
-			if err := runtime.Probe(context.Background()); err != nil {
-				addCheck("native_runtime_"+flow.FlowID, false, err.Error())
-			} else {
-				addCheck("native_runtime_"+flow.FlowID, true, "")
-			}
-			if len(flow.Runner.RuntimeStrategies) > 0 {
-				if strings.TrimSpace(flow.Runner.RuntimeStrategies[0]) != string(campaign.RunnerTypeCodexAppSrv) {
-					addCheck("native_runtime_chain_"+flow.FlowID, false, "first runtime strategy must be codex_app_server for this build")
-				} else {
-					addCheck("native_runtime_chain_"+flow.FlowID, true, "")
-				}
-			}
-			continue
-		}
-		if len(flow.Runner.Command) == 0 {
-			addCheck("runner_command_"+flow.FlowID, false, "runner.command is empty")
-			continue
-		}
-		cmd0 := strings.TrimSpace(flow.Runner.Command[0])
-		if cmd0 == "" {
-			addCheck("runner_command_"+flow.FlowID, false, "runner.command[0] is empty")
-			continue
-		}
-		requiredBins[cmd0] = true
-		if _, err := exec.LookPath(cmd0); err != nil {
-			addCheck("runner_command_"+flow.FlowID, false, fmt.Sprintf("command not found on PATH: %s", cmd0))
-		} else {
-			addCheck("runner_command_"+flow.FlowID, true, "")
-		}
-
-		scriptPath := campaignRunnerScriptPath(flow.Runner.Command)
-		if strings.TrimSpace(scriptPath) == "" {
-			continue
-		}
-		resolvedScript := scriptPath
-		if !filepath.IsAbs(resolvedScript) {
-			resolvedScript = filepath.Clean(filepath.Join(filepath.Dir(parsed.SpecPath), resolvedScript))
-		}
-		info, err := os.Stat(resolvedScript)
-		if err != nil {
-			addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not found: %s", resolvedScript))
-			continue
-		}
-		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
-			addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not executable: %s", resolvedScript))
-		} else {
-			addCheck("runner_script_"+flow.FlowID, true, "")
-		}
-		if scriptRaw, err := os.ReadFile(resolvedScript); err == nil {
-			for _, bin := range detectCampaignScriptRequiredBinaries(string(scriptRaw)) {
-				requiredBins[bin] = true
-			}
-		}
+		r.runCampaignDoctorFlowCheck(parsed, flow, requiredBins, addCheck)
 	}
+	return requiredBins
+}
 
+func (r Runner) runCampaignDoctorFlowCheck(parsed campaign.ParsedSpec, flow campaign.FlowSpec, requiredBins map[string]bool, addCheck func(string, bool, string)) {
+	if flow.Runner.Type == campaign.RunnerTypeCodexAppSrv {
+		r.runCampaignDoctorNativeFlowCheck(flow, addCheck)
+		return
+	}
+	cmd0, ok := validateCampaignDoctorRunnerCommand(flow, addCheck)
+	if !ok {
+		return
+	}
+	requiredBins[cmd0] = true
+	if _, err := exec.LookPath(cmd0); err != nil {
+		addCheck("runner_command_"+flow.FlowID, false, fmt.Sprintf("command not found on PATH: %s", cmd0))
+	} else {
+		addCheck("runner_command_"+flow.FlowID, true, "")
+	}
+	scriptBins := r.runCampaignDoctorRunnerScriptCheck(parsed, flow, addCheck)
+	for _, bin := range scriptBins {
+		requiredBins[bin] = true
+	}
+}
+
+func (r Runner) runCampaignDoctorNativeFlowCheck(flow campaign.FlowSpec, addCheck func(string, bool, string)) {
+	addCheck("runner_command_"+flow.FlowID, true, "native runtime mode (no runner.command required)")
+	runtime := codexappserver.NewRuntime(codexappserver.Config{
+		Command: codexappserver.DefaultCommandFromEnv(),
+	})
+	if err := runtime.Probe(context.Background()); err != nil {
+		addCheck("native_runtime_"+flow.FlowID, false, err.Error())
+	} else {
+		addCheck("native_runtime_"+flow.FlowID, true, "")
+	}
+	if len(flow.Runner.RuntimeStrategies) == 0 {
+		return
+	}
+	if strings.TrimSpace(flow.Runner.RuntimeStrategies[0]) != string(campaign.RunnerTypeCodexAppSrv) {
+		addCheck("native_runtime_chain_"+flow.FlowID, false, "first runtime strategy must be codex_app_server for this build")
+		return
+	}
+	addCheck("native_runtime_chain_"+flow.FlowID, true, "")
+}
+
+func validateCampaignDoctorRunnerCommand(flow campaign.FlowSpec, addCheck func(string, bool, string)) (string, bool) {
+	if len(flow.Runner.Command) == 0 {
+		addCheck("runner_command_"+flow.FlowID, false, "runner.command is empty")
+		return "", false
+	}
+	cmd0 := strings.TrimSpace(flow.Runner.Command[0])
+	if cmd0 == "" {
+		addCheck("runner_command_"+flow.FlowID, false, "runner.command[0] is empty")
+		return "", false
+	}
+	return cmd0, true
+}
+
+func (r Runner) runCampaignDoctorRunnerScriptCheck(parsed campaign.ParsedSpec, flow campaign.FlowSpec, addCheck func(string, bool, string)) []string {
+	scriptPath := campaignRunnerScriptPath(flow.Runner.Command)
+	if strings.TrimSpace(scriptPath) == "" {
+		return nil
+	}
+	resolvedScript := scriptPath
+	if !filepath.IsAbs(resolvedScript) {
+		resolvedScript = filepath.Clean(filepath.Join(filepath.Dir(parsed.SpecPath), resolvedScript))
+	}
+	info, err := os.Stat(resolvedScript)
+	if err != nil {
+		addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not found: %s", resolvedScript))
+		return nil
+	}
+	if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
+		addCheck("runner_script_"+flow.FlowID, false, fmt.Sprintf("script not executable: %s", resolvedScript))
+		return nil
+	}
+	addCheck("runner_script_"+flow.FlowID, true, "")
+	scriptRaw, err := os.ReadFile(resolvedScript)
+	if err != nil {
+		return nil
+	}
+	return detectCampaignScriptRequiredBinaries(string(scriptRaw))
+}
+
+func (r Runner) runCampaignDoctorRequiredBinaryChecks(requiredBins map[string]bool, addCheck func(string, bool, string)) {
 	required := make([]string, 0, len(requiredBins))
 	for bin := range requiredBins {
 		bin = strings.TrimSpace(bin)
@@ -832,37 +1063,49 @@ func (r Runner) runCampaignDoctor(args []string) int {
 			addCheck("required_binary_"+bin, true, "")
 		}
 	}
+}
 
+func (r Runner) runCampaignDoctorLockCheck(parsed campaign.ParsedSpec, resolvedOutRoot string, addCheck func(string, bool, string)) {
 	lockPath := campaign.LockPath(resolvedOutRoot, parsed.Spec.CampaignID)
 	lockInfo, err := os.Stat(lockPath)
 	switch {
 	case err == nil:
-		age := r.Now().Sub(lockInfo.ModTime()).Round(time.Second)
-		msg := fmt.Sprintf("campaign lock is present at %s (age=%s)", lockPath, age)
-		if age > 2*time.Minute {
-			msg += "; stale_candidate=true"
-		}
-		ownerPath := filepath.Join(lockPath, "owner.json")
-		if ownerRaw, readErr := os.ReadFile(ownerPath); readErr == nil {
-			var owner struct {
-				PID       int    `json:"pid"`
-				StartedAt string `json:"startedAt"`
-			}
-			if json.Unmarshal(ownerRaw, &owner) == nil && owner.PID > 0 {
-				msg += fmt.Sprintf("; owner.pid=%d", owner.PID)
-				if strings.TrimSpace(owner.StartedAt) != "" {
-					msg += fmt.Sprintf("; owner.startedAt=%s", owner.StartedAt)
-				}
-			}
-		}
+		msg := campaignDoctorLockMessage(r, lockPath, lockInfo.ModTime())
 		addCheck("campaign_lock", false, msg)
 	case os.IsNotExist(err):
 		addCheck("campaign_lock", true, "")
 	default:
 		addCheck("campaign_lock", false, err.Error())
 	}
+}
 
-	if *jsonOut {
+func campaignDoctorLockMessage(r Runner, lockPath string, modTime time.Time) string {
+	age := r.Now().Sub(modTime).Round(time.Second)
+	msg := fmt.Sprintf("campaign lock is present at %s (age=%s)", lockPath, age)
+	if age > 2*time.Minute {
+		msg += "; stale_candidate=true"
+	}
+	ownerPath := filepath.Join(lockPath, "owner.json")
+	ownerRaw, readErr := os.ReadFile(ownerPath)
+	if readErr != nil {
+		return msg
+	}
+	var owner struct {
+		PID       int    `json:"pid"`
+		StartedAt string `json:"startedAt"`
+	}
+	if json.Unmarshal(ownerRaw, &owner) != nil || owner.PID <= 0 {
+		return msg
+	}
+	msg += fmt.Sprintf("; owner.pid=%d", owner.PID)
+	if strings.TrimSpace(owner.StartedAt) != "" {
+		msg += fmt.Sprintf("; owner.startedAt=%s", owner.StartedAt)
+	}
+	return msg
+}
+
+func (r Runner) writeCampaignDoctorResult(parsed campaign.ParsedSpec, res campaignDoctorResult, jsonOut bool) int {
+	if jsonOut {
 		writeExit := r.writeJSON(res)
 		if writeExit != 0 {
 			return writeExit
@@ -884,61 +1127,19 @@ func (r Runner) runCampaignDoctor(args []string) int {
 	return 2
 }
 
-func (r Runner) resolveCampaignRunState(campaignID string, specPath string, outRoot string, jsonOut bool, cmdName string, printHelp func(io.Writer)) (campaign.RunStateV1, int, bool) {
-	rawSpec := strings.TrimSpace(specPath)
-	rawCampaignID := strings.TrimSpace(campaignID)
-	switch {
-	case rawSpec != "":
-		parsed, resolvedOutRoot, err := r.loadCampaignSpec(rawSpec, outRoot)
-		if err != nil {
-			if exit, handled := r.writeCampaignSpecPolicyError(err, jsonOut); handled {
-				return campaign.RunStateV1{}, exit, false
-			}
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return campaign.RunStateV1{}, 1, false
-		}
-		cid := parsed.Spec.CampaignID
-		if rawCampaignID != "" {
-			requested := ids.SanitizeComponent(rawCampaignID)
-			if requested == "" || requested != cid {
-				if printHelp != nil {
-					printHelp(r.Stderr)
-				}
-				return campaign.RunStateV1{}, r.failUsage(cmdName + ": --campaign-id does not match --spec campaignId"), false
-			}
-		}
-		st, err := campaign.LoadRunState(campaign.RunStatePath(resolvedOutRoot, cid))
-		if err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return campaign.RunStateV1{}, 1, false
-		}
-		if msg, drift := campaignStateDriftMessage(st); drift {
-			return campaign.RunStateV1{}, r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg), false
-		}
-		return st, 0, true
-	default:
-		cid := ids.SanitizeComponent(rawCampaignID)
-		if cid == "" {
-			if printHelp != nil {
-				printHelp(r.Stderr)
-			}
-			return campaign.RunStateV1{}, r.failUsage(cmdName + ": missing/invalid --campaign-id (or pass --spec)"), false
-		}
-		m, err := config.LoadMerged(outRoot)
-		if err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return campaign.RunStateV1{}, 1, false
-		}
-		st, err := campaign.LoadRunState(campaign.RunStatePath(m.OutRoot, cid))
-		if err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-			return campaign.RunStateV1{}, 1, false
-		}
-		if msg, drift := campaignStateDriftMessage(st); drift {
-			return campaign.RunStateV1{}, r.writeCampaignStateDrift(jsonOut, st.CampaignID, st.RunID, msg), false
-		}
-		return st, 0, true
-	}
+type campaignDoctorCheck struct {
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
+}
+
+type campaignDoctorResult struct {
+	OK            bool                          `json:"ok"`
+	CampaignID    string                        `json:"campaignId"`
+	SpecPath      string                        `json:"specPath"`
+	OutRoot       string                        `json:"outRoot"`
+	ExecutionMode campaign.ExecutionModeSummary `json:"executionMode"`
+	Checks        []campaignDoctorCheck         `json:"checks"`
 }
 
 func campaignStateDriftMessage(st campaign.RunStateV1) (string, bool) {
@@ -1211,201 +1412,344 @@ func (r Runner) evaluateCampaignGateForMission(parsed campaign.ParsedSpec, missi
 		OK:           true,
 	}
 	for fidx := range missionFlowRuns {
-		fr := &missionFlowRuns[fidx]
-		ma := campaign.MissionGateAttemptV1{
-			FlowID: fr.FlowID,
-			Status: campaign.AttemptStatusInvalid,
-			OK:     false,
+		eval, err := r.evaluateMissionFlowGate(parsed, missionID, &missionFlowRuns[fidx])
+		if err != nil {
+			return mg, err
 		}
-		if len(fr.Attempts) == 0 {
-			ma.Errors = []string{codeCampaignMissingAttempt}
-			mg.Attempts = append(mg.Attempts, ma)
-			if parsed.Spec.PairGateEnabled() {
-				mg.Reasons = append(mg.Reasons, codeCampaignMissingAttempt)
-				mg.OK = false
-			}
-			continue
+		mg.Attempts = append(mg.Attempts, eval.attempt)
+		if eval.failMission {
+			mg.OK = false
+			mg.Reasons = append(mg.Reasons, eval.reasons...)
 		}
-		ar := &fr.Attempts[0]
-		ma.AttemptID = ar.AttemptID
-		ma.AttemptDir = ar.AttemptDir
-		ma.Status = ar.Status
-		ma.Errors = append(ma.Errors, ar.Errors...)
-		feedbackSummary := attemptFeedbackSummary{}
-		if strings.TrimSpace(ar.AttemptDir) != "" {
-			if fb, err := readAttemptFeedbackSummary(ar.AttemptDir); err == nil {
-				feedbackSummary = fb
-			}
-		}
-		infraDetected, infraCode := inferAttemptInfraFailure(ar, feedbackSummary)
-
-		gateErrors := make([]string, 0, 8)
-		if infraDetected {
-			if strings.TrimSpace(infraCode) != "" {
-				gateErrors = append(gateErrors, strings.TrimSpace(infraCode))
-			} else {
-				gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
-			}
-		}
-		if parsed.Spec.PairGateEnabled() && ar.Status != campaign.AttemptStatusValid {
-			gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
-		}
-		if strings.TrimSpace(ar.AttemptDir) == "" {
-			if parsed.Spec.PairGateEnabled() {
-				gateErrors = append(gateErrors, codeCampaignArtifactGate)
-			}
-		} else {
-			rep, err := readAttemptReport(ar.AttemptDir)
-			if err != nil {
-				if parsed.Spec.PairGateEnabled() {
-					gateErrors = append(gateErrors, codeCampaignArtifactGate)
-				}
-			} else if parsed.Spec.PairGateEnabled() {
-				if rep.Integrity == nil || !rep.Integrity.TracePresent || !rep.Integrity.TraceNonEmpty || !rep.Integrity.FeedbackPresent {
-					gateErrors = append(gateErrors, codeCampaignTraceGate)
-				}
-				if rep.TimedOutBeforeFirstToolCall {
-					gateErrors = append(gateErrors, codeCampaignTimeoutGate)
-				}
-				if rep.FailureCodeHistogram[codeTimeout] > 0 {
-					gateErrors = append(gateErrors, codeCampaignTimeoutGate)
-				}
-			}
-			if parsed.Spec.PairGateEnabled() {
-				profileFindings, err := campaign.EvaluateTraceProfile(parsed.Spec.PairGate.TraceProfile, ar.AttemptDir)
-				if err != nil {
-					return mg, err
-				}
-				gateErrors = append(gateErrors, profileFindings...)
-			}
-			flowPolicy := campaign.ToolPolicySpec{}
-			for _, flow := range parsed.Spec.Flows {
-				if flow.FlowID == fr.FlowID {
-					flowPolicy = flow.ToolPolicy
-					break
-				}
-			}
-			policyFindings, err := campaign.EvaluateToolPolicy(flowPolicy, ar.AttemptDir)
-			if err != nil {
-				return mg, err
-			}
-			gateErrors = append(gateErrors, policyFindings...)
-		}
-		if parsed.Spec.Semantic.Enabled {
-			if strings.TrimSpace(ar.AttemptDir) == "" {
-				gateErrors = append(gateErrors, campaign.ReasonSemanticFailed)
-			} else {
-				semRes, err := semantic.ValidatePath(ar.AttemptDir, semantic.Options{RulesPath: parsed.Spec.Semantic.RulesPath})
-				if err != nil {
-					return mg, err
-				}
-				if !semRes.Evaluated || !semRes.OK {
-					gateErrors = append(gateErrors, campaign.ReasonSemanticFailed)
-				}
-			}
-		}
-		if parsed.Spec.PromptMode == campaign.PromptModeExam {
-			if !infraDetected && !feedbackSummary.HasValidProof {
-				gateErrors = append(gateErrors, codeCampaignAttemptNotValid)
-			}
-		}
-		if parsed.Spec.PromptMode == campaign.PromptModeExam && !infraDetected && feedbackSummary.HasValidProof {
-			oracleVerdict, oracleErr := r.evaluateOracleForAttempt(parsed, fr.FlowID, missionID, ar)
-			if oracleErr != nil {
-				gateErrors = append(gateErrors, campaign.ReasonOracleEvalError)
-				_ = oracleVerdict
-			} else {
-				oracleGateFailures := oracleFailureReasonCodes(parsed.Spec.Evaluation.OraclePolicy, oracleVerdict)
-				if len(oracleGateFailures) > 0 {
-					gateErrors = append(gateErrors, oracleGateFailures...)
-				}
-			}
-		}
-		if len(gateErrors) == 0 {
-			ma.OK = true
-			ma.Status = campaign.AttemptStatusValid
-			ma.Errors = nil
-			ar.Status = campaign.AttemptStatusValid
-		} else {
-			gateErrors = dedupeSortedStrings(gateErrors)
-			ma.OK = false
-			ma.Errors = dedupeSortedStrings(append(ma.Errors, gateErrors...))
-			ar.Errors = dedupeSortedStrings(append(ar.Errors, gateErrors...))
-			if containsString(gateErrors, codeCampaignTimeoutGate) || infraDetected || ar.Status == campaign.AttemptStatusInfraFailed {
-				ma.Status = campaign.AttemptStatusInfraFailed
-				ar.Status = campaign.AttemptStatusInfraFailed
-			} else if ar.Status == campaign.AttemptStatusSkipped {
-				ma.Status = campaign.AttemptStatusSkipped
-			} else {
-				ma.Status = campaign.AttemptStatusInvalid
-				ar.Status = campaign.AttemptStatusInvalid
-			}
-			hardPolicyFailure := containsString(gateErrors, campaign.ReasonToolPolicy)
-			if parsed.Spec.PairGateEnabled() || parsed.Spec.Semantic.Enabled || hardPolicyFailure {
-				mg.OK = false
-				mg.Reasons = append(mg.Reasons, gateErrors...)
-			}
-		}
-		mg.Attempts = append(mg.Attempts, ma)
 	}
 	mg.Reasons = dedupeSortedStrings(mg.Reasons)
 	return mg, nil
 }
 
-func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID string, missionID string, ar *campaign.AttemptStatusV1) (oracleEvaluatorOutput, error) {
-	out := oracleEvaluatorOutput{
-		OK:          false,
-		ReasonCodes: []string{campaign.ReasonOracleEvalError},
+type missionFlowGateEvaluation struct {
+	attempt     campaign.MissionGateAttemptV1
+	reasons     []string
+	failMission bool
+}
+
+func (r Runner) evaluateMissionFlowGate(parsed campaign.ParsedSpec, missionID string, fr *campaign.FlowRunV1) (missionFlowGateEvaluation, error) {
+	ma := campaign.MissionGateAttemptV1{
+		FlowID: fr.FlowID,
+		Status: campaign.AttemptStatusInvalid,
+		OK:     false,
 	}
-	if ar == nil || strings.TrimSpace(ar.AttemptDir) == "" {
+	if len(fr.Attempts) == 0 {
+		return evaluateMissingMissionAttempt(parsed, ma), nil
+	}
+	ar := &fr.Attempts[0]
+	seedMissionGateAttempt(ar, &ma)
+	feedbackSummary := loadAttemptFeedbackSummaryBestEffort(ar.AttemptDir)
+	infraDetected, infraCode := inferAttemptInfraFailure(ar, feedbackSummary)
+	gateErrors, err := r.collectMissionGateErrors(parsed, fr.FlowID, missionID, ar, feedbackSummary, infraDetected, infraCode)
+	if err != nil {
+		return missionFlowGateEvaluation{}, err
+	}
+	return finalizeMissionFlowGate(parsed, ar, ma, gateErrors, infraDetected), nil
+}
+
+func evaluateMissingMissionAttempt(parsed campaign.ParsedSpec, ma campaign.MissionGateAttemptV1) missionFlowGateEvaluation {
+	ma.Errors = []string{codeCampaignMissingAttempt}
+	if parsed.Spec.PairGateEnabled() {
+		return missionFlowGateEvaluation{
+			attempt:     ma,
+			reasons:     []string{codeCampaignMissingAttempt},
+			failMission: true,
+		}
+	}
+	return missionFlowGateEvaluation{attempt: ma}
+}
+
+func seedMissionGateAttempt(ar *campaign.AttemptStatusV1, ma *campaign.MissionGateAttemptV1) {
+	ma.AttemptID = ar.AttemptID
+	ma.AttemptDir = ar.AttemptDir
+	ma.Status = ar.Status
+	ma.Errors = append(ma.Errors, ar.Errors...)
+}
+
+func loadAttemptFeedbackSummaryBestEffort(attemptDir string) attemptFeedbackSummary {
+	if strings.TrimSpace(attemptDir) == "" {
+		return attemptFeedbackSummary{}
+	}
+	fb, err := readAttemptFeedbackSummary(attemptDir)
+	if err != nil {
+		return attemptFeedbackSummary{}
+	}
+	return fb
+}
+
+func (r Runner) collectMissionGateErrors(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, feedbackSummary attemptFeedbackSummary, infraDetected bool, infraCode string) ([]string, error) {
+	gateErrors := make([]string, 0, 8)
+	gateErrors = append(gateErrors, baseMissionGateErrors(parsed, ar, infraDetected, infraCode)...)
+	extraErrors, err := r.collectMissionAttemptDirGateErrors(parsed, flowID, ar)
+	if err != nil {
+		return nil, err
+	}
+	gateErrors = append(gateErrors, extraErrors...)
+	semErrors, err := collectMissionSemanticGateErrors(parsed, ar)
+	if err != nil {
+		return nil, err
+	}
+	gateErrors = append(gateErrors, semErrors...)
+	gateErrors = append(gateErrors, collectExamProofGateErrors(parsed, feedbackSummary, infraDetected)...)
+	oracleErrors, err := r.collectOracleGateErrors(parsed, flowID, missionID, ar, feedbackSummary, infraDetected)
+	if err != nil {
+		return nil, err
+	}
+	gateErrors = append(gateErrors, oracleErrors...)
+	return gateErrors, nil
+}
+
+func baseMissionGateErrors(parsed campaign.ParsedSpec, ar *campaign.AttemptStatusV1, infraDetected bool, infraCode string) []string {
+	out := make([]string, 0, 2)
+	if infraDetected {
+		if strings.TrimSpace(infraCode) != "" {
+			out = append(out, strings.TrimSpace(infraCode))
+		} else {
+			out = append(out, codeCampaignAttemptNotValid)
+		}
+	}
+	if parsed.Spec.PairGateEnabled() && ar.Status != campaign.AttemptStatusValid {
+		out = append(out, codeCampaignAttemptNotValid)
+	}
+	return out
+}
+
+func (r Runner) collectMissionAttemptDirGateErrors(parsed campaign.ParsedSpec, flowID string, ar *campaign.AttemptStatusV1) ([]string, error) {
+	if strings.TrimSpace(ar.AttemptDir) == "" {
+		if parsed.Spec.PairGateEnabled() {
+			return []string{codeCampaignArtifactGate}, nil
+		}
+		return nil, nil
+	}
+	out := make([]string, 0, 8)
+	reportErrors := collectAttemptReportGateErrors(parsed, ar.AttemptDir)
+	out = append(out, reportErrors...)
+	if parsed.Spec.PairGateEnabled() {
+		profileFindings, err := campaign.EvaluateTraceProfile(parsed.Spec.PairGate.TraceProfile, ar.AttemptDir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, profileFindings...)
+	}
+	policyFindings, err := campaign.EvaluateToolPolicy(resolveFlowToolPolicy(parsed, flowID), ar.AttemptDir)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, policyFindings...)
+	return out, nil
+}
+
+func collectAttemptReportGateErrors(parsed campaign.ParsedSpec, attemptDir string) []string {
+	if !parsed.Spec.PairGateEnabled() {
+		return nil
+	}
+	rep, err := readAttemptReport(attemptDir)
+	if err != nil {
+		return []string{codeCampaignArtifactGate}
+	}
+	out := make([]string, 0, 2)
+	if rep.Integrity == nil || !rep.Integrity.TracePresent || !rep.Integrity.TraceNonEmpty || !rep.Integrity.FeedbackPresent {
+		out = append(out, codeCampaignTraceGate)
+	}
+	if rep.TimedOutBeforeFirstToolCall || rep.FailureCodeHistogram[codeTimeout] > 0 {
+		out = append(out, codeCampaignTimeoutGate)
+	}
+	return out
+}
+
+func resolveFlowToolPolicy(parsed campaign.ParsedSpec, flowID string) campaign.ToolPolicySpec {
+	for _, flow := range parsed.Spec.Flows {
+		if flow.FlowID == flowID {
+			return flow.ToolPolicy
+		}
+	}
+	return campaign.ToolPolicySpec{}
+}
+
+func collectMissionSemanticGateErrors(parsed campaign.ParsedSpec, ar *campaign.AttemptStatusV1) ([]string, error) {
+	if !parsed.Spec.Semantic.Enabled {
+		return nil, nil
+	}
+	if strings.TrimSpace(ar.AttemptDir) == "" {
+		return []string{campaign.ReasonSemanticFailed}, nil
+	}
+	semRes, err := semantic.ValidatePath(ar.AttemptDir, semantic.Options{RulesPath: parsed.Spec.Semantic.RulesPath})
+	if err != nil {
+		return nil, err
+	}
+	if !semRes.Evaluated || !semRes.OK {
+		return []string{campaign.ReasonSemanticFailed}, nil
+	}
+	return nil, nil
+}
+
+func collectExamProofGateErrors(parsed campaign.ParsedSpec, feedbackSummary attemptFeedbackSummary, infraDetected bool) []string {
+	if parsed.Spec.PromptMode != campaign.PromptModeExam {
+		return nil
+	}
+	if infraDetected || feedbackSummary.HasValidProof {
+		return nil
+	}
+	return []string{codeCampaignAttemptNotValid}
+}
+
+func (r Runner) collectOracleGateErrors(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, feedbackSummary attemptFeedbackSummary, infraDetected bool) ([]string, error) {
+	if parsed.Spec.PromptMode != campaign.PromptModeExam || infraDetected || !feedbackSummary.HasValidProof {
+		return nil, nil
+	}
+	oracleVerdict, oracleErr := r.evaluateOracleForAttempt(parsed, flowID, missionID, ar)
+	if oracleErr != nil {
+		return []string{campaign.ReasonOracleEvalError}, nil
+	}
+	return oracleFailureReasonCodes(parsed.Spec.Evaluation.OraclePolicy, oracleVerdict), nil
+}
+
+func finalizeMissionFlowGate(parsed campaign.ParsedSpec, ar *campaign.AttemptStatusV1, ma campaign.MissionGateAttemptV1, gateErrors []string, infraDetected bool) missionFlowGateEvaluation {
+	if len(gateErrors) == 0 {
+		ma.OK = true
+		ma.Status = campaign.AttemptStatusValid
+		ma.Errors = nil
+		ar.Status = campaign.AttemptStatusValid
+		return missionFlowGateEvaluation{attempt: ma}
+	}
+	gateErrors = dedupeSortedStrings(gateErrors)
+	ma.OK = false
+	ma.Errors = dedupeSortedStrings(append(ma.Errors, gateErrors...))
+	ar.Errors = dedupeSortedStrings(append(ar.Errors, gateErrors...))
+	ma.Status = missionGateAttemptStatus(ar, gateErrors, infraDetected)
+	if ma.Status == campaign.AttemptStatusInfraFailed || ma.Status == campaign.AttemptStatusInvalid {
+		ar.Status = ma.Status
+	}
+	hardPolicyFailure := containsString(gateErrors, campaign.ReasonToolPolicy)
+	failMission := parsed.Spec.PairGateEnabled() || parsed.Spec.Semantic.Enabled || hardPolicyFailure
+	if !failMission {
+		return missionFlowGateEvaluation{attempt: ma}
+	}
+	return missionFlowGateEvaluation{
+		attempt:     ma,
+		reasons:     gateErrors,
+		failMission: true,
+	}
+}
+
+func missionGateAttemptStatus(ar *campaign.AttemptStatusV1, gateErrors []string, infraDetected bool) string {
+	if containsString(gateErrors, codeCampaignTimeoutGate) || infraDetected || ar.Status == campaign.AttemptStatusInfraFailed {
+		return campaign.AttemptStatusInfraFailed
+	}
+	if ar.Status == campaign.AttemptStatusSkipped {
+		return campaign.AttemptStatusSkipped
+	}
+	return campaign.AttemptStatusInvalid
+}
+
+func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID string, missionID string, ar *campaign.AttemptStatusV1) (oracleEvaluatorOutput, error) {
+	out := defaultOracleEvaluatorOutput()
+	if !hasOracleAttemptDir(ar) {
 		out.Message = "oracle evaluator requires attemptDir"
 		return out, nil
 	}
-	oraclePath := strings.TrimSpace(parsed.OracleByMissionID[missionID])
-	if oraclePath == "" {
+	oraclePath, ok := resolveOraclePathForMission(parsed, missionID)
+	if !ok {
 		out.ReasonCodes = []string{campaign.ReasonOracleEvaluator}
 		out.Message = fmt.Sprintf("missing oracle path for mission %q", missionID)
 		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
 		return out, nil
 	}
 	if parsed.Spec.Evaluation.Evaluator.Kind == campaign.EvaluatorKindBuiltin {
-		verdict, err := r.evaluateBuiltinOracle(parsed, missionID, ar, oraclePath)
-		if err != nil {
-			out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
-			out.Message = trimText(err.Error(), 1024)
-			_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
-			return out, nil
-		}
-		verdict.PolicyDisposition = parsed.Spec.Evaluation.OraclePolicy.FormatMismatch
-		if !verdict.OK && oracle.AllMismatchesClass(verdict.Mismatches, oracle.MismatchFormat) && parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
-			verdict.Warnings = dedupeSortedStrings(append(verdict.Warnings, "format_only_oracle_mismatch"))
-		}
-		verdict.ReasonCodes = dedupeSortedStrings(verdict.ReasonCodes)
-		verdict.Warnings = dedupeSortedStrings(verdict.Warnings)
-		if _, err := r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, verdict); err != nil {
-			return verdict, err
-		}
-		return verdict, nil
+		return r.evaluateOracleBuiltinForAttempt(parsed, flowID, missionID, ar, oraclePath)
 	}
-	cmdArgs := make([]string, 0, len(parsed.Spec.Evaluation.Evaluator.Command))
-	for _, part := range parsed.Spec.Evaluation.Evaluator.Command {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			cmdArgs = append(cmdArgs, part)
-		}
+	return r.evaluateOracleCommandForAttempt(parsed, flowID, missionID, ar, oraclePath)
+}
+
+func defaultOracleEvaluatorOutput() oracleEvaluatorOutput {
+	return oracleEvaluatorOutput{
+		OK:          false,
+		ReasonCodes: []string{campaign.ReasonOracleEvalError},
 	}
+}
+
+func hasOracleAttemptDir(ar *campaign.AttemptStatusV1) bool {
+	return ar != nil && strings.TrimSpace(ar.AttemptDir) != ""
+}
+
+func resolveOraclePathForMission(parsed campaign.ParsedSpec, missionID string) (string, bool) {
+	oraclePath := strings.TrimSpace(parsed.OracleByMissionID[missionID])
+	return oraclePath, oraclePath != ""
+}
+
+func (r Runner) evaluateOracleBuiltinForAttempt(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, oraclePath string) (oracleEvaluatorOutput, error) {
+	out := defaultOracleEvaluatorOutput()
+	verdict, err := r.evaluateBuiltinOracle(parsed, missionID, ar, oraclePath)
+	if err != nil {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		out.Message = trimText(err.Error(), 1024)
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+	verdict.PolicyDisposition = parsed.Spec.Evaluation.OraclePolicy.FormatMismatch
+	if !verdict.OK && oracle.AllMismatchesClass(verdict.Mismatches, oracle.MismatchFormat) &&
+		parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
+		verdict.Warnings = dedupeSortedStrings(append(verdict.Warnings, "format_only_oracle_mismatch"))
+	}
+	verdict.ReasonCodes = dedupeSortedStrings(verdict.ReasonCodes)
+	verdict.Warnings = dedupeSortedStrings(verdict.Warnings)
+	if _, err := r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, verdict); err != nil {
+		return verdict, err
+	}
+	return verdict, nil
+}
+
+func (r Runner) evaluateOracleCommandForAttempt(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, oraclePath string) (oracleEvaluatorOutput, error) {
+	out := defaultOracleEvaluatorOutput()
+	cmdArgs := normalizedOracleEvaluatorCommand(parsed.Spec.Evaluation.Evaluator.Command)
 	if len(cmdArgs) == 0 {
 		out.ReasonCodes = []string{campaign.ReasonOracleEvaluator}
 		out.Message = "missing evaluation.evaluator.command"
 		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
 		return out, nil
 	}
+	stdout, stderr, timedOut, err := runOracleEvaluatorCommand(parsed, flowID, missionID, ar, oraclePath, cmdArgs)
+	if err != nil {
+		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		out.Message = oracleEvaluatorRunErrorMessage(stderr, err, timedOut)
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
+		return out, nil
+	}
+	return r.parseAndPersistOracleEvaluatorOutput(parsed, flowID, missionID, ar, oraclePath, stdout, out)
+}
 
+func normalizedOracleEvaluatorCommand(command []string) []string {
+	cmdArgs := make([]string, 0, len(command))
+	for _, part := range command {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			cmdArgs = append(cmdArgs, part)
+		}
+	}
+	return cmdArgs
+}
+
+func runOracleEvaluatorCommand(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, oraclePath string, cmdArgs []string) ([]byte, []byte, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = filepath.Dir(parsed.SpecPath)
-	env := map[string]string{
+	cmd.Env = mergeEnviron(os.Environ(), oracleEvaluatorEnv(parsed, flowID, missionID, ar, oraclePath))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), ctx.Err() == context.DeadlineExceeded, err
+}
+
+func oracleEvaluatorEnv(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, oraclePath string) map[string]string {
+	return map[string]string{
 		"ZCL_EVALUATION_MODE":   parsed.Spec.Evaluation.Mode,
 		"ZCL_PROMPT_MODE":       parsed.Spec.PromptMode,
 		"ZCL_CAMPAIGN_ID":       parsed.Spec.CampaignID,
@@ -1417,36 +1761,33 @@ func (r Runner) evaluateOracleForAttempt(parsed campaign.ParsedSpec, flowID stri
 		"ZCL_CAMPAIGN_SPEC":     parsed.SpecPath,
 		"ZCL_ORACLE_VISIBILITY": parsed.Spec.MissionSource.OracleSource.Visibility,
 	}
-	cmd.Env = mergeEnviron(os.Environ(), env)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
-		msg := trimText(strings.TrimSpace(stderr.String()), 1024)
-		if msg == "" {
-			msg = err.Error()
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			msg = "oracle evaluator timed out"
-		}
-		out.Message = msg
-		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
-		return out, nil
+}
+
+func oracleEvaluatorRunErrorMessage(stderr []byte, runErr error, timedOut bool) string {
+	msg := trimText(strings.TrimSpace(string(stderr)), 1024)
+	if msg == "" {
+		msg = runErr.Error()
 	}
+	if timedOut {
+		return "oracle evaluator timed out"
+	}
+	return msg
+}
+
+func (r Runner) parseAndPersistOracleEvaluatorOutput(parsed campaign.ParsedSpec, flowID, missionID string, ar *campaign.AttemptStatusV1, oraclePath string, stdout []byte, fallback oracleEvaluatorOutput) (oracleEvaluatorOutput, error) {
 	var evaluatorOut oracleEvaluatorOutput
-	if err := json.Unmarshal(stdout.Bytes(), &evaluatorOut); err != nil {
-		out.ReasonCodes = []string{campaign.ReasonOracleEvalError}
-		out.Message = "oracle evaluator output must be valid json"
-		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, out)
-		return out, nil
+	if err := json.Unmarshal(stdout, &evaluatorOut); err != nil {
+		fallback.ReasonCodes = []string{campaign.ReasonOracleEvalError}
+		fallback.Message = "oracle evaluator output must be valid json"
+		_, _ = r.writeOracleVerdict(parsed, flowID, missionID, ar, oraclePath, fallback)
+		return fallback, nil
 	}
 	evaluatorOut.ReasonCodes = dedupeSortedStrings(evaluatorOut.ReasonCodes)
 	evaluatorOut.Message = trimText(strings.TrimSpace(evaluatorOut.Message), 1024)
 	evaluatorOut.PolicyDisposition = parsed.Spec.Evaluation.OraclePolicy.FormatMismatch
 	normalizeOracleEvaluatorOutput(&evaluatorOut, parsed.Spec.Evaluation.OraclePolicy.Mode)
-	if !evaluatorOut.OK && oracle.AllMismatchesClass(evaluatorOut.Mismatches, oracle.MismatchFormat) && parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
+	if !evaluatorOut.OK && oracle.AllMismatchesClass(evaluatorOut.Mismatches, oracle.MismatchFormat) &&
+		parsed.Spec.Evaluation.OraclePolicy.FormatMismatch == campaign.OracleFormatMismatchWarn {
 		evaluatorOut.Warnings = dedupeSortedStrings(append(evaluatorOut.Warnings, "format_only_oracle_mismatch"))
 	}
 	if !evaluatorOut.OK && len(evaluatorOut.ReasonCodes) == 0 {
@@ -1561,27 +1902,44 @@ func readAttemptFeedbackSummary(attemptDir string) (attemptFeedbackSummary, erro
 }
 
 func inferAttemptInfraFailure(ar *campaign.AttemptStatusV1, fb attemptFeedbackSummary) (bool, string) {
-	if ar != nil {
-		if code := strings.TrimSpace(ar.RunnerErrorCode); code != "" {
+	if detected, code := inferInfraFailureFromAttempt(ar); detected {
+		return true, code
+	}
+	return inferInfraFailureFromFeedback(fb)
+}
+
+func inferInfraFailureFromAttempt(ar *campaign.AttemptStatusV1) (bool, string) {
+	if ar == nil {
+		return false, ""
+	}
+	if code := strings.TrimSpace(ar.RunnerErrorCode); code != "" {
+		return true, code
+	}
+	if code := strings.TrimSpace(ar.AutoFeedbackCode); code != "" {
+		return true, code
+	}
+	if ar.Status != campaign.AttemptStatusInfraFailed {
+		return false, ""
+	}
+	for _, code := range ar.Errors {
+		code = strings.TrimSpace(code)
+		if isInfraFailureCode(code) {
 			return true, code
-		}
-		if code := strings.TrimSpace(ar.AutoFeedbackCode); code != "" {
-			return true, code
-		}
-		if ar.Status == campaign.AttemptStatusInfraFailed {
-			for _, code := range ar.Errors {
-				code = strings.TrimSpace(code)
-				if isInfraFailureCode(code) {
-					return true, code
-				}
-			}
-			return true, ""
 		}
 	}
-	if fb.Present && fb.OKKnown && !fb.OK && strings.TrimSpace(fb.ResultCode) != "" {
-		if strings.EqualFold(strings.TrimSpace(fb.ResultKind), "infra_failure") || isInfraFailureCode(fb.ResultCode) {
-			return true, strings.TrimSpace(fb.ResultCode)
-		}
+	return true, ""
+}
+
+func inferInfraFailureFromFeedback(fb attemptFeedbackSummary) (bool, string) {
+	if !fb.Present || !fb.OKKnown || fb.OK {
+		return false, ""
+	}
+	code := strings.TrimSpace(fb.ResultCode)
+	if code == "" {
+		return false, ""
+	}
+	if strings.EqualFold(strings.TrimSpace(fb.ResultKind), "infra_failure") || isInfraFailureCode(code) {
+		return true, code
 	}
 	return false, ""
 }
@@ -1720,6 +2078,34 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 	if err != nil {
 		return campaign.FlowRunV1{}, nil, err
 	}
+	args := buildCampaignFlowSuiteArgs(parsed, outRoot, suiteFile, flow, seg)
+	env := buildCampaignFlowSuiteEnv(parsed, flow)
+	stdout, stderr, exit, timedOut := r.invokeCampaignFlowSuite(ctx, parsed, args, env, sharedStderrMu)
+	fr := buildCampaignFlowRunBase(flow, suiteFile, exit, stderr)
+	if timedOut {
+		markCampaignFlowTimeout(&fr, seg.MissionOffset)
+		return fr, nil, nil
+	}
+	if exit != 0 {
+		fr.Errors = append(fr.Errors, campaignFlowExitCode(exit))
+	}
+	sum, hasSummary, err := parseSuiteRunSummaryOutput(stdout)
+	if err != nil {
+		fr.OK = false
+		fr.Errors = append(fr.Errors, codeCampaignSummaryParse)
+		return fr, nil, fmt.Errorf("flow %s summary parse: %w", flow.FlowID, err)
+	}
+	if hasSummary {
+		applySuiteSummaryToFlowRun(&fr, sum, seg)
+		return fr, &sum, nil
+	}
+	if exit != 0 {
+		return fr, nil, fmt.Errorf("flow %s failed before emitting suite summary", flow.FlowID)
+	}
+	return fr, nil, nil
+}
+
+func buildCampaignFlowSuiteArgs(parsed campaign.ParsedSpec, outRoot string, suiteFile string, flow campaign.FlowSpec, seg campaignSegment) []string {
 	args := []string{
 		"--file", suiteFile,
 		"--out-root", outRoot,
@@ -1735,6 +2121,10 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 		"--fail-fast=" + strconv.FormatBool(parsed.Spec.FailFast),
 		"--json",
 	}
+	return appendCampaignFlowSuiteOptionalArgs(args, flow)
+}
+
+func appendCampaignFlowSuiteOptionalArgs(args []string, flow campaign.FlowSpec) []string {
 	if strings.TrimSpace(flow.Runner.Mode) != "" {
 		args = append(args, "--mode", strings.TrimSpace(flow.Runner.Mode))
 	}
@@ -1744,16 +2134,7 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 	if strings.TrimSpace(flow.Runner.TimeoutStart) != "" {
 		args = append(args, "--timeout-start", strings.TrimSpace(flow.Runner.TimeoutStart))
 	}
-	switch flow.Runner.Finalization.ResultChannel.Kind {
-	case campaign.ResultChannelFileJSON:
-		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path) != "" {
-			args = append(args, "--result-file", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path))
-		}
-	case campaign.ResultChannelStdoutJSON:
-		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker) != "" {
-			args = append(args, "--result-marker", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker))
-		}
-	}
+	args = appendCampaignFlowSuiteResultChannelArgs(args, flow)
 	if flow.Runner.Strict != nil {
 		args = append(args, "--strict="+strconv.FormatBool(*flow.Runner.Strict))
 	}
@@ -1779,7 +2160,24 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 		args = append(args, "--")
 		args = append(args, flow.Runner.Command...)
 	}
+	return args
+}
 
+func appendCampaignFlowSuiteResultChannelArgs(args []string, flow campaign.FlowSpec) []string {
+	switch flow.Runner.Finalization.ResultChannel.Kind {
+	case campaign.ResultChannelFileJSON:
+		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path) != "" {
+			args = append(args, "--result-file", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Path))
+		}
+	case campaign.ResultChannelStdoutJSON:
+		if strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker) != "" {
+			args = append(args, "--result-marker", strings.TrimSpace(flow.Runner.Finalization.ResultChannel.Marker))
+		}
+	}
+	return args
+}
+
+func buildCampaignFlowSuiteEnv(parsed campaign.ParsedSpec, flow campaign.FlowSpec) map[string]string {
 	env := map[string]string{}
 	for k, v := range flow.Runner.Env {
 		if strings.TrimSpace(k) == "" {
@@ -1819,7 +2217,10 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 	if flow.Runner.MCP.ShutdownOnComplete {
 		env["ZCL_MCP_SHUTDOWN_ON_COMPLETE"] = "1"
 	}
+	return env
+}
 
+func (r Runner) invokeCampaignFlowSuite(ctx context.Context, parsed campaign.ParsedSpec, args []string, env map[string]string, sharedStderrMu *sync.Mutex) ([]byte, string, int, bool) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	stderrTarget := r.Stderr
@@ -1836,87 +2237,91 @@ func (r Runner) runCampaignFlowSuite(ctx context.Context, parsed campaign.Parsed
 		Stderr:  io.MultiWriter(stderrTarget, &stderr),
 	}
 	exit, timedOut := runCampaignSuiteInvocation(ctx, sub, args, env, parsed.Spec.Timeouts.WatchdogHardKillContinue)
+	return stdout.Bytes(), stderr.String(), exit, timedOut
+}
 
-	fr := campaign.FlowRunV1{
+func buildCampaignFlowRunBase(flow campaign.FlowSpec, suiteFile string, exit int, stderr string) campaign.FlowRunV1 {
+	return campaign.FlowRunV1{
 		FlowID:      flow.FlowID,
 		RunnerType:  flow.Runner.Type,
 		SuiteFile:   suiteFile,
 		ExitCode:    exit,
 		OK:          exit == 0,
-		ErrorOutput: trimText(stderr.String(), 4096),
+		ErrorOutput: trimText(stderr, 4096),
 	}
-	if timedOut {
-		fr.OK = false
-		fr.Errors = dedupeSortedStrings(append(fr.Errors, codeCampaignTimeoutGate))
-		fr.Attempts = []campaign.AttemptStatusV1{{
-			MissionIndex: seg.MissionOffset,
-			Status:       campaign.AttemptStatusInfraFailed,
-			Errors:       []string{codeCampaignTimeoutGate},
-		}}
-		return fr, nil, nil
-	}
-	if exit != 0 {
-		fr.Errors = append(fr.Errors, campaignFlowExitCode(exit))
-	}
+}
 
+func markCampaignFlowTimeout(fr *campaign.FlowRunV1, missionOffset int) {
+	fr.OK = false
+	fr.Errors = dedupeSortedStrings(append(fr.Errors, codeCampaignTimeoutGate))
+	fr.Attempts = []campaign.AttemptStatusV1{{
+		MissionIndex: missionOffset,
+		Status:       campaign.AttemptStatusInfraFailed,
+		Errors:       []string{codeCampaignTimeoutGate},
+	}}
+}
+
+func parseSuiteRunSummaryOutput(stdout []byte) (suiteRunSummary, bool, error) {
+	if strings.TrimSpace(string(stdout)) == "" {
+		return suiteRunSummary{}, false, nil
+	}
 	var sum suiteRunSummary
-	if strings.TrimSpace(stdout.String()) != "" {
-		if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-			fr.OK = false
-			fr.Errors = append(fr.Errors, codeCampaignSummaryParse)
-			return fr, nil, fmt.Errorf("flow %s summary parse: %w", flow.FlowID, err)
-		}
-		fr.RunID = sum.RunID
-		if !sum.OK {
-			fr.OK = false
-		}
-		fr.Attempts = make([]campaign.AttemptStatusV1, 0, len(sum.Attempts))
-		for i, a := range sum.Attempts {
-			ar := campaign.AttemptStatusV1{
-				MissionIndex:     seg.MissionOffset + i,
-				MissionID:        a.MissionID,
-				AttemptID:        a.AttemptID,
-				AttemptDir:       a.AttemptDir,
-				RunnerRef:        strings.TrimSpace(sum.RunID + ":" + a.AttemptID),
-				RunnerErrorCode:  a.RunnerErrorCode,
-				AutoFeedbackCode: a.AutoFeedbackCode,
-			}
-			switch {
-			case a.Skipped:
-				ar.Status = campaign.AttemptStatusSkipped
-				ar.Errors = append(ar.Errors, codeCampaignSkipped)
-			case a.RunnerErrorCode != "" || a.AutoFeedbackCode != "":
-				ar.Status = campaign.AttemptStatusInfraFailed
-			case a.OK && a.Finish.OK:
-				ar.Status = campaign.AttemptStatusValid
-			default:
-				ar.Status = campaign.AttemptStatusInvalid
-			}
-			if a.RunnerErrorCode != "" {
-				ar.Errors = append(ar.Errors, a.RunnerErrorCode)
-			}
-			if a.AutoFeedbackCode != "" {
-				ar.Errors = append(ar.Errors, a.AutoFeedbackCode)
-			}
-			if !a.Finish.Validate.OK {
-				for _, v := range a.Finish.Validate.Errors {
-					ar.Errors = append(ar.Errors, v.Code)
-				}
-			}
-			if a.Finish.Expect.Evaluated && !a.Finish.Expect.OK {
-				for _, f := range a.Finish.Expect.Failures {
-					ar.Errors = append(ar.Errors, f.Code)
-				}
-			}
-			ar.Errors = dedupeSortedStrings(ar.Errors)
-			fr.Attempts = append(fr.Attempts, ar)
-		}
-		return fr, &sum, nil
+	if err := json.Unmarshal(stdout, &sum); err != nil {
+		return suiteRunSummary{}, true, err
 	}
-	if exit != 0 {
-		return fr, nil, fmt.Errorf("flow %s failed before emitting suite summary", flow.FlowID)
+	return sum, true, nil
+}
+
+func applySuiteSummaryToFlowRun(fr *campaign.FlowRunV1, sum suiteRunSummary, seg campaignSegment) {
+	fr.RunID = sum.RunID
+	if !sum.OK {
+		fr.OK = false
 	}
-	return fr, nil, nil
+	fr.Attempts = make([]campaign.AttemptStatusV1, 0, len(sum.Attempts))
+	for i, a := range sum.Attempts {
+		fr.Attempts = append(fr.Attempts, buildCampaignAttemptStatusFromSummary(sum.RunID, seg, i, a))
+	}
+}
+
+func buildCampaignAttemptStatusFromSummary(runID string, seg campaignSegment, idx int, a suiteRunAttemptResult) campaign.AttemptStatusV1 {
+	ar := campaign.AttemptStatusV1{
+		MissionIndex:     seg.MissionOffset + idx,
+		MissionID:        a.MissionID,
+		AttemptID:        a.AttemptID,
+		AttemptDir:       a.AttemptDir,
+		RunnerRef:        strings.TrimSpace(runID + ":" + a.AttemptID),
+		RunnerErrorCode:  a.RunnerErrorCode,
+		AutoFeedbackCode: a.AutoFeedbackCode,
+	}
+	switch {
+	case a.Skipped:
+		ar.Status = campaign.AttemptStatusSkipped
+		ar.Errors = append(ar.Errors, codeCampaignSkipped)
+	case a.RunnerErrorCode != "" || a.AutoFeedbackCode != "":
+		ar.Status = campaign.AttemptStatusInfraFailed
+	case a.OK && a.Finish.OK:
+		ar.Status = campaign.AttemptStatusValid
+	default:
+		ar.Status = campaign.AttemptStatusInvalid
+	}
+	if a.RunnerErrorCode != "" {
+		ar.Errors = append(ar.Errors, a.RunnerErrorCode)
+	}
+	if a.AutoFeedbackCode != "" {
+		ar.Errors = append(ar.Errors, a.AutoFeedbackCode)
+	}
+	if !a.Finish.Validate.OK {
+		for _, v := range a.Finish.Validate.Errors {
+			ar.Errors = append(ar.Errors, v.Code)
+		}
+	}
+	if a.Finish.Expect.Evaluated && !a.Finish.Expect.OK {
+		for _, f := range a.Finish.Expect.Failures {
+			ar.Errors = append(ar.Errors, f.Code)
+		}
+	}
+	ar.Errors = dedupeSortedStrings(ar.Errors)
+	return ar
 }
 
 func runCampaignSuiteInvocation(ctx context.Context, sub Runner, args []string, env map[string]string, hardKillContinue bool) (int, bool) {
@@ -2225,6 +2630,36 @@ func (r Runner) runMissionPrompts(args []string) int {
 }
 
 func (r Runner) runMissionPromptsBuild(args []string) int {
+	opts, exit, ok := r.parseMissionPromptsBuildOptions(args)
+	if !ok {
+		return exit
+	}
+	parsed, resolvedOutRoot, tpl, absSpec, absTemplate, exit, ok := r.loadMissionPromptsBuildInputs(opts.spec, opts.template, opts.outRoot)
+	if !ok {
+		return exit
+	}
+	prompts := buildMissionPromptArtifacts(parsed, tpl)
+	result := buildMissionPromptsBuildResult(parsed, resolvedOutRoot, absSpec, absTemplate, opts.out, tpl, prompts)
+	if err := store.WriteJSONAtomic(result.OutPath, result); err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return 1
+	}
+	if opts.jsonOut {
+		return r.writeJSON(result)
+	}
+	fmt.Fprintf(r.Stdout, "mission prompts build: OK %s\n", result.OutPath)
+	return 0
+}
+
+type missionPromptsBuildOptions struct {
+	spec     string
+	template string
+	out      string
+	outRoot  string
+	jsonOut  bool
+}
+
+func (r Runner) parseMissionPromptsBuildOptions(args []string) (missionPromptsBuildOptions, int, bool) {
 	fs := flag.NewFlagSet("mission prompts build", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -2236,33 +2671,46 @@ func (r Runner) runMissionPromptsBuild(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("mission prompts build: invalid flags")
+		return missionPromptsBuildOptions{}, r.failUsage("mission prompts build: invalid flags"), false
 	}
 	if *help {
 		printMissionPromptsBuildHelp(r.Stdout)
-		return 0
+		return missionPromptsBuildOptions{}, 0, false
 	}
 	if strings.TrimSpace(*spec) == "" {
 		printMissionPromptsBuildHelp(r.Stderr)
-		return r.failUsage("mission prompts build: missing --spec")
+		return missionPromptsBuildOptions{}, r.failUsage("mission prompts build: missing --spec"), false
 	}
 	if strings.TrimSpace(*template) == "" {
 		printMissionPromptsBuildHelp(r.Stderr)
-		return r.failUsage("mission prompts build: missing --template")
+		return missionPromptsBuildOptions{}, r.failUsage("mission prompts build: missing --template"), false
 	}
+	return missionPromptsBuildOptions{
+		spec:     *spec,
+		template: *template,
+		out:      *out,
+		outRoot:  *outRoot,
+		jsonOut:  *jsonOut,
+	}, 0, true
+}
 
-	parsed, resolvedOutRoot, err := r.loadCampaignSpec(*spec, *outRoot)
+func (r Runner) loadMissionPromptsBuildInputs(spec, template, outRoot string) (campaign.ParsedSpec, string, string, string, string, int, bool) {
+	parsed, resolvedOutRoot, err := r.loadCampaignSpec(spec, outRoot)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return campaign.ParsedSpec{}, "", "", "", "", 1, false
 	}
-	templateRaw, err := os.ReadFile(*template)
+	templateRaw, err := os.ReadFile(template)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return campaign.ParsedSpec{}, "", "", "", "", 1, false
 	}
-	tpl := string(templateRaw)
+	absSpec, _ := filepath.Abs(spec)
+	absTemplate, _ := filepath.Abs(template)
+	return parsed, resolvedOutRoot, string(templateRaw), absSpec, absTemplate, 0, true
+}
 
+func buildMissionPromptArtifacts(parsed campaign.ParsedSpec, tpl string) []missionPromptArtifactV1 {
 	flowIDs := make([]string, 0, len(parsed.FlowSuites))
 	for _, f := range parsed.Spec.Flows {
 		flowIDs = append(flowIDs, f.FlowID)
@@ -2297,15 +2745,16 @@ func (r Runner) runMissionPromptsBuild(args []string) int {
 			})
 		}
 	}
+	return prompts
+}
 
-	outPath := strings.TrimSpace(*out)
+func buildMissionPromptsBuildResult(parsed campaign.ParsedSpec, resolvedOutRoot, absSpec, absTemplate, outPath, tpl string, prompts []missionPromptArtifactV1) missionPromptsBuildResult {
+	outPath = strings.TrimSpace(outPath)
 	if outPath == "" {
 		outPath = filepath.Join(resolvedOutRoot, "campaigns", parsed.Spec.CampaignID, "mission.prompts.json")
 	}
-	absSpec, _ := filepath.Abs(*spec)
-	absTemplate, _ := filepath.Abs(*template)
 	createdAt := deterministicBuildTimestamp(absSpec, absTemplate, tpl, prompts)
-	result := missionPromptsBuildResult{
+	return missionPromptsBuildResult{
 		SchemaVersion: 1,
 		CampaignID:    parsed.Spec.CampaignID,
 		SpecPath:      absSpec,
@@ -2314,15 +2763,6 @@ func (r Runner) runMissionPromptsBuild(args []string) int {
 		CreatedAt:     createdAt,
 		Prompts:       prompts,
 	}
-	if err := store.WriteJSONAtomic(outPath, result); err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-	if *jsonOut {
-		return r.writeJSON(result)
-	}
-	fmt.Fprintf(r.Stdout, "mission prompts build: OK %s\n", outPath)
-	return 0
 }
 
 func applyPromptTemplate(tpl string, vars map[string]string) string {

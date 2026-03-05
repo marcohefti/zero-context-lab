@@ -39,108 +39,116 @@ func Evaluate(s SuiteFileV1, missionID string, fb schema.FeedbackJSONV1, tf *Tra
 	}
 
 	var failures []ExpectationFailure
-	if m.Expects.OK != nil && fb.OK != *m.Expects.OK {
-		failures = append(failures, ExpectationFailure{
-			Code:    "ZCL_E_EXPECT_OK",
-			Message: fmt.Sprintf("expected ok=%v, got ok=%v", *m.Expects.OK, fb.OK),
-		})
-	}
-
-	if m.Expects.Result != nil {
-		failures = append(failures, ValidateResultShape(m.Expects.Result, fb)...)
-		switch m.Expects.Result.Type {
-		case "string":
-			if len(fb.ResultJSON) > 0 {
-				break
-			}
-			if m.Expects.Result.Equals != "" && fb.Result != m.Expects.Result.Equals {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_RESULT_EQUALS",
-					Message: "feedback result does not match expected equals",
-				})
-			}
-			if m.Expects.Result.Pattern != "" {
-				re, err := regexp.Compile(m.Expects.Result.Pattern)
-				if err != nil {
-					failures = append(failures, ExpectationFailure{
-						Code:    "ZCL_E_EXPECT_PATTERN_INVALID",
-						Message: "invalid expects.result.pattern regex",
-					})
-				} else if !re.MatchString(fb.Result) {
-					failures = append(failures, ExpectationFailure{
-						Code:    "ZCL_E_EXPECT_RESULT_PATTERN",
-						Message: "feedback result does not match expected pattern",
-					})
-				}
-			}
-		case "json":
-			// Shape checks already handled by ValidateResultShape.
-		default:
-			// Parse already validates, but keep evaluation resilient (handled above too).
-		}
-	}
-
-	if m.Expects.Trace != nil {
-		// If trace expectations exist but no trace facts were provided, fail explicitly.
-		if tf == nil {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_TRACE_MISSING",
-				Message: "trace expectations require trace-derived facts",
-			})
-		} else {
-			if m.Expects.Trace.MaxToolCallsTotal > 0 && tf.ToolCallsTotal > m.Expects.Trace.MaxToolCallsTotal {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_MAX_TOOL_CALLS",
-					Message: "toolCallsTotal exceeds maxToolCallsTotal",
-				})
-			}
-			if m.Expects.Trace.MaxFailuresTotal > 0 && tf.FailuresTotal > m.Expects.Trace.MaxFailuresTotal {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_MAX_FAILURES",
-					Message: "failuresTotal exceeds maxFailuresTotal",
-				})
-			}
-			if m.Expects.Trace.MaxTimeoutsTotal > 0 && tf.TimeoutsTotal > m.Expects.Trace.MaxTimeoutsTotal {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_MAX_TIMEOUTS",
-					Message: "timeoutsTotal exceeds maxTimeoutsTotal",
-				})
-			}
-			if m.Expects.Trace.MaxRepeatStreak > 0 && tf.RepeatMaxStreak > m.Expects.Trace.MaxRepeatStreak {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_MAX_REPEAT_STREAK",
-					Message: "repeatMaxStreak exceeds maxRepeatStreak",
-				})
-			}
-			if len(m.Expects.Trace.RequireCommandPrefix) > 0 {
-				ok := false
-				for _, seen := range tf.CommandNamesSeen {
-					for _, pref := range m.Expects.Trace.RequireCommandPrefix {
-						if pref != "" && strings.HasPrefix(seen, pref) {
-							ok = true
-							break
-						}
-					}
-					if ok {
-						break
-					}
-				}
-				if !ok {
-					failures = append(failures, ExpectationFailure{
-						Code:    "ZCL_E_EXPECT_REQUIRED_COMMAND",
-						Message: "required command prefix not observed in trace",
-					})
-				}
-			}
-		}
-	}
-	if m.Expects.Semantic != nil {
-		failures = append(failures, ValidateSemantic(m.Expects.Semantic, fb, tf)...)
-	}
+	failures = append(failures, evaluateOKExpectation(m.Expects.OK, fb.OK)...)
+	failures = append(failures, evaluateResultExpectation(m.Expects.Result, fb)...)
+	failures = append(failures, evaluateTraceExpectation(m.Expects.Trace, tf)...)
+	failures = append(failures, evaluateSemanticExpectation(m.Expects.Semantic, fb, tf)...)
 
 	return ExpectationResult{
 		Evaluated: true,
 		OK:        len(failures) == 0,
 		Failures:  failures,
 	}
+}
+
+func evaluateOKExpectation(expectsOK *bool, actualOK bool) []ExpectationFailure {
+	if expectsOK == nil || actualOK == *expectsOK {
+		return nil
+	}
+	return []ExpectationFailure{{
+		Code:    "ZCL_E_EXPECT_OK",
+		Message: fmt.Sprintf("expected ok=%v, got ok=%v", *expectsOK, actualOK),
+	}}
+}
+
+func evaluateResultExpectation(expects *ResultExpectsV1, fb schema.FeedbackJSONV1) []ExpectationFailure {
+	if expects == nil {
+		return nil
+	}
+	failures := ValidateResultShape(expects, fb)
+	if expects.Type != "string" || len(fb.ResultJSON) > 0 {
+		return failures
+	}
+	failures = append(failures, evaluateStringResultEquals(expects.Equals, fb.Result)...)
+	failures = append(failures, evaluateStringResultPattern(expects.Pattern, fb.Result)...)
+	return failures
+}
+
+func evaluateStringResultEquals(expected string, actual string) []ExpectationFailure {
+	if expected == "" || actual == expected {
+		return nil
+	}
+	return []ExpectationFailure{{
+		Code:    "ZCL_E_EXPECT_RESULT_EQUALS",
+		Message: "feedback result does not match expected equals",
+	}}
+}
+
+func evaluateStringResultPattern(pattern string, actual string) []ExpectationFailure {
+	if pattern == "" {
+		return nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return []ExpectationFailure{{
+			Code:    "ZCL_E_EXPECT_PATTERN_INVALID",
+			Message: "invalid expects.result.pattern regex",
+		}}
+	}
+	if re.MatchString(actual) {
+		return nil
+	}
+	return []ExpectationFailure{{
+		Code:    "ZCL_E_EXPECT_RESULT_PATTERN",
+		Message: "feedback result does not match expected pattern",
+	}}
+}
+
+func evaluateTraceExpectation(expects *TraceExpectsV1, tf *TraceFacts) []ExpectationFailure {
+	if expects == nil {
+		return nil
+	}
+	if tf == nil {
+		return []ExpectationFailure{{
+			Code:    "ZCL_E_EXPECT_TRACE_MISSING",
+			Message: "trace expectations require trace-derived facts",
+		}}
+	}
+	failures := make([]ExpectationFailure, 0, 4)
+	failures = append(failures, exceedsTraceLimit(expects.MaxToolCallsTotal, tf.ToolCallsTotal, "ZCL_E_EXPECT_MAX_TOOL_CALLS", "toolCallsTotal exceeds maxToolCallsTotal")...)
+	failures = append(failures, exceedsTraceLimit(expects.MaxFailuresTotal, tf.FailuresTotal, "ZCL_E_EXPECT_MAX_FAILURES", "failuresTotal exceeds maxFailuresTotal")...)
+	failures = append(failures, exceedsTraceLimit(expects.MaxTimeoutsTotal, tf.TimeoutsTotal, "ZCL_E_EXPECT_MAX_TIMEOUTS", "timeoutsTotal exceeds maxTimeoutsTotal")...)
+	failures = append(failures, exceedsTraceLimit(expects.MaxRepeatStreak, tf.RepeatMaxStreak, "ZCL_E_EXPECT_MAX_REPEAT_STREAK", "repeatMaxStreak exceeds maxRepeatStreak")...)
+	if len(expects.RequireCommandPrefix) > 0 && !matchesAnyPrefix(tf.CommandNamesSeen, expects.RequireCommandPrefix) {
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_REQUIRED_COMMAND",
+			Message: "required command prefix not observed in trace",
+		})
+	}
+	return failures
+}
+
+func exceedsTraceLimit(limit int64, actual int64, code string, message string) []ExpectationFailure {
+	if limit <= 0 || actual <= limit {
+		return nil
+	}
+	return []ExpectationFailure{{Code: code, Message: message}}
+}
+
+func matchesAnyPrefix(seen []string, prefixes []string) bool {
+	for _, name := range seen {
+		for _, pref := range prefixes {
+			if pref != "" && strings.HasPrefix(name, pref) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func evaluateSemanticExpectation(semantic *SemanticExpectsV1, fb schema.FeedbackJSONV1, tf *TraceFacts) []ExpectationFailure {
+	if semantic == nil {
+		return nil
+	}
+	return ValidateSemantic(semantic, fb, tf)
 }

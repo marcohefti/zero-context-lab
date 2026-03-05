@@ -1,6 +1,6 @@
 run:
   timeout: 5m
-  tests: false
+  tests: true
 
 linters:
   disable-all: true
@@ -10,7 +10,6 @@ linters:
 
 linters-settings:
   gocognit:
-    min-complexity: 30
+    min-complexity: 15
   gocyclo:
-    min-complexity: 30
-
+    min-complexity: 15

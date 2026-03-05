@@ -15,6 +15,10 @@ import (
 )
 
 func TestSuiteRun_OK_EndToEnd(t *testing.T) {
+	TestSuiteRun_OK_EndToEndCore(t)
+}
+
+func TestSuiteRun_OK_EndToEndCore(t *testing.T) {
 	outRoot := t.TempDir()
 	suitePath := filepath.Join(t.TempDir(), "suite.json")
 	writeSuiteFile(t, suitePath, `{
@@ -50,105 +54,146 @@ func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
 
-	var sum struct {
-		OK       bool `json:"ok"`
-		Passed   int  `json:"passed"`
-		Failed   int  `json:"failed"`
-		Attempts []struct {
-			MissionID      string `json:"missionId"`
-			AttemptDir     string `json:"attemptDir"`
-			RunnerExitCode *int   `json:"runnerExitCode"`
-			Finish         struct {
-				OK bool `json:"ok"`
-			} `json:"finish"`
-			OK bool `json:"ok"`
-		} `json:"attempts"`
+	sum := parseSuiteRunOKEndToEndSummary(t, stdout.Bytes(), stdout.String())
+	assertSuiteRunOKEndToEndSummary(t, sum)
+	assertSuiteRunOKEndToEndAttempts(t, sum.Attempts)
+	assertSuiteRunOKEndToEndStderr(t, stderr.String())
+}
+
+type suiteRunOKEndToEndSummary struct {
+	OK       bool                       `json:"ok"`
+	Passed   int                        `json:"passed"`
+	Failed   int                        `json:"failed"`
+	Attempts []suiteRunOKEndToEndRecord `json:"attempts"`
+}
+
+type suiteRunOKEndToEndRecord struct {
+	MissionID      string `json:"missionId"`
+	AttemptDir     string `json:"attemptDir"`
+	RunnerExitCode *int   `json:"runnerExitCode"`
+	Finish         struct {
+		OK bool `json:"ok"`
+	} `json:"finish"`
+	OK bool `json:"ok"`
+}
+
+func parseSuiteRunOKEndToEndSummary(t *testing.T, stdout []byte, stdoutText string) suiteRunOKEndToEndSummary {
+	t.Helper()
+	var sum suiteRunOKEndToEndSummary
+	if err := json.Unmarshal(stdout, &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdoutText)
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
-	}
+	return sum
+}
+
+func assertSuiteRunOKEndToEndSummary(t *testing.T, sum suiteRunOKEndToEndSummary) {
+	t.Helper()
 	if !sum.OK || sum.Passed != 2 || sum.Failed != 0 || len(sum.Attempts) != 2 {
 		t.Fatalf("unexpected summary: %+v", sum)
 	}
-	for _, a := range sum.Attempts {
-		if a.RunnerExitCode == nil || *a.RunnerExitCode != 0 {
-			t.Fatalf("expected runnerExitCode=0, got: %+v", a.RunnerExitCode)
-		}
-		if !a.Finish.OK || !a.OK {
-			t.Fatalf("expected attempt ok, got: %+v", a)
-		}
-		// Runner IO artifacts should exist for post-mortems.
-		if a.AttemptDir == "" {
-			t.Fatalf("expected attemptDir in suite run JSON")
-		}
-		for _, p := range []string{
-			filepath.Join(a.AttemptDir, "runner.command.txt"),
-			filepath.Join(a.AttemptDir, "runner.stdout.log"),
-			filepath.Join(a.AttemptDir, "runner.stderr.log"),
-		} {
-			if _, err := os.Stat(p); err != nil {
-				t.Fatalf("expected runner artifact %s, got err=%v", p, err)
-			}
-		}
-		runtimeEnvRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.runtime.env.json"))
-		if err != nil {
-			t.Fatalf("read attempt.runtime.env.json: %v", err)
-		}
-		var runtimeEnv struct {
-			Runtime struct {
-				NativeMode   bool   `json:"nativeMode"`
-				StartCwdMode string `json:"startCwdMode"`
-				StartCwd     string `json:"startCwd"`
-			} `json:"runtime"`
-			Prompt struct {
-				SourceKind string `json:"sourceKind"`
-				SHA256     string `json:"sha256"`
-				Bytes      int64  `json:"bytes"`
-			} `json:"prompt"`
-			Env struct {
-				Explicit      map[string]string `json:"explicit"`
-				EffectiveKeys []string          `json:"effectiveKeys"`
-			} `json:"env"`
-		}
-		if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
-			t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
-		}
-		if runtimeEnv.Runtime.NativeMode {
-			t.Fatalf("expected process-mode runtime env artifact for this test")
-		}
-		if runtimeEnv.Runtime.StartCwdMode != "inherit" || strings.TrimSpace(runtimeEnv.Runtime.StartCwd) == "" {
-			t.Fatalf("unexpected runtime start cwd metadata: %+v", runtimeEnv.Runtime)
-		}
-		if runtimeEnv.Prompt.SourceKind != "suite_prompt" || runtimeEnv.Prompt.Bytes <= 0 || len(runtimeEnv.Prompt.SHA256) != 64 {
-			t.Fatalf("unexpected prompt metadata: %+v", runtimeEnv.Prompt)
-		}
-		if strings.TrimSpace(runtimeEnv.Env.Explicit["ZCL_ATTEMPT_ID"]) == "" || len(runtimeEnv.Env.EffectiveKeys) == 0 {
-			t.Fatalf("unexpected runtime env payload: %+v", runtimeEnv.Env)
-		}
+}
 
-		repRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.report.json"))
-		if err != nil {
-			t.Fatalf("read attempt.report.json: %v", err)
-		}
-		var rep struct {
-			Artifacts struct {
-				AttemptRuntimeEnvJSON string `json:"attemptRuntimeEnvJson"`
-			} `json:"artifacts"`
-		}
-		if err := json.Unmarshal(repRaw, &rep); err != nil {
-			t.Fatalf("unmarshal attempt.report.json: %v", err)
-		}
-		if rep.Artifacts.AttemptRuntimeEnvJSON != "attempt.runtime.env.json" {
-			t.Fatalf("expected runtime env artifact in report, got %+v", rep.Artifacts)
+func assertSuiteRunOKEndToEndAttempts(t *testing.T, attempts []suiteRunOKEndToEndRecord) {
+	t.Helper()
+	for _, attempt := range attempts {
+		assertSuiteRunOKEndToEndAttempt(t, attempt)
+	}
+}
+
+func assertSuiteRunOKEndToEndAttempt(t *testing.T, attempt suiteRunOKEndToEndRecord) {
+	t.Helper()
+	if attempt.RunnerExitCode == nil || *attempt.RunnerExitCode != 0 {
+		t.Fatalf("expected runnerExitCode=0, got: %+v", attempt.RunnerExitCode)
+	}
+	if !attempt.Finish.OK || !attempt.OK {
+		t.Fatalf("expected attempt ok, got: %+v", attempt)
+	}
+	if attempt.AttemptDir == "" {
+		t.Fatalf("expected attemptDir in suite run JSON")
+	}
+	assertSuiteRunRunnerArtifactsExist(t, attempt.AttemptDir)
+	assertSuiteRunProcessRuntimeEnvMetadata(t, attempt.AttemptDir)
+	assertSuiteRunAttemptReportRuntimeEnvArtifact(t, attempt.AttemptDir)
+}
+
+func assertSuiteRunRunnerArtifactsExist(t *testing.T, attemptDir string) {
+	t.Helper()
+	for _, p := range []string{
+		filepath.Join(attemptDir, "runner.command.txt"),
+		filepath.Join(attemptDir, "runner.stdout.log"),
+		filepath.Join(attemptDir, "runner.stderr.log"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("expected runner artifact %s, got err=%v", p, err)
 		}
 	}
+}
 
-	// Runner output should be visible (but streamed to stderr, keeping stdout JSON clean).
-	if !strings.Contains(stderr.String(), "suite run: mission=") {
-		t.Fatalf("expected suite run progress lines in stderr, got: %q", stderr.String())
+func assertSuiteRunProcessRuntimeEnvMetadata(t *testing.T, attemptDir string) {
+	t.Helper()
+	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
+	if err != nil {
+		t.Fatalf("read attempt.runtime.env.json: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "feedback: OK") {
-		t.Fatalf("expected runner feedback output in stderr, got: %q", stderr.String())
+	var runtimeEnv struct {
+		Runtime struct {
+			NativeMode   bool   `json:"nativeMode"`
+			StartCwdMode string `json:"startCwdMode"`
+			StartCwd     string `json:"startCwd"`
+		} `json:"runtime"`
+		Prompt struct {
+			SourceKind string `json:"sourceKind"`
+			SHA256     string `json:"sha256"`
+			Bytes      int64  `json:"bytes"`
+		} `json:"prompt"`
+		Env struct {
+			Explicit      map[string]string `json:"explicit"`
+			EffectiveKeys []string          `json:"effectiveKeys"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(runtimeEnvRaw, &runtimeEnv); err != nil {
+		t.Fatalf("unmarshal attempt.runtime.env.json: %v", err)
+	}
+	if runtimeEnv.Runtime.NativeMode {
+		t.Fatalf("expected process-mode runtime env artifact for this test")
+	}
+	if runtimeEnv.Runtime.StartCwdMode != "inherit" || strings.TrimSpace(runtimeEnv.Runtime.StartCwd) == "" {
+		t.Fatalf("unexpected runtime start cwd metadata: %+v", runtimeEnv.Runtime)
+	}
+	if runtimeEnv.Prompt.SourceKind != "suite_prompt" || runtimeEnv.Prompt.Bytes <= 0 || len(runtimeEnv.Prompt.SHA256) != 64 {
+		t.Fatalf("unexpected prompt metadata: %+v", runtimeEnv.Prompt)
+	}
+	if strings.TrimSpace(runtimeEnv.Env.Explicit["ZCL_ATTEMPT_ID"]) == "" || len(runtimeEnv.Env.EffectiveKeys) == 0 {
+		t.Fatalf("unexpected runtime env payload: %+v", runtimeEnv.Env)
+	}
+}
+
+func assertSuiteRunAttemptReportRuntimeEnvArtifact(t *testing.T, attemptDir string) {
+	t.Helper()
+	repRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json"))
+	if err != nil {
+		t.Fatalf("read attempt.report.json: %v", err)
+	}
+	var rep struct {
+		Artifacts struct {
+			AttemptRuntimeEnvJSON string `json:"attemptRuntimeEnvJson"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(repRaw, &rep); err != nil {
+		t.Fatalf("unmarshal attempt.report.json: %v", err)
+	}
+	if rep.Artifacts.AttemptRuntimeEnvJSON != "attempt.runtime.env.json" {
+		t.Fatalf("expected runtime env artifact in report, got %+v", rep.Artifacts)
+	}
+}
+
+func assertSuiteRunOKEndToEndStderr(t *testing.T, stderr string) {
+	t.Helper()
+	if !strings.Contains(stderr, "suite run: mission=") {
+		t.Fatalf("expected suite run progress lines in stderr, got: %q", stderr)
+	}
+	if !strings.Contains(stderr, "feedback: OK") {
+		t.Fatalf("expected runner feedback output in stderr, got: %q", stderr)
 	}
 }
 
@@ -512,6 +557,10 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 }
 
 func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
+	TestSuiteRun_NativeRuntimeEndToEndCore(t)
+}
+
+func TestSuiteRun_NativeRuntimeEndToEndCore(t *testing.T) {
 	outRoot := t.TempDir()
 	suitePath := filepath.Join(t.TempDir(), "suite.json")
 	writeSuiteFile(t, suitePath, `{
@@ -547,18 +596,34 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
 	}
 
-	var sum struct {
-		OK                      bool   `json:"ok"`
-		RuntimeStrategySelected string `json:"runtimeStrategySelected"`
-		Attempts                []struct {
-			AttemptDir      string `json:"attemptDir"`
-			RunnerErrorCode string `json:"runnerErrorCode"`
-			OK              bool   `json:"ok"`
-		} `json:"attempts"`
+	sum := parseSuiteRunNativeRuntimeSummary(t, stdout.Bytes(), stdout.String())
+	attemptDir := assertSuiteRunNativeRuntimeSummary(t, sum)
+	assertSuiteRunNativeRuntimeArtifacts(t, attemptDir)
+}
+
+type suiteRunNativeRuntimeSummary struct {
+	OK                      bool                               `json:"ok"`
+	RuntimeStrategySelected string                             `json:"runtimeStrategySelected"`
+	Attempts                []suiteRunNativeRuntimeSummaryItem `json:"attempts"`
+}
+
+type suiteRunNativeRuntimeSummaryItem struct {
+	AttemptDir      string `json:"attemptDir"`
+	RunnerErrorCode string `json:"runnerErrorCode"`
+	OK              bool   `json:"ok"`
+}
+
+func parseSuiteRunNativeRuntimeSummary(t *testing.T, stdout []byte, stdoutText string) suiteRunNativeRuntimeSummary {
+	t.Helper()
+	var sum suiteRunNativeRuntimeSummary
+	if err := json.Unmarshal(stdout, &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdoutText)
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
-	}
+	return sum
+}
+
+func assertSuiteRunNativeRuntimeSummary(t *testing.T, sum suiteRunNativeRuntimeSummary) string {
+	t.Helper()
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK {
 		t.Fatalf("unexpected summary: %+v", sum)
 	}
@@ -568,16 +633,33 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if sum.Attempts[0].RunnerErrorCode != "" {
 		t.Fatalf("unexpected runner error: %+v", sum.Attempts[0])
 	}
-	attemptDir := sum.Attempts[0].AttemptDir
-	if attemptDir == "" {
+	if sum.Attempts[0].AttemptDir == "" {
 		t.Fatalf("expected attemptDir")
 	}
-	if _, err := os.Stat(filepath.Join(attemptDir, "feedback.json")); err != nil {
-		t.Fatalf("expected feedback.json: %v", err)
+	return sum.Attempts[0].AttemptDir
+}
+
+func assertSuiteRunNativeRuntimeArtifacts(t *testing.T, attemptDir string) {
+	t.Helper()
+	assertSuiteRunNativeRuntimeFilesExist(t, attemptDir)
+	assertSuiteRunNativeRunnerRef(t, attemptDir)
+	assertSuiteRunNativeFeedback(t, attemptDir)
+	assertSuiteRunNativeAttemptMetadata(t, attemptDir)
+	assertSuiteRunNativeRuntimeEnvMetadata(t, attemptDir)
+	assertSuiteRunNativeReportMetadata(t, attemptDir)
+}
+
+func assertSuiteRunNativeRuntimeFilesExist(t *testing.T, attemptDir string) {
+	t.Helper()
+	for _, rel := range []string{"feedback.json", "tool.calls.jsonl"} {
+		if _, err := os.Stat(filepath.Join(attemptDir, rel)); err != nil {
+			t.Fatalf("expected %s: %v", rel, err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(attemptDir, "tool.calls.jsonl")); err != nil {
-		t.Fatalf("expected tool.calls.jsonl: %v", err)
-	}
+}
+
+func assertSuiteRunNativeRunnerRef(t *testing.T, attemptDir string) {
+	t.Helper()
 	refRaw, err := os.ReadFile(filepath.Join(attemptDir, "runner.ref.json"))
 	if err != nil {
 		t.Fatalf("read runner.ref.json: %v", err)
@@ -592,7 +674,10 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if ref.RuntimeID != "codex_app_server" || strings.TrimSpace(ref.SessionID) == "" {
 		t.Fatalf("unexpected runner ref: %+v", ref)
 	}
+}
 
+func assertSuiteRunNativeFeedback(t *testing.T, attemptDir string) {
+	t.Helper()
 	fbRaw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
 	if err != nil {
 		t.Fatalf("read feedback.json: %v", err)
@@ -606,17 +691,18 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if fb.Result != "native-result" {
 		t.Fatalf("expected native delta fallback result, got %q", fb.Result)
 	}
+}
 
+func assertSuiteRunNativeAttemptMetadata(t *testing.T, attemptDir string) {
+	t.Helper()
 	attemptRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
 	if err != nil {
 		t.Fatalf("read attempt.json: %v", err)
 	}
 	var attempt struct {
 		NativeResult struct {
-			ResultSource               string `json:"resultSource"`
-			PhaseAware                 bool   `json:"phaseAware"`
-			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
-			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+			ResultSource string `json:"resultSource"`
+			PhaseAware   bool   `json:"phaseAware"`
 		} `json:"nativeResult"`
 	}
 	if err := json.Unmarshal(attemptRaw, &attempt); err != nil {
@@ -625,6 +711,10 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if attempt.NativeResult.ResultSource != "delta_fallback" || attempt.NativeResult.PhaseAware {
 		t.Fatalf("unexpected attempt nativeResult: %+v", attempt.NativeResult)
 	}
+}
+
+func assertSuiteRunNativeRuntimeEnvMetadata(t *testing.T, attemptDir string) {
+	t.Helper()
 	runtimeEnvRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.runtime.env.json"))
 	if err != nil {
 		t.Fatalf("read attempt.runtime.env.json: %v", err)
@@ -653,17 +743,18 @@ func TestSuiteRun_NativeRuntimeEndToEnd(t *testing.T) {
 	if runtimeEnv.Prompt.SourceKind != "suite_prompt" || len(runtimeEnv.Prompt.SHA256) != 64 {
 		t.Fatalf("unexpected native prompt metadata: %+v", runtimeEnv.Prompt)
 	}
+}
 
+func assertSuiteRunNativeReportMetadata(t *testing.T, attemptDir string) {
+	t.Helper()
 	repRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json"))
 	if err != nil {
 		t.Fatalf("read attempt.report.json: %v", err)
 	}
 	var rep struct {
 		NativeResult struct {
-			ResultSource               string `json:"resultSource"`
-			PhaseAware                 bool   `json:"phaseAware"`
-			CommentaryMessagesObserved int64  `json:"commentaryMessagesObserved"`
-			ReasoningItemsObserved     int64  `json:"reasoningItemsObserved"`
+			ResultSource string `json:"resultSource"`
+			PhaseAware   bool   `json:"phaseAware"`
 		} `json:"nativeResult"`
 	}
 	if err := json.Unmarshal(repRaw, &rep); err != nil {
@@ -930,6 +1021,10 @@ func TestSuiteRun_NativeFinalResultUsesPhaseFinalAnswer(t *testing.T) {
 }
 
 func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailure(t *testing.T) {
+	TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailureCore(t)
+}
+
+func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailureCore(t *testing.T) {
 	outRoot := t.TempDir()
 	suitePath := filepath.Join(t.TempDir(), "suite.json")
 	writeSuiteFile(t, suitePath, `{
@@ -965,26 +1060,45 @@ func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailure(t *testing.T) {
 		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, stderr.String())
 	}
 
-	var sum struct {
-		Attempts []struct {
-			AttemptDir       string `json:"attemptDir"`
-			RunnerErrorCode  string `json:"runnerErrorCode"`
-			AutoFeedbackCode string `json:"autoFeedbackCode"`
-			AutoFeedback     bool   `json:"autoFeedback"`
-		} `json:"attempts"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run output: %v (stdout=%q)", err, stdout.String())
+	attempt := parseSuiteRunNativeMissingFinalAnswerAttempt(t, stdout.Bytes(), stdout.String())
+	assertSuiteRunNativeMissingFinalAnswerSummary(t, attempt)
+	assertSuiteRunNativeMissingFinalAnswerFeedback(t, attempt.AttemptDir)
+	assertSuiteRunNativeMissingFinalAnswerAttemptMetadata(t, attempt.AttemptDir)
+}
+
+type suiteRunNativeMissingFinalAnswerSummary struct {
+	Attempts []suiteRunNativeMissingFinalAnswerAttempt `json:"attempts"`
+}
+
+type suiteRunNativeMissingFinalAnswerAttempt struct {
+	AttemptDir       string `json:"attemptDir"`
+	RunnerErrorCode  string `json:"runnerErrorCode"`
+	AutoFeedbackCode string `json:"autoFeedbackCode"`
+	AutoFeedback     bool   `json:"autoFeedback"`
+}
+
+func parseSuiteRunNativeMissingFinalAnswerAttempt(t *testing.T, stdout []byte, stdoutText string) suiteRunNativeMissingFinalAnswerAttempt {
+	t.Helper()
+	var sum suiteRunNativeMissingFinalAnswerSummary
+	if err := json.Unmarshal(stdout, &sum); err != nil {
+		t.Fatalf("unmarshal suite run output: %v (stdout=%q)", err, stdoutText)
 	}
 	if len(sum.Attempts) != 1 {
 		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
 	}
-	a := sum.Attempts[0]
-	if a.RunnerErrorCode != codeRuntimeFinalAnswerNotFound || a.AutoFeedbackCode != codeRuntimeFinalAnswerNotFound || !a.AutoFeedback {
-		t.Fatalf("expected missing-final-answer typed failure, got %+v", a)
-	}
+	return sum.Attempts[0]
+}
 
-	fbRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "feedback.json"))
+func assertSuiteRunNativeMissingFinalAnswerSummary(t *testing.T, attempt suiteRunNativeMissingFinalAnswerAttempt) {
+	t.Helper()
+	if attempt.RunnerErrorCode != codeRuntimeFinalAnswerNotFound || attempt.AutoFeedbackCode != codeRuntimeFinalAnswerNotFound || !attempt.AutoFeedback {
+		t.Fatalf("expected missing-final-answer typed failure, got %+v", attempt)
+	}
+}
+
+func assertSuiteRunNativeMissingFinalAnswerFeedback(t *testing.T, attemptDir string) {
+	t.Helper()
+	fbRaw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
 	if err != nil {
 		t.Fatalf("read feedback.json: %v", err)
 	}
@@ -1001,8 +1115,11 @@ func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailure(t *testing.T) {
 	if fb.OK || fb.ResultJSON.Kind != "runtime_failure" || fb.ResultJSON.Code != codeRuntimeFinalAnswerNotFound {
 		t.Fatalf("unexpected failure feedback payload: %+v", fb)
 	}
+}
 
-	attemptRaw, err := os.ReadFile(filepath.Join(a.AttemptDir, "attempt.json"))
+func assertSuiteRunNativeMissingFinalAnswerAttemptMetadata(t *testing.T, attemptDir string) {
+	t.Helper()
+	attemptRaw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.json"))
 	if err != nil {
 		t.Fatalf("read attempt.json: %v", err)
 	}
@@ -1184,6 +1301,10 @@ func TestSuiteRun_NativeReasoningUnsupportedBestEffortFallsBack(t *testing.T) {
 }
 
 func TestSuiteRun_NativeProcessParity(t *testing.T) {
+	TestSuiteRun_NativeProcessParityCore(t)
+}
+
+func TestSuiteRun_NativeProcessParityCore(t *testing.T) {
 	baseDir := t.TempDir()
 	suitePath := filepath.Join(baseDir, "suite.json")
 	writeSuiteFile(t, suitePath, `{
@@ -1192,145 +1313,150 @@ func TestSuiteRun_NativeProcessParity(t *testing.T) {
   "defaults": { "mode": "discovery", "timeoutMs": 60000 },
   "missions": [
     { "missionId": "m1", "prompt": "parity prompt", "expects": { "ok": true } }
-  ]
-}`)
+	  ]
+	}`)
 
-	// Process path.
+	processAttemptDir := runSuiteProcessParityMode(t, suitePath, filepath.Join(baseDir, "process"))
+	nativeAttemptDir := runSuiteNativeParityMode(t, suitePath, filepath.Join(baseDir, "native"))
+	assertSuiteRunParityArtifacts(t, processAttemptDir, nativeAttemptDir)
+}
+
+func runSuiteProcessParityMode(t *testing.T, suitePath string, outRoot string) string {
+	t.Helper()
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
-	var procStdout bytes.Buffer
-	var procStderr bytes.Buffer
-	rProc := Runner{
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
 		Version: "0.0.0-dev",
 		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 10, 0, 0, time.UTC) },
-		Stdout:  &procStdout,
-		Stderr:  &procStderr,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 	}
-	processOutRoot := filepath.Join(baseDir, "process")
-	if code := rProc.Run([]string{
+	code := r.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
-		"--out-root", processOutRoot,
+		"--out-root", outRoot,
 		"--session-isolation", "process",
 		"--json",
 		"--",
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
-	}); code != 0 {
-		t.Fatalf("process suite run expected 0, got %d stderr=%q", code, procStderr.String())
+	})
+	if code != 0 {
+		t.Fatalf("process suite run expected 0, got %d stderr=%q", code, stderr.String())
 	}
+	return parseSuiteRunSingleAttemptDir(t, stdout.Bytes(), "process summary")
+}
 
-	// Native path.
+func runSuiteNativeParityMode(t *testing.T, suitePath string, outRoot string) string {
+	t.Helper()
 	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
-	var nativeStdout bytes.Buffer
-	var nativeStderr bytes.Buffer
-	rNative := Runner{
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := Runner{
 		Version: "0.0.0-dev",
 		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 11, 0, 0, time.UTC) },
-		Stdout:  &nativeStdout,
-		Stderr:  &nativeStderr,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 	}
-	nativeOutRoot := filepath.Join(baseDir, "native")
-	if code := rNative.Run([]string{
+	code := r.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
-		"--out-root", nativeOutRoot,
+		"--out-root", outRoot,
 		"--session-isolation", "native",
 		"--json",
-	}); code != 0 {
-		t.Fatalf("native suite run expected 0, got %d stderr=%q", code, nativeStderr.String())
+	})
+	if code != 0 {
+		t.Fatalf("native suite run expected 0, got %d stderr=%q", code, stderr.String())
 	}
+	return parseSuiteRunSingleAttemptDir(t, stdout.Bytes(), "native summary")
+}
 
-	var procSum struct {
+func parseSuiteRunSingleAttemptDir(t *testing.T, stdout []byte, label string) string {
+	t.Helper()
+	var sum struct {
 		OK       bool `json:"ok"`
 		Attempts []struct {
 			AttemptDir string `json:"attemptDir"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(procStdout.Bytes(), &procSum); err != nil {
-		t.Fatalf("unmarshal process summary: %v", err)
+	if err := json.Unmarshal(stdout, &sum); err != nil {
+		t.Fatalf("unmarshal %s: %v", label, err)
 	}
-	var nativeSum struct {
-		OK       bool `json:"ok"`
-		Attempts []struct {
-			AttemptDir string `json:"attemptDir"`
-		} `json:"attempts"`
+	if !sum.OK || len(sum.Attempts) != 1 || strings.TrimSpace(sum.Attempts[0].AttemptDir) == "" {
+		t.Fatalf("unexpected %s payload: %+v", label, sum)
 	}
-	if err := json.Unmarshal(nativeStdout.Bytes(), &nativeSum); err != nil {
-		t.Fatalf("unmarshal native summary: %v", err)
-	}
-	if !procSum.OK || !nativeSum.OK || len(procSum.Attempts) != 1 || len(nativeSum.Attempts) != 1 {
-		t.Fatalf("unexpected summaries process=%+v native=%+v", procSum, nativeSum)
-	}
+	return sum.Attempts[0].AttemptDir
+}
 
-	readFeedbackOK := func(path string) bool {
-		raw, err := os.ReadFile(filepath.Join(path, "feedback.json"))
-		if err != nil {
-			t.Fatalf("read feedback: %v", err)
-		}
-		var payload struct {
-			OK bool `json:"ok"`
-		}
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			t.Fatalf("unmarshal feedback: %v", err)
-		}
-		return payload.OK
-	}
-	if !readFeedbackOK(procSum.Attempts[0].AttemptDir) || !readFeedbackOK(nativeSum.Attempts[0].AttemptDir) {
+func assertSuiteRunParityArtifacts(t *testing.T, processAttemptDir string, nativeAttemptDir string) {
+	t.Helper()
+	if !readSuiteRunFeedbackOK(t, processAttemptDir) || !readSuiteRunFeedbackOK(t, nativeAttemptDir) {
 		t.Fatalf("expected process/native parity on feedback.ok")
 	}
+	processReport := readSuiteRunReportState(t, processAttemptDir)
+	nativeReport := readSuiteRunReportState(t, nativeAttemptDir)
+	if !processReport.OK || !nativeReport.OK {
+		t.Fatalf("expected both reports ok=true, process=%v native=%v", processReport.OK, nativeReport.OK)
+	}
+	if processReport.ToolCallsTotal == 0 || nativeReport.ToolCallsTotal == 0 {
+		t.Fatalf("expected non-zero tool calls in both reports, process=%d native=%d", processReport.ToolCallsTotal, nativeReport.ToolCallsTotal)
+	}
+}
 
-	readReport := func(path string) (ok bool, toolCalls int64) {
-		raw, err := os.ReadFile(filepath.Join(path, "attempt.report.json"))
-		if err != nil {
-			t.Fatalf("read attempt.report.json: %v", err)
-		}
-		var payload struct {
-			OK      *bool `json:"ok"`
-			Metrics struct {
-				ToolCallsTotal int64 `json:"toolCallsTotal"`
-			} `json:"metrics"`
-		}
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			t.Fatalf("unmarshal attempt.report.json: %v", err)
-		}
-		if payload.OK == nil {
-			t.Fatalf("expected report ok field")
-		}
-		return *payload.OK, payload.Metrics.ToolCallsTotal
+func readSuiteRunFeedbackOK(t *testing.T, attemptDir string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(attemptDir, "feedback.json"))
+	if err != nil {
+		t.Fatalf("read feedback: %v", err)
 	}
-	procOK, procCalls := readReport(procSum.Attempts[0].AttemptDir)
-	nativeOK, nativeCalls := readReport(nativeSum.Attempts[0].AttemptDir)
-	if !procOK || !nativeOK {
-		t.Fatalf("expected both reports ok=true, process=%v native=%v", procOK, nativeOK)
+	var payload struct {
+		OK bool `json:"ok"`
 	}
-	if procCalls == 0 || nativeCalls == 0 {
-		t.Fatalf("expected non-zero tool calls in both reports, process=%d native=%d", procCalls, nativeCalls)
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal feedback: %v", err)
+	}
+	return payload.OK
+}
+
+type suiteRunReportState struct {
+	OK             bool
+	ToolCallsTotal int64
+}
+
+func readSuiteRunReportState(t *testing.T, attemptDir string) suiteRunReportState {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(attemptDir, "attempt.report.json"))
+	if err != nil {
+		t.Fatalf("read attempt.report.json: %v", err)
+	}
+	var payload struct {
+		OK      *bool `json:"ok"`
+		Metrics struct {
+			ToolCallsTotal int64 `json:"toolCallsTotal"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal attempt.report.json: %v", err)
+	}
+	if payload.OK == nil {
+		t.Fatalf("expected report ok field")
+	}
+	return suiteRunReportState{
+		OK:             *payload.OK,
+		ToolCallsTotal: payload.Metrics.ToolCallsTotal,
 	}
 }
 
 func TestSuiteRun_NativeParallelUniqueSessions(t *testing.T) {
+	TestSuiteRun_NativeParallelUniqueSessionsCore(t)
+}
+
+func TestSuiteRun_NativeParallelUniqueSessionsCore(t *testing.T) {
 	outRoot := t.TempDir()
 	suitePath := filepath.Join(t.TempDir(), "suite.json")
-	missions := make([]map[string]any, 0, 20)
-	for i := 1; i <= 20; i++ {
-		missions = append(missions, map[string]any{
-			"missionId": fmt.Sprintf("m%d", i),
-			"prompt":    fmt.Sprintf("parallel prompt %d", i),
-			"expects":   map[string]any{"ok": true},
-		})
-	}
-	suiteObj := map[string]any{
-		"version": 1,
-		"suiteId": "suite-run-native-parallel",
-		"defaults": map[string]any{
-			"mode":      "discovery",
-			"timeoutMs": 60000,
-		},
-		"missions": missions,
-	}
-	rawSuite, _ := json.Marshal(suiteObj)
-	writeSuiteFile(t, suitePath, string(rawSuite))
+	writeSuiteFile(t, suitePath, buildSuiteRunNativeParallelSuiteJSON(t, 20))
 
 	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
@@ -1358,43 +1484,94 @@ func TestSuiteRun_NativeParallelUniqueSessions(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d stderr=%q", code, stderr.String())
 	}
 
-	var sum struct {
-		OK       bool `json:"ok"`
-		Attempts []struct {
-			AttemptDir string `json:"attemptDir"`
-			OK         bool   `json:"ok"`
-		} `json:"attempts"`
+	sum := parseSuiteRunNativeParallelSummary(t, stdout.Bytes())
+	assertSuiteRunNativeParallelSummary(t, sum, 20)
+	assertSuiteRunNativeParallelSessionsUnique(t, sum.Attempts)
+}
+
+func buildSuiteRunNativeParallelSuiteJSON(t *testing.T, missionCount int) string {
+	t.Helper()
+	missions := make([]map[string]any, 0, missionCount)
+	for i := 1; i <= missionCount; i++ {
+		missions = append(missions, map[string]any{
+			"missionId": fmt.Sprintf("m%d", i),
+			"prompt":    fmt.Sprintf("parallel prompt %d", i),
+			"expects":   map[string]any{"ok": true},
+		})
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	suiteObj := map[string]any{
+		"version": 1,
+		"suiteId": "suite-run-native-parallel",
+		"defaults": map[string]any{
+			"mode":      "discovery",
+			"timeoutMs": 60000,
+		},
+		"missions": missions,
+	}
+	rawSuite, err := json.Marshal(suiteObj)
+	if err != nil {
+		t.Fatalf("marshal suite json: %v", err)
+	}
+	return string(rawSuite)
+}
+
+type suiteRunNativeParallelSummary struct {
+	OK       bool                            `json:"ok"`
+	Attempts []suiteRunNativeParallelAttempt `json:"attempts"`
+}
+
+type suiteRunNativeParallelAttempt struct {
+	AttemptDir string `json:"attemptDir"`
+	OK         bool   `json:"ok"`
+}
+
+func parseSuiteRunNativeParallelSummary(t *testing.T, stdout []byte) suiteRunNativeParallelSummary {
+	t.Helper()
+	var sum suiteRunNativeParallelSummary
+	if err := json.Unmarshal(stdout, &sum); err != nil {
 		t.Fatalf("unmarshal suite run json: %v", err)
 	}
-	if !sum.OK || len(sum.Attempts) != 20 {
+	return sum
+}
+
+func assertSuiteRunNativeParallelSummary(t *testing.T, sum suiteRunNativeParallelSummary, missionCount int) {
+	t.Helper()
+	if !sum.OK || len(sum.Attempts) != missionCount {
 		t.Fatalf("unexpected summary: %+v", sum)
 	}
+}
 
+func assertSuiteRunNativeParallelSessionsUnique(t *testing.T, attempts []suiteRunNativeParallelAttempt) {
+	t.Helper()
 	seenSessions := map[string]bool{}
-	for _, attempt := range sum.Attempts {
+	for _, attempt := range attempts {
 		if !attempt.OK {
 			t.Fatalf("expected attempt ok=true: %+v", attempt)
 		}
-		refRaw, err := os.ReadFile(filepath.Join(attempt.AttemptDir, "runner.ref.json"))
-		if err != nil {
-			t.Fatalf("read runner.ref.json: %v", err)
+		sessionID := readSuiteRunNativeSessionID(t, attempt.AttemptDir)
+		if seenSessions[sessionID] {
+			t.Fatalf("duplicate sessionId detected: %s", sessionID)
 		}
-		var ref struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(refRaw, &ref); err != nil {
-			t.Fatalf("unmarshal runner.ref.json: %v", err)
-		}
-		if strings.TrimSpace(ref.SessionID) == "" {
-			t.Fatalf("expected non-empty sessionId in runner.ref.json")
-		}
-		if seenSessions[ref.SessionID] {
-			t.Fatalf("duplicate sessionId detected: %s", ref.SessionID)
-		}
-		seenSessions[ref.SessionID] = true
+		seenSessions[sessionID] = true
 	}
+}
+
+func readSuiteRunNativeSessionID(t *testing.T, attemptDir string) string {
+	t.Helper()
+	refRaw, err := os.ReadFile(filepath.Join(attemptDir, "runner.ref.json"))
+	if err != nil {
+		t.Fatalf("read runner.ref.json: %v", err)
+	}
+	var ref struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(refRaw, &ref); err != nil {
+		t.Fatalf("unmarshal runner.ref.json: %v", err)
+	}
+	if strings.TrimSpace(ref.SessionID) == "" {
+		t.Fatalf("expected non-empty sessionId in runner.ref.json")
+	}
+	return ref.SessionID
 }
 
 func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
@@ -2229,118 +2406,132 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnAcceptsFinalTurn(t *testing.T
 }
 
 func TestHelperSuiteRunnerProcess(t *testing.T) {
+	TestHelperSuiteRunnerProcessCore(t)
+}
+
+func TestHelperSuiteRunnerProcessCore(t *testing.T) {
 	if os.Getenv("ZCL_WANT_SUITE_RUNNER") != "1" {
 		return
 	}
 
-	// Find args after "--".
-	args := os.Args
-	idx := 0
-	for i := range args {
-		if args[i] == "--" {
-			idx = i + 1
-			break
-		}
-	}
+	kind, exitCode := parseSuiteRunnerProcessArgs(os.Args)
+	runSuiteRunnerProcessCase(kind, exitCode, suiteRunnerProcessTestRunner())
+}
+
+func parseSuiteRunnerProcessArgs(args []string) (string, int) {
+	idx := indexAfterArgSeparator(args)
 	kind := "ok"
-	exit := 0
+	exitCode := 0
 	for _, a := range args[idx:] {
 		if strings.HasPrefix(a, "case=") {
 			kind = strings.TrimPrefix(a, "case=")
-		} else if strings.HasPrefix(a, "exit=") {
+			continue
+		}
+		if strings.HasPrefix(a, "exit=") {
 			n, _ := strconv.Atoi(strings.TrimPrefix(a, "exit="))
-			exit = n
+			exitCode = n
 		}
 	}
+	return kind, exitCode
+}
 
-	r := Runner{
+func indexAfterArgSeparator(args []string) int {
+	for i := range args {
+		if args[i] == "--" {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func suiteRunnerProcessTestRunner() Runner {
+	return Runner{
 		Version: "0.0.0-dev",
 		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 	}
+}
 
+func runSuiteRunnerProcessCase(kind string, exitCode int, r Runner) {
 	switch kind {
 	case "ok":
-		if code := r.Run([]string{"run", "--", "echo", "hi"}); code != 0 {
-			os.Exit(101)
-		}
-		if code := r.Run([]string{"feedback", "--ok", "--result", "ok"}); code != 0 {
-			os.Exit(102)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseOK(r, exitCode)
 	case "no-feedback":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseNoFeedback(r, exitCode)
 	case "result-file-ok":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
-		if path == "" {
-			os.Exit(104)
-		}
-		if err := os.WriteFile(path, []byte(`{"ok":true,"resultJson":{"proof":"file-channel-ok"}}`), 0o644); err != nil {
-			os.Exit(105)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseWriteResultFile(r, exitCode, `{"ok":true,"resultJson":{"proof":"file-channel-ok"}}`, 104, 105)
 	case "result-file-no-trace-ok":
-		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
-		if path == "" {
-			os.Exit(106)
-		}
-		if err := os.WriteFile(path, []byte(`{"ok":true,"resultJson":{"proof":"file-channel-no-trace"}}`), 0o644); err != nil {
-			os.Exit(107)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseWriteResultFileNoRun(exitCode, `{"ok":true,"resultJson":{"proof":"file-channel-no-trace"}}`, 106, 107)
 	case "result-file-invalid":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
-		if path == "" {
-			os.Exit(108)
-		}
-		if err := os.WriteFile(path, []byte(`{"ok":`), 0o644); err != nil {
-			os.Exit(109)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseWriteResultFile(r, exitCode, `{"ok":`, 108, 109)
 	case "result-file-turn-2":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
-		if path == "" {
-			os.Exit(110)
-		}
-		if err := os.WriteFile(path, []byte(`{"ok":true,"turn":2,"resultJson":{"proof":"turn-2"}}`), 0o644); err != nil {
-			os.Exit(111)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseWriteResultFile(r, exitCode, `{"ok":true,"turn":2,"resultJson":{"proof":"turn-2"}}`, 110, 111)
 	case "result-file-turn-3":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
-		if path == "" {
-			os.Exit(112)
-		}
-		if err := os.WriteFile(path, []byte(`{"ok":true,"turn":3,"resultJson":{"proof":"turn-3"}}`), 0o644); err != nil {
-			os.Exit(113)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseWriteResultFile(r, exitCode, `{"ok":true,"turn":3,"resultJson":{"proof":"turn-3"}}`, 112, 113)
 	case "result-stdout-ok":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		marker := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_MARKER"))
-		if marker == "" {
-			marker = "ZCL_RESULT_JSON:"
-		}
-		_, _ = os.Stdout.WriteString(marker + `{"ok":true,"resultJson":{"proof":"stdout-channel-ok"}}` + "\n")
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseResultStdout(r, exitCode)
 	case "infra-feedback-only":
-		_ = r.Run([]string{"run", "--", "echo", "hi"})
-		if code := r.Run([]string{"feedback", "--fail", "--result-json", `{"kind":"infra_failure","code":"ZCL_E_RUNTIME_TIMEOUT","source":"suite_run"}`}); code != 0 {
-			os.Exit(114)
-		}
-		os.Exit(exit)
+		runSuiteRunnerProcessCaseInfraFeedbackOnly(r, exitCode)
 	case "sleep":
 		time.Sleep(3 * time.Second)
-		os.Exit(exit)
+		os.Exit(exitCode)
 	default:
 		os.Exit(103)
 	}
+}
+
+func runSuiteRunnerProcessCaseOK(r Runner, exitCode int) {
+	if code := r.Run([]string{"run", "--", "echo", "hi"}); code != 0 {
+		os.Exit(101)
+	}
+	if code := r.Run([]string{"feedback", "--ok", "--result", "ok"}); code != 0 {
+		os.Exit(102)
+	}
+	os.Exit(exitCode)
+}
+
+func runSuiteRunnerProcessCaseNoFeedback(r Runner, exitCode int) {
+	_ = r.Run([]string{"run", "--", "echo", "hi"})
+	os.Exit(exitCode)
+}
+
+func runSuiteRunnerProcessCaseWriteResultFile(r Runner, exitCode int, payload string, missingPathExit int, writeExit int) {
+	_ = r.Run([]string{"run", "--", "echo", "hi"})
+	runSuiteRunnerProcessWriteResultFile(exitCode, payload, missingPathExit, writeExit)
+}
+
+func runSuiteRunnerProcessCaseWriteResultFileNoRun(exitCode int, payload string, missingPathExit int, writeExit int) {
+	runSuiteRunnerProcessWriteResultFile(exitCode, payload, missingPathExit, writeExit)
+}
+
+func runSuiteRunnerProcessWriteResultFile(exitCode int, payload string, missingPathExit int, writeExit int) {
+	path := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_PATH"))
+	if path == "" {
+		os.Exit(missingPathExit)
+	}
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		os.Exit(writeExit)
+	}
+	os.Exit(exitCode)
+}
+
+func runSuiteRunnerProcessCaseResultStdout(r Runner, exitCode int) {
+	_ = r.Run([]string{"run", "--", "echo", "hi"})
+	marker := strings.TrimSpace(os.Getenv("ZCL_MISSION_RESULT_MARKER"))
+	if marker == "" {
+		marker = "ZCL_RESULT_JSON:"
+	}
+	_, _ = os.Stdout.WriteString(marker + `{"ok":true,"resultJson":{"proof":"stdout-channel-ok"}}` + "\n")
+	os.Exit(exitCode)
+}
+
+func runSuiteRunnerProcessCaseInfraFeedbackOnly(r Runner, exitCode int) {
+	_ = r.Run([]string{"run", "--", "echo", "hi"})
+	if code := r.Run([]string{"feedback", "--fail", "--result-json", `{"kind":"infra_failure","code":"ZCL_E_RUNTIME_TIMEOUT","source":"suite_run"}`}); code != 0 {
+		os.Exit(114)
+	}
+	os.Exit(exitCode)
 }
 
 func TestHelperSuiteNativeAppServer(t *testing.T) {
@@ -2356,328 +2547,379 @@ func TestHelperSuiteNativeAppServer(t *testing.T) {
 }
 
 func runSuiteNativeHelper(mode string) {
+	runSuiteNativeHelperCore(mode)
+}
+
+func runSuiteNativeHelperCore(mode string) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-
-	var mu sync.Mutex
-	writeJSON := func(v any) {
-		b, _ := json.Marshal(v)
-		mu.Lock()
-		defer mu.Unlock()
-		_, _ = os.Stdout.Write(append(b, '\n'))
+	ctx := suiteNativeHelperContext{
+		mode:     mode,
+		threadID: "thr_native_1",
+		turnID:   "turn_native_1",
+		writer:   &suiteNativeHelperWriter{},
 	}
-
-	threadID := "thr_native_1"
-	turnID := "turn_native_1"
-
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var msg map[string]any
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			continue
-		}
-		method, _ := msg["method"].(string)
-		id, hasID := msg["id"]
-		if !hasID {
-			continue
-		}
-
-		respond := func(result any) {
-			writeJSON(map[string]any{"id": id, "result": result})
-		}
-		respondErr := func(code int, message string) {
-			writeJSON(map[string]any{"id": id, "error": map[string]any{"code": code, "message": message}})
-		}
-
-		switch method {
-		case "initialize":
-			respond(map[string]any{"userAgent": "codex-cli/1.4.0"})
-		case "model/list":
-			switch mode {
-			case "compat_missing_method":
-				respondErr(-32601, "method not found")
-			case "timeout_on_model_list":
-				time.Sleep(2 * time.Second)
-			case "assert_model_forwarded":
-				respond(map[string]any{
-					"data": []any{
-						map[string]any{
-							"id":          "gpt-5.3-codex-spark",
-							"model":       "gpt-5.3-codex-spark",
-							"isDefault":   true,
-							"displayName": "Spark",
-							"supportedReasoningEfforts": []any{
-								map[string]any{"reasoningEffort": "medium"},
-								map[string]any{"reasoningEffort": "high"},
-							},
-							"defaultReasoningEffort": "medium",
-						},
-					},
-				})
-			case "reasoning_unsupported":
-				respond(map[string]any{
-					"data": []any{
-						map[string]any{
-							"id":          "gpt-5.3-codex-spark",
-							"model":       "gpt-5.3-codex-spark",
-							"isDefault":   true,
-							"displayName": "Spark",
-							"supportedReasoningEfforts": []any{
-								map[string]any{"reasoningEffort": "low"},
-							},
-							"defaultReasoningEffort": "low",
-						},
-					},
-				})
-			default:
-				respond(map[string]any{"data": []any{}})
-			}
-		case "thread/start":
-			params, _ := msg["params"].(map[string]any)
-			gotCwd, _ := params["cwd"].(string)
-			expectedCwd := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD"))
-			if expectedCwd != "" {
-				if filepath.Clean(strings.TrimSpace(gotCwd)) != filepath.Clean(expectedCwd) {
-					respondErr(-32000, fmt.Sprintf("thread/start cwd mismatch got=%q want=%q", gotCwd, expectedCwd))
-					continue
-				}
-			}
-			expectedCwdPrefix := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD_PREFIX"))
-			if expectedCwdPrefix != "" {
-				if !strings.HasPrefix(strings.TrimSpace(gotCwd), expectedCwdPrefix) {
-					respondErr(-32000, fmt.Sprintf("thread/start cwd prefix mismatch got=%q wantPrefix=%q", gotCwd, expectedCwdPrefix))
-					continue
-				}
-			}
-			switch mode {
-			case "invalid_model":
-				if gotModel, _ := params["model"].(string); strings.TrimSpace(gotModel) == "invalid-model-id" {
-					respondErr(-32000, "thread/start: unknown model invalid-model-id")
-					continue
-				}
-			case "assert_model_forwarded":
-				expectedModel := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_MODEL"))
-				if expectedModel != "" {
-					gotModel, _ := params["model"].(string)
-					if strings.TrimSpace(gotModel) != expectedModel {
-						respondErr(-32000, fmt.Sprintf("thread/start model mismatch got=%q want=%q", gotModel, expectedModel))
-						continue
-					}
-				}
-				expectedEffort := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_REASONING_EFFORT"))
-				if expectedEffort != "" {
-					cfg, _ := params["config"].(map[string]any)
-					gotEffort, _ := cfg["model_reasoning_effort"].(string)
-					if strings.TrimSpace(gotEffort) != expectedEffort {
-						respondErr(-32000, fmt.Sprintf("thread/start reasoning mismatch got=%q want=%q", gotEffort, expectedEffort))
-						continue
-					}
-				}
-			case "reasoning_unsupported":
-				cfg, _ := params["config"].(map[string]any)
-				if effort, _ := cfg["model_reasoning_effort"].(string); strings.TrimSpace(effort) != "" {
-					respondErr(-32000, "thread/start: reasoning effort unsupported for selected model")
-					continue
-				}
-			}
-			respond(map[string]any{"thread": map[string]any{"id": threadID}})
-			writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": threadID}})
-		case "thread/resume":
-			respond(map[string]any{"thread": map[string]any{"id": threadID}})
-		case "turn/start":
-			slow := false
-			if params, ok := msg["params"].(map[string]any); ok {
-				if input, ok := params["input"].([]any); ok {
-					for _, item := range input {
-						obj, _ := item.(map[string]any)
-						text, _ := obj["text"].(string)
-						if strings.Contains(strings.ToLower(text), "slow") {
-							slow = true
-							break
-						}
-					}
-				}
-			}
-			respond(map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}})
-			writeJSON(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			switch mode {
-			case "rate_limit_failure":
-				writeJSON(map[string]any{
-					"method": "turn/failed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"turn": map[string]any{
-							"id":     turnID,
-							"status": "failed",
-							"error": map[string]any{
-								"message":        "usage limit exceeded",
-								"codexErrorInfo": "UsageLimitExceeded",
-							},
-						},
-					},
-				})
-			case "auth_failure":
-				writeJSON(map[string]any{
-					"method": "turn/failed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"turn": map[string]any{
-							"id":     turnID,
-							"status": "failed",
-							"error": map[string]any{
-								"message": "unauthorized",
-								"codexErrorInfo": map[string]any{
-									"kind":           "HttpConnectionFailed",
-									"httpStatusCode": "401",
-								},
-							},
-						},
-					},
-				})
-			case "crash_during_turn":
-				os.Exit(137)
-			case "disconnect_during_turn":
-				return
-			case "task_complete_preferred":
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":    "msg-commentary-1",
-							"type":  "AgentMessage",
-							"phase": "commentary",
-							"content": []any{
-								map[string]any{"type": "Text", "text": "Commentary message"},
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":   "reasoning-1",
-							"type": "Reasoning",
-							"summary_text": []any{
-								"reasoning summary",
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "ignored-delta"}})
-				writeJSON(map[string]any{
-					"method": "codex/event/task_complete",
-					"params": map[string]any{
-						"msg": map[string]any{
-							"type":               "task_complete",
-							"turn_id":            turnID,
-							"last_agent_message": "TASK_COMPLETE_FINAL",
-						},
-					},
-				})
-				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			case "phase_final_answer":
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":    "msg-commentary-2",
-							"type":  "AgentMessage",
-							"phase": "commentary",
-							"content": []any{
-								map[string]any{"type": "Text", "text": "Working..."},
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":    "msg-final-2",
-							"type":  "AgentMessage",
-							"phase": "final_answer",
-							"content": []any{
-								map[string]any{"type": "Text", "text": "PHASE_FINAL_ANSWER"},
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":   "reasoning-2",
-							"type": "Reasoning",
-							"summary_text": []any{
-								"reasoning summary",
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "ignored-delta"}})
-				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			case "phase_without_final_answer":
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":    "msg-commentary-3",
-							"type":  "AgentMessage",
-							"phase": "commentary",
-							"content": []any{
-								map[string]any{"type": "Text", "text": "Still working..."},
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{
-					"method": "item/completed",
-					"params": map[string]any{
-						"threadId": threadID,
-						"turnId":   turnID,
-						"item": map[string]any{
-							"id":   "reasoning-3",
-							"type": "Reasoning",
-							"summary_text": []any{
-								"reasoning summary",
-							},
-						},
-					},
-				})
-				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			default:
-				if slow {
-					time.Sleep(900 * time.Millisecond)
-				}
-				writeJSON(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": "native-result"}})
-				writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			}
-		case "turn/steer":
-			respond(map[string]any{"turnId": turnID})
-		case "turn/interrupt":
-			respond(map[string]any{})
-		default:
-			respondErr(-32601, fmt.Sprintf("method not found: %s", method))
+		if stop := handleSuiteNativeHelperLine(strings.TrimSpace(scanner.Text()), &ctx); stop {
+			return
 		}
 	}
+}
+
+type suiteNativeHelperContext struct {
+	mode     string
+	threadID string
+	turnID   string
+	writer   *suiteNativeHelperWriter
+}
+
+type suiteNativeHelperWriter struct {
+	mu sync.Mutex
+}
+
+func (w *suiteNativeHelperWriter) writeJSON(v any) {
+	b, _ := json.Marshal(v)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, _ = os.Stdout.Write(append(b, '\n'))
+}
+
+func (w *suiteNativeHelperWriter) respond(id any, result any) {
+	w.writeJSON(map[string]any{"id": id, "result": result})
+}
+
+func (w *suiteNativeHelperWriter) respondErr(id any, code int, message string) {
+	w.writeJSON(map[string]any{"id": id, "error": map[string]any{"code": code, "message": message}})
+}
+
+func handleSuiteNativeHelperLine(line string, ctx *suiteNativeHelperContext) bool {
+	if line == "" {
+		return false
+	}
+	msg := parseSuiteNativeHelperMessage(line)
+	if msg == nil {
+		return false
+	}
+	id, hasID := msg["id"]
+	if !hasID {
+		return false
+	}
+	method, _ := msg["method"].(string)
+	switch method {
+	case "initialize":
+		ctx.writer.respond(id, map[string]any{"userAgent": "codex-cli/1.4.0"})
+	case "model/list":
+		handleSuiteNativeHelperModelList(id, ctx)
+	case "thread/start":
+		handleSuiteNativeHelperThreadStart(msg, id, ctx)
+	case "thread/resume":
+		ctx.writer.respond(id, map[string]any{"thread": map[string]any{"id": ctx.threadID}})
+	case "turn/start":
+		if stop := handleSuiteNativeHelperTurnStart(msg, id, ctx); stop {
+			return true
+		}
+	case "turn/steer":
+		ctx.writer.respond(id, map[string]any{"turnId": ctx.turnID})
+	case "turn/interrupt":
+		ctx.writer.respond(id, map[string]any{})
+	default:
+		ctx.writer.respondErr(id, -32601, fmt.Sprintf("method not found: %s", method))
+	}
+	return false
+}
+
+func parseSuiteNativeHelperMessage(line string) map[string]any {
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		return nil
+	}
+	return msg
+}
+
+func handleSuiteNativeHelperModelList(id any, ctx *suiteNativeHelperContext) {
+	switch ctx.mode {
+	case "compat_missing_method":
+		ctx.writer.respondErr(id, -32601, "method not found")
+	case "timeout_on_model_list":
+		time.Sleep(2 * time.Second)
+	case "assert_model_forwarded":
+		ctx.writer.respond(id, map[string]any{
+			"data": []any{
+				map[string]any{
+					"id":          "gpt-5.3-codex-spark",
+					"model":       "gpt-5.3-codex-spark",
+					"isDefault":   true,
+					"displayName": "Spark",
+					"supportedReasoningEfforts": []any{
+						map[string]any{"reasoningEffort": "medium"},
+						map[string]any{"reasoningEffort": "high"},
+					},
+					"defaultReasoningEffort": "medium",
+				},
+			},
+		})
+	case "reasoning_unsupported":
+		ctx.writer.respond(id, map[string]any{
+			"data": []any{
+				map[string]any{
+					"id":          "gpt-5.3-codex-spark",
+					"model":       "gpt-5.3-codex-spark",
+					"isDefault":   true,
+					"displayName": "Spark",
+					"supportedReasoningEfforts": []any{
+						map[string]any{"reasoningEffort": "low"},
+					},
+					"defaultReasoningEffort": "low",
+				},
+			},
+		})
+	default:
+		ctx.writer.respond(id, map[string]any{"data": []any{}})
+	}
+}
+
+func handleSuiteNativeHelperThreadStart(msg map[string]any, id any, ctx *suiteNativeHelperContext) {
+	params, _ := msg["params"].(map[string]any)
+	if !validateSuiteNativeThreadStartCwd(params, id, ctx) {
+		return
+	}
+	if !validateSuiteNativeThreadStartMode(params, id, ctx) {
+		return
+	}
+	ctx.writer.respond(id, map[string]any{"thread": map[string]any{"id": ctx.threadID}})
+	ctx.writer.writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": ctx.threadID}})
+}
+
+func validateSuiteNativeThreadStartCwd(params map[string]any, id any, ctx *suiteNativeHelperContext) bool {
+	gotCwd, _ := params["cwd"].(string)
+	expectedCwd := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD"))
+	if expectedCwd != "" && filepath.Clean(strings.TrimSpace(gotCwd)) != filepath.Clean(expectedCwd) {
+		ctx.writer.respondErr(id, -32000, fmt.Sprintf("thread/start cwd mismatch got=%q want=%q", gotCwd, expectedCwd))
+		return false
+	}
+	expectedCwdPrefix := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_CWD_PREFIX"))
+	if expectedCwdPrefix != "" && !strings.HasPrefix(strings.TrimSpace(gotCwd), expectedCwdPrefix) {
+		ctx.writer.respondErr(id, -32000, fmt.Sprintf("thread/start cwd prefix mismatch got=%q wantPrefix=%q", gotCwd, expectedCwdPrefix))
+		return false
+	}
+	return true
+}
+
+func validateSuiteNativeThreadStartMode(params map[string]any, id any, ctx *suiteNativeHelperContext) bool {
+	switch ctx.mode {
+	case "invalid_model":
+		gotModel, _ := params["model"].(string)
+		if strings.TrimSpace(gotModel) == "invalid-model-id" {
+			ctx.writer.respondErr(id, -32000, "thread/start: unknown model invalid-model-id")
+			return false
+		}
+	case "assert_model_forwarded":
+		if !validateSuiteNativeThreadStartModel(params, id, ctx) {
+			return false
+		}
+		if !validateSuiteNativeThreadStartReasoning(params, id, ctx) {
+			return false
+		}
+	case "reasoning_unsupported":
+		cfg, _ := params["config"].(map[string]any)
+		if effort, _ := cfg["model_reasoning_effort"].(string); strings.TrimSpace(effort) != "" {
+			ctx.writer.respondErr(id, -32000, "thread/start: reasoning effort unsupported for selected model")
+			return false
+		}
+	}
+	return true
+}
+
+func validateSuiteNativeThreadStartModel(params map[string]any, id any, ctx *suiteNativeHelperContext) bool {
+	expectedModel := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_MODEL"))
+	if expectedModel == "" {
+		return true
+	}
+	gotModel, _ := params["model"].(string)
+	if strings.TrimSpace(gotModel) != expectedModel {
+		ctx.writer.respondErr(id, -32000, fmt.Sprintf("thread/start model mismatch got=%q want=%q", gotModel, expectedModel))
+		return false
+	}
+	return true
+}
+
+func validateSuiteNativeThreadStartReasoning(params map[string]any, id any, ctx *suiteNativeHelperContext) bool {
+	expectedEffort := strings.TrimSpace(os.Getenv("ZCL_HELPER_EXPECT_REASONING_EFFORT"))
+	if expectedEffort == "" {
+		return true
+	}
+	cfg, _ := params["config"].(map[string]any)
+	gotEffort, _ := cfg["model_reasoning_effort"].(string)
+	if strings.TrimSpace(gotEffort) != expectedEffort {
+		ctx.writer.respondErr(id, -32000, fmt.Sprintf("thread/start reasoning mismatch got=%q want=%q", gotEffort, expectedEffort))
+		return false
+	}
+	return true
+}
+
+func handleSuiteNativeHelperTurnStart(msg map[string]any, id any, ctx *suiteNativeHelperContext) bool {
+	ctx.writer.respond(id, map[string]any{"turn": map[string]any{"id": ctx.turnID, "status": "inProgress", "items": []any{}}})
+	ctx.writer.writeJSON(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": ctx.threadID, "turnId": ctx.turnID}})
+	slow := suiteNativeHelperTurnIsSlow(msg)
+	switch ctx.mode {
+	case "rate_limit_failure":
+		emitSuiteNativeRateLimitFailure(ctx)
+	case "auth_failure":
+		emitSuiteNativeAuthFailure(ctx)
+	case "crash_during_turn":
+		os.Exit(137)
+	case "disconnect_during_turn":
+		return true
+	case "task_complete_preferred":
+		emitSuiteNativeTaskCompletePreferred(ctx)
+	case "phase_final_answer":
+		emitSuiteNativePhaseFinalAnswer(ctx)
+	case "phase_without_final_answer":
+		emitSuiteNativePhaseWithoutFinalAnswer(ctx)
+	default:
+		emitSuiteNativeDefaultTurnResult(ctx, slow)
+	}
+	return false
+}
+
+func suiteNativeHelperTurnIsSlow(msg map[string]any) bool {
+	params, ok := msg["params"].(map[string]any)
+	if !ok {
+		return false
+	}
+	input, ok := params["input"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range input {
+		obj, _ := item.(map[string]any)
+		text, _ := obj["text"].(string)
+		if strings.Contains(strings.ToLower(text), "slow") {
+			return true
+		}
+	}
+	return false
+}
+
+func emitSuiteNativeRateLimitFailure(ctx *suiteNativeHelperContext) {
+	ctx.writer.writeJSON(map[string]any{
+		"method": "turn/failed",
+		"params": map[string]any{
+			"threadId": ctx.threadID,
+			"turnId":   ctx.turnID,
+			"turn": map[string]any{
+				"id":     ctx.turnID,
+				"status": "failed",
+				"error": map[string]any{
+					"message":        "usage limit exceeded",
+					"codexErrorInfo": "UsageLimitExceeded",
+				},
+			},
+		},
+	})
+}
+
+func emitSuiteNativeAuthFailure(ctx *suiteNativeHelperContext) {
+	ctx.writer.writeJSON(map[string]any{
+		"method": "turn/failed",
+		"params": map[string]any{
+			"threadId": ctx.threadID,
+			"turnId":   ctx.turnID,
+			"turn": map[string]any{
+				"id":     ctx.turnID,
+				"status": "failed",
+				"error": map[string]any{
+					"message": "unauthorized",
+					"codexErrorInfo": map[string]any{
+						"kind":           "HttpConnectionFailed",
+						"httpStatusCode": "401",
+					},
+				},
+			},
+		},
+	})
+}
+
+func emitSuiteNativeTaskCompletePreferred(ctx *suiteNativeHelperContext) {
+	ctx.writer.writeJSON(suiteNativeItemCompletedMessage(ctx.threadID, ctx.turnID, "msg-commentary-1", "AgentMessage", "commentary", "Commentary message"))
+	ctx.writer.writeJSON(suiteNativeReasoningCompletedMessage(ctx.threadID, ctx.turnID, "reasoning-1"))
+	ctx.writer.writeJSON(suiteNativeDeltaMessage(ctx.threadID, ctx.turnID, "ignored-delta"))
+	ctx.writer.writeJSON(map[string]any{
+		"method": "codex/event/task_complete",
+		"params": map[string]any{
+			"msg": map[string]any{
+				"type":               "task_complete",
+				"turn_id":            ctx.turnID,
+				"last_agent_message": "TASK_COMPLETE_FINAL",
+			},
+		},
+	})
+	ctx.writer.writeJSON(suiteNativeTurnCompletedMessage(ctx.threadID, ctx.turnID))
+}
+
+func emitSuiteNativePhaseFinalAnswer(ctx *suiteNativeHelperContext) {
+	ctx.writer.writeJSON(suiteNativeItemCompletedMessage(ctx.threadID, ctx.turnID, "msg-commentary-2", "AgentMessage", "commentary", "Working..."))
+	ctx.writer.writeJSON(suiteNativeItemCompletedMessage(ctx.threadID, ctx.turnID, "msg-final-2", "AgentMessage", "final_answer", "PHASE_FINAL_ANSWER"))
+	ctx.writer.writeJSON(suiteNativeReasoningCompletedMessage(ctx.threadID, ctx.turnID, "reasoning-2"))
+	ctx.writer.writeJSON(suiteNativeDeltaMessage(ctx.threadID, ctx.turnID, "ignored-delta"))
+	ctx.writer.writeJSON(suiteNativeTurnCompletedMessage(ctx.threadID, ctx.turnID))
+}
+
+func emitSuiteNativePhaseWithoutFinalAnswer(ctx *suiteNativeHelperContext) {
+	ctx.writer.writeJSON(suiteNativeItemCompletedMessage(ctx.threadID, ctx.turnID, "msg-commentary-3", "AgentMessage", "commentary", "Still working..."))
+	ctx.writer.writeJSON(suiteNativeReasoningCompletedMessage(ctx.threadID, ctx.turnID, "reasoning-3"))
+	ctx.writer.writeJSON(suiteNativeTurnCompletedMessage(ctx.threadID, ctx.turnID))
+}
+
+func emitSuiteNativeDefaultTurnResult(ctx *suiteNativeHelperContext, slow bool) {
+	if slow {
+		time.Sleep(900 * time.Millisecond)
+	}
+	ctx.writer.writeJSON(suiteNativeDeltaMessage(ctx.threadID, ctx.turnID, "native-result"))
+	ctx.writer.writeJSON(suiteNativeTurnCompletedMessage(ctx.threadID, ctx.turnID))
+}
+
+func suiteNativeItemCompletedMessage(threadID string, turnID string, itemID string, itemType string, phase string, text string) map[string]any {
+	return map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"threadId": threadID,
+			"turnId":   turnID,
+			"item": map[string]any{
+				"id":    itemID,
+				"type":  itemType,
+				"phase": phase,
+				"content": []any{
+					map[string]any{"type": "Text", "text": text},
+				},
+			},
+		},
+	}
+}
+
+func suiteNativeReasoningCompletedMessage(threadID string, turnID string, itemID string) map[string]any {
+	return map[string]any{
+		"method": "item/completed",
+		"params": map[string]any{
+			"threadId": threadID,
+			"turnId":   turnID,
+			"item": map[string]any{
+				"id":   itemID,
+				"type": "Reasoning",
+				"summary_text": []any{
+					"reasoning summary",
+				},
+			},
+		},
+	}
+}
+
+func suiteNativeDeltaMessage(threadID string, turnID string, delta string) map[string]any {
+	return map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_native_1", "delta": delta}}
+}
+
+func suiteNativeTurnCompletedMessage(threadID string, turnID string) map[string]any {
+	return map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}}
 }
 
 func writeSuiteFile(t *testing.T, path string, contents string) {

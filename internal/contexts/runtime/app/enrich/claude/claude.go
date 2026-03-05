@@ -74,61 +74,71 @@ func ParseSessionJSONL(path string) (Metrics, error) {
 	)
 
 	for sc.Scan() {
-		stats.ScannedLines++
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var event SessionEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			stats.IgnoredLines++
-			continue
-		}
-		stats.ParsedLines++
-
-		if model, ok := findModel(event); ok {
-			stats.ParsedWithModel++
-			if m.Model == "" {
-				m.Model = model
-			}
-		}
-		if usage, ok := findUsage(event); ok {
-			stats.ParsedWithUsage++
-			best = maxTokenUsage(best, usage)
-		}
+		processSessionLine(sc.Bytes(), &stats, &m, &best)
 	}
 	if err := sc.Err(); err != nil {
 		return Metrics{}, err
 	}
 
-	hasModel := m.Model != ""
-	hasUsage := best.hasAnyTokenUsage()
+	return finalizeSessionParse(path, stats, m, best)
+}
 
-	if !hasModel || !hasUsage {
-		missing := []string{}
-		if !hasModel {
-			missing = append(missing, "model")
-		}
-		if !hasUsage {
-			missing = append(missing, "token usage")
-		}
-		reason := "no usable " + strings.Join(missing, " or ") + " found"
-		if stats.ParsedLines == 0 {
-			reason = "no parsable JSONL lines with model/usage"
-		}
-		return Metrics{}, &SessionParseError{
-			Path:            path,
-			Reason:          reason,
-			ScannedLines:    stats.ScannedLines,
-			ParsedLines:     stats.ParsedLines,
-			ParsedWithModel: stats.ParsedWithModel,
-			ParsedWithUsage: stats.ParsedWithUsage,
-			IgnoredLines:    stats.IgnoredLines,
+func processSessionLine(raw []byte, stats *SessionParseError, metrics *Metrics, best *TokenUsage) {
+	stats.ScannedLines++
+	line := bytes.TrimSpace(raw)
+	if len(line) == 0 {
+		return
+	}
+	var event SessionEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		stats.IgnoredLines++
+		return
+	}
+	stats.ParsedLines++
+
+	if model, ok := findModel(event); ok {
+		stats.ParsedWithModel++
+		if metrics.Model == "" {
+			metrics.Model = model
 		}
 	}
+	if usage, ok := findUsage(event); ok {
+		stats.ParsedWithUsage++
+		*best = maxTokenUsage(*best, usage)
+	}
+}
 
-	m.Usage = best
-	return m, nil
+func finalizeSessionParse(path string, stats SessionParseError, metrics Metrics, best TokenUsage) (Metrics, error) {
+	hasModel := metrics.Model != ""
+	hasUsage := best.hasAnyTokenUsage()
+	if hasModel && hasUsage {
+		metrics.Usage = best
+		return metrics, nil
+	}
+	return Metrics{}, buildSessionParseError(path, stats, hasModel, hasUsage)
+}
+
+func buildSessionParseError(path string, stats SessionParseError, hasModel bool, hasUsage bool) error {
+	missing := []string{}
+	if !hasModel {
+		missing = append(missing, "model")
+	}
+	if !hasUsage {
+		missing = append(missing, "token usage")
+	}
+	reason := "no usable " + strings.Join(missing, " or ") + " found"
+	if stats.ParsedLines == 0 {
+		reason = "no parsable JSONL lines with model/usage"
+	}
+	return &SessionParseError{
+		Path:            path,
+		Reason:          reason,
+		ScannedLines:    stats.ScannedLines,
+		ParsedLines:     stats.ParsedLines,
+		ParsedWithModel: stats.ParsedWithModel,
+		ParsedWithUsage: stats.ParsedWithUsage,
+		IgnoredLines:    stats.IgnoredLines,
+	}
 }
 
 func maxTokenUsage(best, candidate TokenUsage) TokenUsage {
@@ -208,47 +218,72 @@ func (u TokenUsage) hasAnyTokenUsage() bool {
 
 func numPtr(vals ...any) *int64 {
 	for _, v := range vals {
-		if v == nil {
-			continue
-		}
-		switch n := v.(type) {
-		case float64:
-			if n < 0 || math.Trunc(n) != n || n > float64(maxInt64) {
-				continue
-			}
-			x := int64(n)
-			return &x
-		case int64:
-			if n < 0 {
-				continue
-			}
-			return &n
-		case int:
-			if n < 0 {
-				continue
-			}
-			x := int64(n)
-			return &x
-		case json.Number:
-			x, err := n.Int64()
-			if err != nil || x < 0 {
-				continue
-			}
-			return &x
-		case string:
-			s := strings.TrimSpace(n)
-			if s == "" {
-				continue
-			}
-			x, err := strconv.ParseInt(s, 10, 64)
-			if err != nil || x < 0 {
-				continue
-			}
-			return &x
-		default:
+		if parsed, ok := parseNonNegativeInt64(v); ok {
+			return &parsed
 		}
 	}
 	return nil
+}
+
+func parseNonNegativeInt64(v any) (int64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return parseFloatTokenUsage(n)
+	case int64:
+		return parseInt64TokenUsage(n)
+	case int:
+		return parseIntTokenUsage(n)
+	case json.Number:
+		return parseJSONNumberTokenUsage(n)
+	case string:
+		return parseStringTokenUsage(n)
+	default:
+		return 0, false
+	}
+}
+
+func parseFloatTokenUsage(n float64) (int64, bool) {
+	if n < 0 || math.Trunc(n) != n || n > float64(maxInt64) {
+		return 0, false
+	}
+	return int64(n), true
+}
+
+func parseInt64TokenUsage(n int64) (int64, bool) {
+	if n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func parseIntTokenUsage(n int) (int64, bool) {
+	if n < 0 {
+		return 0, false
+	}
+	return int64(n), true
+}
+
+func parseJSONNumberTokenUsage(n json.Number) (int64, bool) {
+	x, err := n.Int64()
+	if err != nil || x < 0 {
+		return 0, false
+	}
+	return x, true
+}
+
+func parseStringTokenUsage(raw string) (int64, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, false
+	}
+	x, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || x < 0 {
+		return 0, false
+	}
+	return x, true
 }
 
 const maxInt64 = int64(^uint64(0) >> 1)

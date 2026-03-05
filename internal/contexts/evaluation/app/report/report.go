@@ -24,47 +24,16 @@ type CliError struct {
 func (e *CliError) Error() string { return e.Message }
 
 func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.AttemptReportJSONV1, error) {
-	attemptPath := filepath.Join(attemptDir, "attempt.json")
 	tracePath := filepath.Join(attemptDir, "tool.calls.jsonl")
 	feedbackPath := filepath.Join(attemptDir, "feedback.json")
-	notesPath := filepath.Join(attemptDir, "notes.jsonl")
-	promptPath := filepath.Join(attemptDir, "prompt.txt")
-	attemptEnvPath := filepath.Join(attemptDir, schema.AttemptEnvShFileNameV1)
-	runnerCmdPath := filepath.Join(attemptDir, "runner.command.txt")
-	runnerStdoutPath := filepath.Join(attemptDir, "runner.stdout.log")
-	runnerStderrPath := filepath.Join(attemptDir, "runner.stderr.log")
-
-	attemptBytes, err := os.ReadFile(attemptPath)
+	attempt, enforce, err := loadAttemptForReport(attemptDir, strict)
 	if err != nil {
-		if strict && os.IsNotExist(err) {
-			return schema.AttemptReportJSONV1{}, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing attempt.json"}
-		}
 		return schema.AttemptReportJSONV1{}, err
 	}
-	var attempt schema.AttemptJSONV1
-	if err := json.Unmarshal(attemptBytes, &attempt); err != nil {
+	fb, okPtr, feedbackPresent, err := loadFeedbackForReport(feedbackPath, enforce)
+	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
 	}
-
-	// In ci mode, treat report as strict even if the caller didn't pass --strict.
-	enforce := strict || attempt.Mode == "ci"
-
-	var okPtr *bool
-	var fb schema.FeedbackJSONV1
-	feedbackPresent := false
-	if fbBytes, err := os.ReadFile(feedbackPath); err == nil {
-		feedbackPresent = true
-		if err := json.Unmarshal(fbBytes, &fb); err != nil {
-			return schema.AttemptReportJSONV1{}, err
-		}
-		ok := fb.OK
-		okPtr = &ok
-	} else if enforce && os.IsNotExist(err) {
-		return schema.AttemptReportJSONV1{}, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing feedback.json"}
-	} else if err != nil && !os.IsNotExist(err) {
-		return schema.AttemptReportJSONV1{}, err
-	}
-
 	metrics, signals, err := computeMetricsAndSignals(tracePath, enforce)
 	if err != nil {
 		return schema.AttemptReportJSONV1{}, err
@@ -75,114 +44,25 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 			return schema.AttemptReportJSONV1{}, err
 		}
 	}
-
-	tracePresent, traceNonEmpty := false, false
-	if _, err := os.Stat(tracePath); err == nil {
-		tracePresent = true
-		nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
-		if err != nil {
-			if enforce {
-				return schema.AttemptReportJSONV1{}, err
-			}
-		} else {
-			traceNonEmpty = nonEmpty
-		}
+	tracePresent, traceNonEmpty, err := tracePresenceAndNonEmpty(tracePath, enforce)
+	if err != nil {
+		return schema.AttemptReportJSONV1{}, err
 	}
 
 	promptContaminationTerms := promptContaminationTerms(attemptDir, attempt.BlindTerms)
 	timedOutBeforeFirstToolCall := classifyTimedOutBeforeFirstToolCall(attempt, traceSummary)
-
-	integrity := &schema.AttemptIntegrityV1{
-		TracePresent:             tracePresent,
-		TraceNonEmpty:            traceNonEmpty,
-		FeedbackPresent:          feedbackPresent,
-		FunnelBypassSuspected:    feedbackPresent && !traceNonEmpty,
-		PromptContaminated:       len(promptContaminationTerms) > 0,
-		PromptContaminationTerms: promptContaminationTerms,
-	}
-
-	artifacts := schema.AttemptArtifactsV1{
-		AttemptJSON:  "attempt.json",
-		TraceJSONL:   "tool.calls.jsonl",
-		FeedbackJSON: "feedback.json",
-	}
-	if _, err := os.Stat(notesPath); err == nil {
-		artifacts.NotesJSONL = "notes.jsonl"
-	}
-	if _, err := os.Stat(promptPath); err == nil {
-		artifacts.PromptTXT = "prompt.txt"
-	}
-	if _, err := os.Stat(attemptEnvPath); err == nil {
-		artifacts.AttemptEnvSH = schema.AttemptEnvShFileNameV1
-	}
-	if _, err := os.Stat(filepath.Join(attemptDir, schema.AttemptRuntimeEnvFileNameV1)); err == nil {
-		artifacts.AttemptRuntimeEnvJSON = schema.AttemptRuntimeEnvFileNameV1
-	}
-	if _, err := os.Stat(runnerCmdPath); err == nil {
-		artifacts.RunnerCommandTXT = "runner.command.txt"
-	}
-	if _, err := os.Stat(runnerStdoutPath); err == nil {
-		artifacts.RunnerStdoutLOG = "runner.stdout.log"
-	}
-	if _, err := os.Stat(runnerStderrPath); err == nil {
-		artifacts.RunnerStderrLOG = "runner.stderr.log"
-	}
+	integrity := buildAttemptIntegrity(tracePresent, traceNonEmpty, feedbackPresent, promptContaminationTerms)
+	artifacts := discoverAttemptArtifacts(attemptDir)
 
 	startedAt := attempt.StartedAt
-	endedAt := ""
-	if feedbackPresent && fb.CreatedAt != "" {
-		endedAt = fb.CreatedAt
-	} else if traceNonEmpty {
-		// Best-effort: endedAt = max trace ts. We already parsed TS in computeMetrics; re-scan cheaply here
-		// to avoid changing computeMetrics's signature.
-		if ts, ok := maxTraceTS(tracePath); ok {
-			endedAt = ts
-		}
-	}
+	endedAt := resolveAttemptEndedAt(feedbackPresent, fb.CreatedAt, traceNonEmpty, tracePath)
 	failureCodeHistogram := cloneCountMap(metrics.FailuresByCode)
 	tokenEstimates := tokenEstimatesForAttempt(attemptDir, tracePath, metrics)
 	decisionTags := deriveDecisionTags(fb.DecisionTags, okPtr, metrics, integrity, timedOutBeforeFirstToolCall)
 
-	var expects *schema.ExpectationResultV1
-	if sf, ok, err := loadSuiteForAttempt(attemptDir); err != nil {
-		if enforce {
-			return schema.AttemptReportJSONV1{}, err
-		}
-	} else if ok && feedbackPresent {
-		var opNames []string
-		for op := range metrics.ToolCallsByOp {
-			if strings.TrimSpace(op) == "" {
-				continue
-			}
-			opNames = append(opNames, op)
-		}
-		sort.Strings(opNames)
-		tf := suite.TraceFacts{
-			ToolCallsTotal:            metrics.ToolCallsTotal,
-			FailuresTotal:             metrics.FailuresTotal,
-			TimeoutsTotal:             metrics.TimeoutsTotal,
-			RepeatMaxStreak:           0,
-			DistinctCommandSignatures: 0,
-			CommandNamesSeen:          nil,
-			ToolOpsSeen:               opNames,
-			MCPToolsSeen:              nil,
-		}
-		if signals != nil {
-			tf.RepeatMaxStreak = signals.RepeatMaxStreak
-			tf.DistinctCommandSignatures = signals.DistinctCommandSignatures
-			tf.CommandNamesSeen = append([]string(nil), signals.CommandNamesSeen...)
-		}
-		er := suite.Evaluate(sf, attempt.MissionID, fb, &tf)
-		expects = &schema.ExpectationResultV1{
-			Evaluated: er.Evaluated,
-			OK:        er.OK,
-		}
-		if len(er.Failures) > 0 {
-			expects.Failures = make([]schema.ExpectationFailureV1, 0, len(er.Failures))
-			for _, f := range er.Failures {
-				expects.Failures = append(expects.Failures, schema.ExpectationFailureV1{Code: f.Code, Message: f.Message})
-			}
-		}
+	expects, err := buildExpectationsForReport(attemptDir, attempt.MissionID, fb, feedbackPresent, metrics, signals, enforce)
+	if err != nil {
+		return schema.AttemptReportJSONV1{}, err
 	}
 
 	return schema.AttemptReportJSONV1{
@@ -209,6 +89,155 @@ func BuildAttemptReport(now time.Time, attemptDir string, strict bool) (schema.A
 		Signals:                     signals,
 		Expectations:                expects,
 	}, nil
+}
+
+func loadAttemptForReport(attemptDir string, strict bool) (schema.AttemptJSONV1, bool, error) {
+	attemptPath := filepath.Join(attemptDir, "attempt.json")
+	attemptBytes, err := os.ReadFile(attemptPath)
+	if err != nil {
+		if strict && os.IsNotExist(err) {
+			return schema.AttemptJSONV1{}, false, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing attempt.json"}
+		}
+		return schema.AttemptJSONV1{}, false, err
+	}
+	var attempt schema.AttemptJSONV1
+	if err := json.Unmarshal(attemptBytes, &attempt); err != nil {
+		return schema.AttemptJSONV1{}, false, err
+	}
+	return attempt, strict || attempt.Mode == "ci", nil
+}
+
+func loadFeedbackForReport(feedbackPath string, enforce bool) (schema.FeedbackJSONV1, *bool, bool, error) {
+	var fb schema.FeedbackJSONV1
+	fbBytes, err := os.ReadFile(feedbackPath)
+	if err == nil {
+		if err := json.Unmarshal(fbBytes, &fb); err != nil {
+			return schema.FeedbackJSONV1{}, nil, false, err
+		}
+		ok := fb.OK
+		return fb, &ok, true, nil
+	}
+	if enforce && os.IsNotExist(err) {
+		return schema.FeedbackJSONV1{}, nil, false, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing feedback.json"}
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return schema.FeedbackJSONV1{}, nil, false, err
+	}
+	return schema.FeedbackJSONV1{}, nil, false, nil
+}
+
+func tracePresenceAndNonEmpty(tracePath string, enforce bool) (bool, bool, error) {
+	if _, err := os.Stat(tracePath); err != nil {
+		return false, false, nil
+	}
+	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
+	if err != nil {
+		if enforce {
+			return true, false, err
+		}
+		return true, false, nil
+	}
+	return true, nonEmpty, nil
+}
+
+func buildAttemptIntegrity(tracePresent, traceNonEmpty, feedbackPresent bool, terms []string) *schema.AttemptIntegrityV1 {
+	return &schema.AttemptIntegrityV1{
+		TracePresent:             tracePresent,
+		TraceNonEmpty:            traceNonEmpty,
+		FeedbackPresent:          feedbackPresent,
+		FunnelBypassSuspected:    feedbackPresent && !traceNonEmpty,
+		PromptContaminated:       len(terms) > 0,
+		PromptContaminationTerms: terms,
+	}
+}
+
+func discoverAttemptArtifacts(attemptDir string) schema.AttemptArtifactsV1 {
+	artifacts := schema.AttemptArtifactsV1{
+		AttemptJSON:  "attempt.json",
+		TraceJSONL:   "tool.calls.jsonl",
+		FeedbackJSON: "feedback.json",
+	}
+	setArtifactIfPresent(filepath.Join(attemptDir, "notes.jsonl"), &artifacts.NotesJSONL, "notes.jsonl")
+	setArtifactIfPresent(filepath.Join(attemptDir, "prompt.txt"), &artifacts.PromptTXT, "prompt.txt")
+	setArtifactIfPresent(filepath.Join(attemptDir, schema.AttemptEnvShFileNameV1), &artifacts.AttemptEnvSH, schema.AttemptEnvShFileNameV1)
+	setArtifactIfPresent(filepath.Join(attemptDir, schema.AttemptRuntimeEnvFileNameV1), &artifacts.AttemptRuntimeEnvJSON, schema.AttemptRuntimeEnvFileNameV1)
+	setArtifactIfPresent(filepath.Join(attemptDir, "runner.command.txt"), &artifacts.RunnerCommandTXT, "runner.command.txt")
+	setArtifactIfPresent(filepath.Join(attemptDir, "runner.stdout.log"), &artifacts.RunnerStdoutLOG, "runner.stdout.log")
+	setArtifactIfPresent(filepath.Join(attemptDir, "runner.stderr.log"), &artifacts.RunnerStderrLOG, "runner.stderr.log")
+	return artifacts
+}
+
+func setArtifactIfPresent(path string, out *string, name string) {
+	if _, err := os.Stat(path); err == nil {
+		*out = name
+	}
+}
+
+func resolveAttemptEndedAt(feedbackPresent bool, feedbackCreatedAt string, traceNonEmpty bool, tracePath string) string {
+	if feedbackPresent && feedbackCreatedAt != "" {
+		return feedbackCreatedAt
+	}
+	if !traceNonEmpty {
+		return ""
+	}
+	if ts, ok := maxTraceTS(tracePath); ok {
+		return ts
+	}
+	return ""
+}
+
+func buildExpectationsForReport(attemptDir, missionID string, fb schema.FeedbackJSONV1, feedbackPresent bool, metrics schema.AttemptMetricsV1, signals *schema.AttemptSignalsV1, enforce bool) (*schema.ExpectationResultV1, error) {
+	sf, ok, err := loadSuiteForAttempt(attemptDir)
+	if err != nil {
+		if enforce {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if !ok || !feedbackPresent {
+		return nil, nil
+	}
+	tf := buildSuiteTraceFacts(metrics, signals)
+	er := suite.Evaluate(sf, missionID, fb, &tf)
+	expects := &schema.ExpectationResultV1{
+		Evaluated: er.Evaluated,
+		OK:        er.OK,
+	}
+	if len(er.Failures) == 0 {
+		return expects, nil
+	}
+	expects.Failures = make([]schema.ExpectationFailureV1, 0, len(er.Failures))
+	for _, f := range er.Failures {
+		expects.Failures = append(expects.Failures, schema.ExpectationFailureV1{Code: f.Code, Message: f.Message})
+	}
+	return expects, nil
+}
+
+func buildSuiteTraceFacts(metrics schema.AttemptMetricsV1, signals *schema.AttemptSignalsV1) suite.TraceFacts {
+	opNames := make([]string, 0, len(metrics.ToolCallsByOp))
+	for op := range metrics.ToolCallsByOp {
+		if strings.TrimSpace(op) == "" {
+			continue
+		}
+		opNames = append(opNames, op)
+	}
+	sort.Strings(opNames)
+	tf := suite.TraceFacts{
+		ToolCallsTotal:            metrics.ToolCallsTotal,
+		FailuresTotal:             metrics.FailuresTotal,
+		TimeoutsTotal:             metrics.TimeoutsTotal,
+		RepeatMaxStreak:           0,
+		DistinctCommandSignatures: 0,
+		CommandNamesSeen:          nil,
+		ToolOpsSeen:               opNames,
+		MCPToolsSeen:              nil,
+	}
+	if signals != nil {
+		tf.RepeatMaxStreak = signals.RepeatMaxStreak
+		tf.DistinctCommandSignatures = signals.DistinctCommandSignatures
+		tf.CommandNamesSeen = append([]string(nil), signals.CommandNamesSeen...)
+	}
+	return tf
 }
 
 type traceSummary struct {
@@ -429,39 +458,86 @@ func maxTraceTS(tracePath string) (string, bool) {
 }
 
 func computeMetricsAndSignals(tracePath string, strict bool) (schema.AttemptMetricsV1, *schema.AttemptSignalsV1, error) {
-	f, err := os.Open(tracePath)
+	f, missing, err := openTraceForMetrics(tracePath, strict)
 	if err != nil {
-		if strict && os.IsNotExist(err) {
-			return schema.AttemptMetricsV1{}, nil, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing tool.calls.jsonl"}
-		}
-		if os.IsNotExist(err) {
-			// Best-effort: missing trace yields zero metrics.
-			return schema.AttemptMetricsV1{}, nil, nil
-		}
 		return schema.AttemptMetricsV1{}, nil, err
+	}
+	if missing {
+		return schema.AttemptMetricsV1{}, nil, nil
 	}
 	defer func() { _ = f.Close() }()
 
-	var (
-		sc            = bufio.NewScanner(f)
-		metrics       schema.AttemptMetricsV1
-		minTS         time.Time
-		maxTS         time.Time
-		durs          []int64
-		retryKeyStats = map[string]struct {
-			count    int64
-			failures int64
-		}{}
-		lastSig      string
-		streak       int64
-		maxStreak    int64
-		distinctSigs = map[string]bool{}
-		cmdNames     = map[string]bool{}
-	)
-	metrics.FailuresByCode = map[string]int64{}
-	metrics.ToolCallsByTool = map[string]int64{}
-	metrics.ToolCallsByOp = map[string]int64{}
+	acc := newTraceMetricsAccumulator()
+	if err := scanTraceMetrics(f, strict, acc); err != nil {
+		return schema.AttemptMetricsV1{}, nil, err
+	}
+	if acc.metrics.ToolCallsTotal == 0 {
+		return emptyMetricsResult(strict)
+	}
+	acc.finalizeMetrics()
+	signals := acc.buildSignals()
+	return acc.metrics, signals, nil
+}
 
+func openTraceForMetrics(tracePath string, strict bool) (*os.File, bool, error) {
+	f, err := os.Open(tracePath)
+	if err == nil {
+		return f, false, nil
+	}
+	if strict && os.IsNotExist(err) {
+		return nil, false, &CliError{Code: "ZCL_E_MISSING_ARTIFACT", Message: "missing tool.calls.jsonl"}
+	}
+	if os.IsNotExist(err) {
+		// Best-effort: missing trace yields zero metrics.
+		return nil, true, nil
+	}
+	return nil, false, err
+}
+
+func emptyMetricsResult(strict bool) (schema.AttemptMetricsV1, *schema.AttemptSignalsV1, error) {
+	if strict {
+		return schema.AttemptMetricsV1{}, nil, &CliError{Code: "ZCL_E_MISSING_EVIDENCE", Message: "tool.calls.jsonl is empty"}
+	}
+	return schema.AttemptMetricsV1{}, nil, nil
+}
+
+type retryMetric struct {
+	count    int64
+	failures int64
+}
+
+type traceMetricsAccumulator struct {
+	metrics schema.AttemptMetricsV1
+
+	minTS time.Time
+	maxTS time.Time
+	durs  []int64
+
+	retryStats map[string]retryMetric
+
+	lastSig   string
+	streak    int64
+	maxStreak int64
+
+	distinctSigs map[string]bool
+	cmdNames     map[string]bool
+}
+
+func newTraceMetricsAccumulator() *traceMetricsAccumulator {
+	return &traceMetricsAccumulator{
+		metrics: schema.AttemptMetricsV1{
+			FailuresByCode:  map[string]int64{},
+			ToolCallsByTool: map[string]int64{},
+			ToolCallsByOp:   map[string]int64{},
+		},
+		retryStats:   map[string]retryMetric{},
+		distinctSigs: map[string]bool{},
+		cmdNames:     map[string]bool{},
+	}
+}
+
+func scanTraceMetrics(f *os.File, strict bool, acc *traceMetricsAccumulator) error {
+	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -469,118 +545,147 @@ func computeMetricsAndSignals(tracePath string, strict bool) (schema.AttemptMetr
 		}
 		var ev schema.TraceEventV1
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return schema.AttemptMetricsV1{}, nil, err
+			return err
 		}
-		metrics.ToolCallsTotal++
-		metrics.ToolCallsByTool[ev.Tool]++
-		metrics.ToolCallsByOp[ev.Op]++
-		durs = append(durs, ev.Result.DurationMs)
-
-		key := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
-		st := retryKeyStats[key]
-		st.count++
-		if !ev.Result.OK {
-			st.failures++
-		}
-		retryKeyStats[key] = st
-
-		if !ev.Result.OK {
-			metrics.FailuresTotal++
-			code := ev.Result.Code
-			if strings.TrimSpace(code) == "" {
-				if ev.Result.ExitCode != nil && *ev.Result.ExitCode != 0 {
-					code = "ZCL_E_TOOL_FAILED"
-				} else {
-					code = "ZCL_E_TOOL_FAILED"
-				}
-			}
-			metrics.FailuresByCode[code]++
-			if code == "ZCL_E_TIMEOUT" {
-				metrics.TimeoutsTotal++
-			}
-		}
-
-		if ev.Integrity != nil && ev.Integrity.Truncated {
-			// We only know "truncated happened"; attribute it to both streams for now.
-			// Once we emit per-stream truncation, we can split precisely.
-			if ev.IO.OutPreview != "" {
-				metrics.OutPreviewTruncations++
-			}
-			if ev.IO.ErrPreview != "" {
-				metrics.ErrPreviewTruncations++
-			}
-		}
-
-		metrics.OutBytesTotal += ev.IO.OutBytes
-		metrics.ErrBytesTotal += ev.IO.ErrBytes
-
-		if ts, err := time.Parse(time.RFC3339Nano, ev.TS); err == nil {
-			if minTS.IsZero() || ts.Before(minTS) {
-				minTS = ts
-			}
-			if maxTS.IsZero() || ts.After(maxTS) {
-				maxTS = ts
-			}
-		} else if strict {
-			return schema.AttemptMetricsV1{}, nil, err
-		}
-
-		// Signals: signature-based streak and diversity.
-		sig := ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
-		distinctSigs[sig] = true
-		if sig == lastSig {
-			streak++
-		} else {
-			lastSig = sig
-			streak = 1
-		}
-		if streak > maxStreak {
-			maxStreak = streak
-		}
-
-		// Best-effort: record argv[0] command names for exec calls (supports both legacy tool=<cmd>
-		// and current tool=cli with input.argv).
-		if ev.Op == "exec" && len(ev.Input) > 0 {
-			var in struct {
-				Argv []string `json:"argv"`
-			}
-			if err := json.Unmarshal(ev.Input, &in); err == nil {
-				if len(in.Argv) > 0 && in.Argv[0] != "" {
-					cmdNames[in.Argv[0]] = true
-				}
-			}
-		} else if ev.Op == "exec" && ev.Tool != "" && ev.Tool != "cli" && ev.Tool != "http" && ev.Tool != "mcp" {
-			// Fallback: some older traces use tool=<cmd>.
-			cmdNames[ev.Tool] = true
+		if err := acc.observeEvent(ev, strict); err != nil {
+			return err
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return schema.AttemptMetricsV1{}, nil, err
-	}
+	return sc.Err()
+}
 
-	if metrics.ToolCallsTotal == 0 {
+func (a *traceMetricsAccumulator) observeEvent(ev schema.TraceEventV1, strict bool) error {
+	a.observeCounts(ev)
+	a.observeFailures(ev)
+	a.observeTruncation(ev)
+	a.observeIO(ev)
+	if err := a.observeTimestamp(ev, strict); err != nil {
+		return err
+	}
+	a.observeSignals(ev)
+	a.observeCommandNames(ev)
+	return nil
+}
+
+func (a *traceMetricsAccumulator) observeCounts(ev schema.TraceEventV1) {
+	a.metrics.ToolCallsTotal++
+	a.metrics.ToolCallsByTool[ev.Tool]++
+	a.metrics.ToolCallsByOp[ev.Op]++
+	a.durs = append(a.durs, ev.Result.DurationMs)
+
+	key := eventSignature(ev)
+	st := a.retryStats[key]
+	st.count++
+	if !ev.Result.OK {
+		st.failures++
+	}
+	a.retryStats[key] = st
+}
+
+func (a *traceMetricsAccumulator) observeFailures(ev schema.TraceEventV1) {
+	if ev.Result.OK {
+		return
+	}
+	a.metrics.FailuresTotal++
+	code := strings.TrimSpace(ev.Result.Code)
+	if code == "" {
+		code = "ZCL_E_TOOL_FAILED"
+	}
+	a.metrics.FailuresByCode[code]++
+	if code == "ZCL_E_TIMEOUT" {
+		a.metrics.TimeoutsTotal++
+	}
+}
+
+func (a *traceMetricsAccumulator) observeTruncation(ev schema.TraceEventV1) {
+	if ev.Integrity == nil || !ev.Integrity.Truncated {
+		return
+	}
+	// We only know "truncated happened"; attribute it to both streams for now.
+	// Once we emit per-stream truncation, we can split precisely.
+	if ev.IO.OutPreview != "" {
+		a.metrics.OutPreviewTruncations++
+	}
+	if ev.IO.ErrPreview != "" {
+		a.metrics.ErrPreviewTruncations++
+	}
+}
+
+func (a *traceMetricsAccumulator) observeIO(ev schema.TraceEventV1) {
+	a.metrics.OutBytesTotal += ev.IO.OutBytes
+	a.metrics.ErrBytesTotal += ev.IO.ErrBytes
+}
+
+func (a *traceMetricsAccumulator) observeTimestamp(ev schema.TraceEventV1, strict bool) error {
+	ts, err := time.Parse(time.RFC3339Nano, ev.TS)
+	if err != nil {
 		if strict {
-			return schema.AttemptMetricsV1{}, nil, &CliError{Code: "ZCL_E_MISSING_EVIDENCE", Message: "tool.calls.jsonl is empty"}
+			return err
 		}
-		metrics.FailuresByCode = nil
-		metrics.ToolCallsByTool = nil
-		metrics.ToolCallsByOp = nil
-		return metrics, nil, nil
+		return nil
 	}
-
-	if !minTS.IsZero() && !maxTS.IsZero() {
-		metrics.WallTimeMs = maxTS.Sub(minTS).Milliseconds()
+	if a.minTS.IsZero() || ts.Before(a.minTS) {
+		a.minTS = ts
 	}
-	metrics.DurationMsTotal, metrics.DurationMsMin, metrics.DurationMsMax, metrics.DurationMsAvg, metrics.DurationMsP50, metrics.DurationMsP95 = summarizeDurations(durs)
+	if a.maxTS.IsZero() || ts.After(a.maxTS) {
+		a.maxTS = ts
+	}
+	return nil
+}
 
+func (a *traceMetricsAccumulator) observeSignals(ev schema.TraceEventV1) {
+	sig := eventSignature(ev)
+	a.distinctSigs[sig] = true
+	if sig == a.lastSig {
+		a.streak++
+	} else {
+		a.lastSig = sig
+		a.streak = 1
+	}
+	if a.streak > a.maxStreak {
+		a.maxStreak = a.streak
+	}
+}
+
+func (a *traceMetricsAccumulator) observeCommandNames(ev schema.TraceEventV1) {
+	if ev.Op != "exec" {
+		return
+	}
+	if len(ev.Input) > 0 {
+		var in struct {
+			Argv []string `json:"argv"`
+		}
+		if err := json.Unmarshal(ev.Input, &in); err == nil && len(in.Argv) > 0 && in.Argv[0] != "" {
+			a.cmdNames[in.Argv[0]] = true
+			return
+		}
+	}
+	if ev.Tool != "" && ev.Tool != "cli" && ev.Tool != "http" && ev.Tool != "mcp" {
+		// Fallback: some older traces use tool=<cmd>.
+		a.cmdNames[ev.Tool] = true
+	}
+}
+
+func (a *traceMetricsAccumulator) finalizeMetrics() {
+	if !a.minTS.IsZero() && !a.maxTS.IsZero() {
+		a.metrics.WallTimeMs = a.maxTS.Sub(a.minTS).Milliseconds()
+	}
+	a.metrics.DurationMsTotal, a.metrics.DurationMsMin, a.metrics.DurationMsMax, a.metrics.DurationMsAvg, a.metrics.DurationMsP50, a.metrics.DurationMsP95 = summarizeDurations(a.durs)
+	a.metrics.RetriesTotal = retriesTotal(a.retryStats)
+	normalizeMetricMaps(&a.metrics)
+}
+
+func retriesTotal(stats map[string]retryMetric) int64 {
 	var retries int64
-	for _, st := range retryKeyStats {
+	for _, st := range stats {
 		if st.count > 1 && st.failures > 0 {
 			retries += st.count - 1
 		}
 	}
-	metrics.RetriesTotal = retries
+	return retries
+}
 
+func normalizeMetricMaps(metrics *schema.AttemptMetricsV1) {
 	if len(metrics.FailuresByCode) == 0 {
 		metrics.FailuresByCode = nil
 	}
@@ -590,39 +695,51 @@ func computeMetricsAndSignals(tracePath string, strict bool) (schema.AttemptMetr
 	if len(metrics.ToolCallsByOp) == 0 {
 		metrics.ToolCallsByOp = nil
 	}
+}
 
-	// Derive signals (deterministic, evidence-backed).
-	var cmdList []string
-	for s := range cmdNames {
-		cmdList = append(cmdList, s)
+func (a *traceMetricsAccumulator) buildSignals() *schema.AttemptSignalsV1 {
+	return &schema.AttemptSignalsV1{
+		RepeatMaxStreak:           a.maxStreak,
+		DistinctCommandSignatures: int64(len(a.distinctSigs)),
+		FailureRateBps:            failureRateBps(a.metrics),
+		NoProgressSuspected:       noProgressSuspected(a.metrics.ToolCallsTotal, int64(len(a.distinctSigs)), a.maxStreak),
+		CommandNamesSeen:          sortedKeys(a.cmdNames),
 	}
-	sort.Strings(cmdList)
+}
 
-	failureRateBps := int64(0)
-	if metrics.ToolCallsTotal > 0 {
-		failureRateBps = (metrics.FailuresTotal * 10000) / metrics.ToolCallsTotal
-		if failureRateBps < 0 {
-			failureRateBps = 0
-		}
-		if failureRateBps > 10000 {
-			failureRateBps = 10000
-		}
+func eventSignature(ev schema.TraceEventV1) string {
+	return ev.Tool + "\x1f" + ev.Op + "\x1f" + string(ev.Input)
+}
+
+func sortedKeys(in map[string]bool) []string {
+	if len(in) == 0 {
+		return nil
 	}
+	out := make([]string, 0, len(in))
+	for key := range in {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
 
+func failureRateBps(metrics schema.AttemptMetricsV1) int64 {
+	if metrics.ToolCallsTotal <= 0 {
+		return 0
+	}
+	rate := (metrics.FailuresTotal * 10000) / metrics.ToolCallsTotal
+	if rate < 0 {
+		return 0
+	}
+	if rate > 10000 {
+		return 10000
+	}
+	return rate
+}
+
+func noProgressSuspected(totalCalls, distinctCount, maxStreak int64) bool {
 	// Conservative stuck heuristic: lots of calls, very low diversity, long repeats.
-	noProgress := false
-	if metrics.ToolCallsTotal >= 20 && int64(len(distinctSigs)) <= 3 && maxStreak >= 10 {
-		noProgress = true
-	}
-
-	signals := &schema.AttemptSignalsV1{
-		RepeatMaxStreak:           maxStreak,
-		DistinctCommandSignatures: int64(len(distinctSigs)),
-		FailureRateBps:            failureRateBps,
-		NoProgressSuspected:       noProgress,
-		CommandNamesSeen:          cmdList,
-	}
-	return metrics, signals, nil
+	return totalCalls >= 20 && distinctCount <= 3 && maxStreak >= 10
 }
 
 func IsCliError(err error, code string) bool {

@@ -11,35 +11,7 @@ func TestRunState_SaveLoadAndReport(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "campaign.run.state.json")
 
-	st := RunStateV1{
-		SchemaVersion:     1,
-		CampaignID:        "cmp-1",
-		RunID:             "20260222-101010Z-abc123",
-		SpecPath:          "/tmp/campaign.yaml",
-		OutRoot:           ".zcl",
-		Status:            RunStatusInvalid,
-		ReasonCodes:       []string{"ZCL_E_CAMPAIGN_GATE_FAILED"},
-		StartedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-		UpdatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-		TotalMissions:     2,
-		MissionOffset:     0,
-		MissionsCompleted: 2,
-		FlowRuns: []FlowRunV1{
-			{
-				FlowID:     "flow-a",
-				RunnerType: RunnerTypeProcessCmd,
-				OK:         false,
-				Attempts: []AttemptStatusV1{
-					{MissionIndex: 0, MissionID: "m1", Status: AttemptStatusValid},
-					{MissionIndex: 1, MissionID: "m2", Status: AttemptStatusInvalid},
-				},
-			},
-		},
-		MissionGates: []MissionGateV1{
-			{MissionIndex: 0, MissionID: "m1", OK: true},
-			{MissionIndex: 1, MissionID: "m2", OK: false},
-		},
-	}
+	st := sampleRunState()
 	if err := SaveRunState(path, st); err != nil {
 		t.Fatalf("SaveRunState: %v", err)
 	}
@@ -50,38 +22,8 @@ func TestRunState_SaveLoadAndReport(t *testing.T) {
 	if got.CampaignID != st.CampaignID || got.RunID != st.RunID || got.Status != st.Status {
 		t.Fatalf("unexpected loaded state: %+v", got)
 	}
-	rep := BuildReport(got)
-	if rep.CampaignID != st.CampaignID || rep.RunID != st.RunID {
-		t.Fatalf("unexpected report identity: %+v", rep)
-	}
-	if rep.GatesPassed != 1 || rep.GatesFailed != 1 {
-		t.Fatalf("unexpected gate summary: %+v", rep)
-	}
-	if len(rep.Flows) != 1 || rep.Flows[0].Valid != 1 || rep.Flows[0].Invalid != 1 {
-		t.Fatalf("unexpected flow summary: %+v", rep.Flows)
-	}
-	if rep.Flows[0].InfraFailed != 0 || rep.Flows[0].OracleFailed != 0 || rep.Flows[0].MissionFailed != 1 {
-		t.Fatalf("unexpected flow failure buckets: %+v", rep.Flows[0])
-	}
-	if rep.FailureBuckets.InfraFailed != 0 || rep.FailureBuckets.OracleFailed != 0 || rep.FailureBuckets.MissionFailed != 1 {
-		t.Fatalf("unexpected report failure buckets: %+v", rep.FailureBuckets)
-	}
-	sum := BuildSummary(got)
-	if sum.GatesPassed != 1 || sum.GatesFailed != 1 {
-		t.Fatalf("unexpected summary gates: %+v", sum)
-	}
-	if len(sum.Missions) != 2 {
-		t.Fatalf("expected mission summaries, got %+v", sum.Missions)
-	}
-	if sum.ClaimedMissionsOK != 1 || sum.VerifiedMissionsOK != 1 || sum.MismatchCount != 0 {
-		t.Fatalf("unexpected summary claimed/verified counts: %+v", sum)
-	}
-	if sum.FailureBuckets.InfraFailed != 0 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 1 {
-		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
-	}
-	if sum.EvidencePaths.RunStatePath == "" || sum.EvidencePaths.ResultsMDPath == "" {
-		t.Fatalf("expected evidence paths in summary, got %+v", sum.EvidencePaths)
-	}
+	assertRunReport(t, st, BuildReport(got))
+	assertRunSummary(t, BuildSummary(got))
 }
 
 func TestPlanAndProgress_SaveLoad(t *testing.T) {
@@ -156,5 +98,74 @@ func TestPlanAndProgress_SaveLoad(t *testing.T) {
 	_, err = os.Stat(LockPath(".zcl", "cmp-1"))
 	if err == nil {
 		t.Fatalf("lock path should be just a path helper, not pre-created")
+	}
+}
+
+func sampleRunState() RunStateV1 {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	return RunStateV1{
+		SchemaVersion:     1,
+		CampaignID:        "cmp-1",
+		RunID:             "20260222-101010Z-abc123",
+		SpecPath:          "/tmp/campaign.yaml",
+		OutRoot:           ".zcl",
+		Status:            RunStatusInvalid,
+		ReasonCodes:       []string{"ZCL_E_CAMPAIGN_GATE_FAILED"},
+		StartedAt:         now,
+		UpdatedAt:         now,
+		TotalMissions:     2,
+		MissionOffset:     0,
+		MissionsCompleted: 2,
+		FlowRuns: []FlowRunV1{{
+			FlowID:     "flow-a",
+			RunnerType: RunnerTypeProcessCmd,
+			OK:         false,
+			Attempts: []AttemptStatusV1{
+				{MissionIndex: 0, MissionID: "m1", Status: AttemptStatusValid},
+				{MissionIndex: 1, MissionID: "m2", Status: AttemptStatusInvalid},
+			},
+		}},
+		MissionGates: []MissionGateV1{
+			{MissionIndex: 0, MissionID: "m1", OK: true},
+			{MissionIndex: 1, MissionID: "m2", OK: false},
+		},
+	}
+}
+
+func assertRunReport(t *testing.T, st RunStateV1, rep ReportV1) {
+	t.Helper()
+	if rep.CampaignID != st.CampaignID || rep.RunID != st.RunID {
+		t.Fatalf("unexpected report identity: %+v", rep)
+	}
+	if rep.GatesPassed != 1 || rep.GatesFailed != 1 {
+		t.Fatalf("unexpected gate summary: %+v", rep)
+	}
+	if len(rep.Flows) != 1 || rep.Flows[0].Valid != 1 || rep.Flows[0].Invalid != 1 {
+		t.Fatalf("unexpected flow summary: %+v", rep.Flows)
+	}
+	if rep.Flows[0].InfraFailed != 0 || rep.Flows[0].OracleFailed != 0 || rep.Flows[0].MissionFailed != 1 {
+		t.Fatalf("unexpected flow failure buckets: %+v", rep.Flows[0])
+	}
+	if rep.FailureBuckets.InfraFailed != 0 || rep.FailureBuckets.OracleFailed != 0 || rep.FailureBuckets.MissionFailed != 1 {
+		t.Fatalf("unexpected report failure buckets: %+v", rep.FailureBuckets)
+	}
+}
+
+func assertRunSummary(t *testing.T, sum SummaryV1) {
+	t.Helper()
+	if sum.GatesPassed != 1 || sum.GatesFailed != 1 {
+		t.Fatalf("unexpected summary gates: %+v", sum)
+	}
+	if len(sum.Missions) != 2 {
+		t.Fatalf("expected mission summaries, got %+v", sum.Missions)
+	}
+	if sum.ClaimedMissionsOK != 1 || sum.VerifiedMissionsOK != 1 || sum.MismatchCount != 0 {
+		t.Fatalf("unexpected summary claimed/verified counts: %+v", sum)
+	}
+	if sum.FailureBuckets.InfraFailed != 0 || sum.FailureBuckets.OracleFailed != 0 || sum.FailureBuckets.MissionFailed != 1 {
+		t.Fatalf("unexpected summary failure buckets: %+v", sum.FailureBuckets)
+	}
+	if sum.EvidencePaths.RunStatePath == "" || sum.EvidencePaths.ResultsMDPath == "" {
+		t.Fatalf("expected evidence paths in summary, got %+v", sum.EvidencePaths)
 	}
 }

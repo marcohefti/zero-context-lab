@@ -169,9 +169,110 @@ func (r Runner) runSuiteRun(args []string) int {
 }
 
 func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]string) int {
+	return r.runSuiteRunWithEnvImpl(args, extraAttemptEnv)
+}
+
+func (r Runner) runSuiteRunWithEnvImpl(args []string, extraAttemptEnv map[string]string) int {
+	return r.runSuiteRunWithEnvCore(args, extraAttemptEnv)
+}
+
+func (r Runner) runSuiteRunWithEnvCore(args []string, extraAttemptEnv map[string]string) int {
+	input, ok := r.parseSuiteRunCLIInput(args)
+	if !ok {
+		return r.failUsage("suite run: invalid flags")
+	}
+	if done, code := r.handleSuiteRunCLIImmediate(input); done {
+		return code
+	}
+	host, ok, code := r.resolveSuiteRunHostConfig(input, extraAttemptEnv)
+	if !ok {
+		return code
+	}
+	exec, ok, code := r.resolveSuiteRunExecutionPlan(input, host, extraAttemptEnv)
+	if !ok {
+		return code
+	}
+	return r.runSuiteRunExecution(exec)
+}
+
+type suiteRunCLIInput struct {
+	file                       string
+	runID                      string
+	mode                       string
+	timeoutMs                  int64
+	timeoutStart               string
+	feedbackPolicy             string
+	finalizationMode           string
+	resultChannel              string
+	resultFile                 string
+	resultMarker               string
+	resultMinTurn              int
+	blindOverride              string
+	blindTermsCSV              string
+	sessionIsolation           string
+	runtimeStrategiesCSV       string
+	nativeModel                string
+	nativeModelReasoningEffort string
+	nativeModelReasoningPolicy string
+	parallel                   int
+	total                      int
+	missionOffset              int
+	campaignID                 string
+	campaignStatePath          string
+	progressJSONL              string
+	outRoot                    string
+	failFast                   bool
+	strict                     bool
+	strictExpect               bool
+	captureRunnerIO            bool
+	runnerIOMaxBytes           int64
+	runnerIORaw                bool
+	shims                      []string
+	jsonOut                    bool
+	help                       bool
+	argv                       []string
+}
+
+type suiteRunHostConfig struct {
+	merged                        config.Merged
+	hostNativeCapable             bool
+	requestedIsolation            string
+	effectiveIsolation            string
+	nativeMode                    bool
+	runtimeStrategyChain          []string
+	nativeRuntimeSelection        native.ResolveResult
+	resolvedNativeModel           string
+	resolvedNativeReasoningEffort string
+	resolvedNativeReasoningPolicy string
+	runnerCwdPolicy               suiteRunRunnerCwdPolicy
+}
+
+type suiteRunSuiteSettings struct {
+	mode             string
+	feedbackPolicy   string
+	finalizationMode string
+	resultChannel    suiteRunResultChannel
+	timeoutMs        int64
+	timeoutStart     string
+	blind            bool
+	blindTerms       []string
+	total            int
+	missions         []suite.MissionV1
+}
+
+type suiteRunExecutionPlan struct {
+	input        suiteRunCLIInput
+	host         suiteRunHostConfig
+	parsed       suite.ParsedSuite
+	settings     suiteRunSuiteSettings
+	summary      suiteRunSummary
+	execOpts     suiteRunExecOpts
+	initialRunID string
+}
+
+func (r Runner) parseSuiteRunCLIInput(args []string) (suiteRunCLIInput, bool) {
 	fs := flag.NewFlagSet("suite run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-
 	file := fs.String("file", "", "suite file path (.json|.yaml|.yml) (required)")
 	runID := fs.String("run-id", "", "existing run id (optional)")
 	mode := fs.String("mode", "", "optional mode override: discovery|ci (default from suite file)")
@@ -203,310 +304,502 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	captureRunnerIO := fs.Bool("capture-runner-io", true, "capture runner stdout/stderr to runner.* logs under the attempt dir")
 	runnerIOMaxBytes := fs.Int64("runner-io-max-bytes", schema.CaptureMaxBytesV1, "max bytes to keep per runner stream when using --capture-runner-io (tail)")
 	runnerIORaw := fs.Bool("runner-io-raw", false, "capture raw runner stdout/stderr (unsafe; may contain secrets)")
-
 	var shims stringListFlag
 	fs.Var(&shims, "shim", "install attempt-local shims for tool binaries (repeatable; e.g. --shim tool-cli)")
-
 	jsonOut := fs.Bool("json", false, "print JSON output (required)")
 	help := fs.Bool("help", false, "show help")
-
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("suite run: invalid flags")
+		return suiteRunCLIInput{}, false
 	}
-	if *help {
-		printSuiteRunHelp(r.Stdout)
-		return 0
-	}
-	if !*jsonOut {
-		printSuiteRunHelp(r.Stderr)
-		return r.failUsage("suite run: require --json for stable output")
-	}
-	if *parallel <= 0 {
-		return r.failUsage("suite run: --parallel must be > 0")
-	}
-	if *total < 0 {
-		return r.failUsage("suite run: --total must be >= 0")
-	}
-	if *missionOffset < 0 {
-		return r.failUsage("suite run: --mission-offset must be >= 0")
-	}
-	if *resultMinTurn < 1 {
-		return r.failUsage("suite run: --result-min-turn must be >= 1")
-	}
-	if !schema.IsValidTimeoutStartV1(strings.TrimSpace(*timeoutStart)) {
-		return r.failUsage("suite run: invalid --timeout-start (expected attempt_start|first_tool_call)")
-	}
-
 	argv := fs.Args()
-	if len(argv) >= 1 && argv[0] == "--" {
+	if len(argv) > 0 && argv[0] == "--" {
 		argv = argv[1:]
 	}
+	return suiteRunCLIInput{
+		file:                       *file,
+		runID:                      *runID,
+		mode:                       *mode,
+		timeoutMs:                  *timeoutMs,
+		timeoutStart:               *timeoutStart,
+		feedbackPolicy:             *feedbackPolicy,
+		finalizationMode:           *finalizationMode,
+		resultChannel:              *resultChannel,
+		resultFile:                 *resultFile,
+		resultMarker:               *resultMarker,
+		resultMinTurn:              *resultMinTurn,
+		blindOverride:              *blindOverride,
+		blindTermsCSV:              *blindTermsCSV,
+		sessionIsolation:           *sessionIsolation,
+		runtimeStrategiesCSV:       *runtimeStrategiesCSV,
+		nativeModel:                *nativeModel,
+		nativeModelReasoningEffort: *nativeModelReasoningEffort,
+		nativeModelReasoningPolicy: *nativeModelReasoningPolicy,
+		parallel:                   *parallel,
+		total:                      *total,
+		missionOffset:              *missionOffset,
+		campaignID:                 *campaignID,
+		campaignStatePath:          *campaignStatePath,
+		progressJSONL:              *progressJSONL,
+		outRoot:                    *outRoot,
+		failFast:                   *failFast,
+		strict:                     *strict,
+		strictExpect:               *strictExpect,
+		captureRunnerIO:            *captureRunnerIO,
+		runnerIOMaxBytes:           *runnerIOMaxBytes,
+		runnerIORaw:                *runnerIORaw,
+		shims:                      []string(shims),
+		jsonOut:                    *jsonOut,
+		help:                       *help,
+		argv:                       argv,
+	}, true
+}
 
-	m, err := config.LoadMerged(*outRoot)
+func (r Runner) handleSuiteRunCLIImmediate(input suiteRunCLIInput) (bool, int) {
+	if input.help {
+		printSuiteRunHelp(r.Stdout)
+		return true, 0
+	}
+	if !input.jsonOut {
+		printSuiteRunHelp(r.Stderr)
+		return true, r.failUsage("suite run: require --json for stable output")
+	}
+	if msg := validateSuiteRunCLIInput(input); msg != "" {
+		return true, r.failUsage(msg)
+	}
+	return false, 0
+}
+
+func validateSuiteRunCLIInput(input suiteRunCLIInput) string {
+	if input.parallel <= 0 {
+		return "suite run: --parallel must be > 0"
+	}
+	if input.total < 0 {
+		return "suite run: --total must be >= 0"
+	}
+	if input.missionOffset < 0 {
+		return "suite run: --mission-offset must be >= 0"
+	}
+	if input.resultMinTurn < 1 {
+		return "suite run: --result-min-turn must be >= 1"
+	}
+	if !schema.IsValidTimeoutStartV1(strings.TrimSpace(input.timeoutStart)) {
+		return "suite run: invalid --timeout-start (expected attempt_start|first_tool_call)"
+	}
+	return ""
+}
+
+func (r Runner) resolveSuiteRunHostConfig(input suiteRunCLIInput, extraAttemptEnv map[string]string) (suiteRunHostConfig, bool, int) {
+	merged, err := config.LoadMerged(input.outRoot)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
+		return suiteRunHostConfig{}, false, 1
 	}
-
 	hostNativeCapable := envBoolish("ZCL_HOST_NATIVE_SPAWN")
-	requestedIsolation := strings.ToLower(strings.TrimSpace(*sessionIsolation))
-	if requestedIsolation == "" {
-		requestedIsolation = "auto"
+	requestedIsolation, effectiveIsolation, nativeMode, ok := resolveSuiteRunIsolation(input.sessionIsolation, hostNativeCapable)
+	if !ok {
+		return suiteRunHostConfig{}, false, r.failUsage("suite run: invalid --session-isolation (expected auto|process|native)")
 	}
-	effectiveIsolation := schema.IsolationModelProcessRunnerV1
-	nativeMode := false
-	switch requestedIsolation {
-	case "auto":
-		if hostNativeCapable {
-			nativeMode = true
-			effectiveIsolation = schema.IsolationModelNativeSpawnV1
-		}
-	case "process":
-		effectiveIsolation = schema.IsolationModelProcessRunnerV1
-	case "native":
-		nativeMode = true
-		effectiveIsolation = schema.IsolationModelNativeSpawnV1
-	default:
-		return r.failUsage("suite run: invalid --session-isolation (expected auto|process|native)")
+	if nativeMode && len(input.argv) > 0 {
+		return suiteRunHostConfig{}, false, r.failUsage("suite run: native runtime mode does not accept -- <runner-cmd> arguments")
 	}
-	if nativeMode && len(argv) > 0 {
-		return r.failUsage("suite run: native runtime mode does not accept -- <runner-cmd> arguments")
-	}
-	if !nativeMode && len(argv) == 0 {
+	if !nativeMode && len(input.argv) == 0 {
 		printSuiteRunHelp(r.Stderr)
-		return r.failUsage("suite run: missing runner command (use: zcl suite run ... -- <runner-cmd> ...)")
+		return suiteRunHostConfig{}, false, r.failUsage("suite run: missing runner command (use: zcl suite run ... -- <runner-cmd> ...)")
 	}
-	resolvedNativeModel := strings.TrimSpace(*nativeModel)
-	resolvedNativeReasoningEffort := strings.ToLower(strings.TrimSpace(*nativeModelReasoningEffort))
-	resolvedNativeReasoningPolicy := strings.ToLower(strings.TrimSpace(*nativeModelReasoningPolicy))
-	if resolvedNativeReasoningEffort == "" && resolvedNativeReasoningPolicy != "" {
-		return r.failUsage("suite run: --native-model-reasoning-policy requires --native-model-reasoning-effort")
-	}
-	if resolvedNativeReasoningEffort != "" {
-		switch resolvedNativeReasoningEffort {
-		case campaign.ModelReasoningEffortNone, campaign.ModelReasoningEffortMinimal, campaign.ModelReasoningEffortLow, campaign.ModelReasoningEffortMedium, campaign.ModelReasoningEffortHigh, campaign.ModelReasoningEffortXHigh:
-		default:
-			return r.failUsage("suite run: invalid --native-model-reasoning-effort (expected none|minimal|low|medium|high|xhigh)")
-		}
-		if resolvedNativeReasoningPolicy == "" {
-			resolvedNativeReasoningPolicy = campaign.ModelReasoningPolicyBestEffort
-		}
-	}
-	if resolvedNativeReasoningPolicy != "" {
-		switch resolvedNativeReasoningPolicy {
-		case campaign.ModelReasoningPolicyBestEffort, campaign.ModelReasoningPolicyRequired:
-		default:
-			return r.failUsage("suite run: invalid --native-model-reasoning-policy (expected best_effort|required)")
-		}
-	}
-	if !nativeMode && (resolvedNativeModel != "" || resolvedNativeReasoningEffort != "" || resolvedNativeReasoningPolicy != "") {
-		return r.failUsage("suite run: native model flags require --session-isolation native")
+	model, effort, policy, ok, msg := resolveSuiteRunNativeModelConfig(input, nativeMode)
+	if !ok {
+		return suiteRunHostConfig{}, false, r.failUsage(msg)
 	}
 	runnerCwdPolicy, err := resolveSuiteRunRunnerCwdPolicy(extraAttemptEnv)
 	if err != nil {
-		return r.failUsage("suite run: " + err.Error())
+		return suiteRunHostConfig{}, false, r.failUsage("suite run: " + err.Error())
 	}
 	if runnerCwdPolicy.Mode != campaign.RunnerCwdModeInherit && !nativeMode {
-		return r.failUsage("suite run: runner cwd policy requires --session-isolation native")
+		return suiteRunHostConfig{}, false, r.failUsage("suite run: runner cwd policy requires --session-isolation native")
 	}
-
-	runtimeStrategyChain := config.ParseRuntimeStrategyCSV(*runtimeStrategiesCSV)
+	runtimeStrategyChain := config.ParseRuntimeStrategyCSV(input.runtimeStrategiesCSV)
 	if len(runtimeStrategyChain) == 0 {
-		runtimeStrategyChain = append([]string(nil), m.RuntimeStrategyChain...)
+		runtimeStrategyChain = append([]string(nil), merged.RuntimeStrategyChain...)
 	}
-	var nativeRuntimeSelection native.ResolveResult
-	if nativeMode {
-		registry := buildNativeRuntimeRegistry()
-		selection, selErr := native.Resolve(context.Background(), registry, native.ResolveInput{
-			StrategyChain: native.NormalizeStrategyChain(runtimeStrategyChain),
-			RequiredCapabilities: []native.Capability{
-				native.CapabilityThreadStart,
-				native.CapabilityEventStream,
-				native.CapabilityInterrupt,
-			},
-		})
-		if selErr != nil {
-			if nerr, ok := native.AsError(selErr); ok {
-				fmt.Fprintf(r.Stderr, "%s: suite run native runtime selection failed: %s\n", nerr.Code, nerr.Message)
-				for _, f := range nerr.Failures {
-					fmt.Fprintf(r.Stderr, "  %s %s: %s\n", f.Code, f.Strategy, f.Message)
-				}
-				return 2
-			}
-			fmt.Fprintf(r.Stderr, codeIO+": suite run native runtime selection failed: %s\n", selErr.Error())
-			return 1
-		}
-		nativeRuntimeSelection = selection
+	nativeRuntimeSelection, ok, code := r.resolveSuiteRunNativeSelection(nativeMode, runtimeStrategyChain)
+	if !ok {
+		return suiteRunHostConfig{}, false, code
 	}
+	return suiteRunHostConfig{
+		merged:                        merged,
+		hostNativeCapable:             hostNativeCapable,
+		requestedIsolation:            requestedIsolation,
+		effectiveIsolation:            effectiveIsolation,
+		nativeMode:                    nativeMode,
+		runtimeStrategyChain:          runtimeStrategyChain,
+		nativeRuntimeSelection:        nativeRuntimeSelection,
+		resolvedNativeModel:           model,
+		resolvedNativeReasoningEffort: effort,
+		resolvedNativeReasoningPolicy: policy,
+		runnerCwdPolicy:               runnerCwdPolicy,
+	}, true, 0
+}
 
-	parsed, err := suite.ParseFile(strings.TrimSpace(*file))
+func resolveSuiteRunIsolation(raw string, hostNativeCapable bool) (string, string, bool, bool) {
+	requested := strings.ToLower(strings.TrimSpace(raw))
+	if requested == "" {
+		requested = "auto"
+	}
+	switch requested {
+	case "auto":
+		if hostNativeCapable {
+			return requested, schema.IsolationModelNativeSpawnV1, true, true
+		}
+		return requested, schema.IsolationModelProcessRunnerV1, false, true
+	case "process":
+		return requested, schema.IsolationModelProcessRunnerV1, false, true
+	case "native":
+		return requested, schema.IsolationModelNativeSpawnV1, true, true
+	default:
+		return requested, "", false, false
+	}
+}
+
+func resolveSuiteRunNativeModelConfig(input suiteRunCLIInput, nativeMode bool) (string, string, string, bool, string) {
+	model := strings.TrimSpace(input.nativeModel)
+	effort := strings.ToLower(strings.TrimSpace(input.nativeModelReasoningEffort))
+	policy := strings.ToLower(strings.TrimSpace(input.nativeModelReasoningPolicy))
+	if effort == "" && policy != "" {
+		return "", "", "", false, "suite run: --native-model-reasoning-policy requires --native-model-reasoning-effort"
+	}
+	if effort != "" {
+		switch effort {
+		case campaign.ModelReasoningEffortNone, campaign.ModelReasoningEffortMinimal, campaign.ModelReasoningEffortLow, campaign.ModelReasoningEffortMedium, campaign.ModelReasoningEffortHigh, campaign.ModelReasoningEffortXHigh:
+		default:
+			return "", "", "", false, "suite run: invalid --native-model-reasoning-effort (expected none|minimal|low|medium|high|xhigh)"
+		}
+		if policy == "" {
+			policy = campaign.ModelReasoningPolicyBestEffort
+		}
+	}
+	if policy != "" {
+		switch policy {
+		case campaign.ModelReasoningPolicyBestEffort, campaign.ModelReasoningPolicyRequired:
+		default:
+			return "", "", "", false, "suite run: invalid --native-model-reasoning-policy (expected best_effort|required)"
+		}
+	}
+	if !nativeMode && (model != "" || effort != "" || policy != "") {
+		return "", "", "", false, "suite run: native model flags require --session-isolation native"
+	}
+	return model, effort, policy, true, ""
+}
+
+func (r Runner) resolveSuiteRunNativeSelection(nativeMode bool, runtimeStrategyChain []string) (native.ResolveResult, bool, int) {
+	if !nativeMode {
+		return native.ResolveResult{}, true, 0
+	}
+	registry := buildNativeRuntimeRegistry()
+	selection, selErr := native.Resolve(context.Background(), registry, native.ResolveInput{
+		StrategyChain: native.NormalizeStrategyChain(runtimeStrategyChain),
+		RequiredCapabilities: []native.Capability{
+			native.CapabilityThreadStart,
+			native.CapabilityEventStream,
+			native.CapabilityInterrupt,
+		},
+	})
+	if selErr == nil {
+		return selection, true, 0
+	}
+	if nerr, ok := native.AsError(selErr); ok {
+		fmt.Fprintf(r.Stderr, "%s: suite run native runtime selection failed: %s\n", nerr.Code, nerr.Message)
+		for _, f := range nerr.Failures {
+			fmt.Fprintf(r.Stderr, "  %s %s: %s\n", f.Code, f.Strategy, f.Message)
+		}
+		return native.ResolveResult{}, false, 2
+	}
+	fmt.Fprintf(r.Stderr, codeIO+": suite run native runtime selection failed: %s\n", selErr.Error())
+	return native.ResolveResult{}, false, 1
+}
+
+func (r Runner) resolveSuiteRunExecutionPlan(input suiteRunCLIInput, host suiteRunHostConfig, extraAttemptEnv map[string]string) (suiteRunExecutionPlan, bool, int) {
+	parsed, err := suite.ParseFile(strings.TrimSpace(input.file))
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeUsage+": %s\n", err.Error())
-		return 2
+		return suiteRunExecutionPlan{}, false, 2
 	}
+	settings, ok, code := r.resolveSuiteRunSuiteSettings(input, parsed)
+	if !ok {
+		return suiteRunExecutionPlan{}, false, code
+	}
+	summary, ok, code := r.buildSuiteRunSummary(input, host, parsed, settings)
+	if !ok {
+		return suiteRunExecutionPlan{}, false, code
+	}
+	runnerCmd, runnerArgs := splitSuiteRunRunnerCommand(input.argv)
+	execOpts := suiteRunExecOpts{
+		RunnerCmd:        runnerCmd,
+		RunnerArgs:       runnerArgs,
+		NativeMode:       host.nativeMode,
+		NativeSelection:  host.nativeRuntimeSelection,
+		NativeScheduler:  buildNativeAttemptScheduler(host.nativeRuntimeSelection.Selected, input.parallel),
+		NativeModel:      host.resolvedNativeModel,
+		ReasoningEffort:  host.resolvedNativeReasoningEffort,
+		ReasoningPolicy:  host.resolvedNativeReasoningPolicy,
+		FeedbackPolicy:   settings.feedbackPolicy,
+		FinalizationMode: settings.finalizationMode,
+		ResultChannel:    settings.resultChannel,
+		Strict:           input.strict,
+		StrictExpect:     input.strictExpect,
+		CaptureRunnerIO:  input.captureRunnerIO,
+		RunnerIOMaxBytes: input.runnerIOMaxBytes,
+		RunnerIORaw:      input.runnerIORaw,
+		Shims:            append([]string(nil), input.shims...),
+		ZCLExe:           resolveSuiteRunZCLExecutable(),
+		Blind:            settings.blind,
+		BlindTerms:       append([]string(nil), settings.blindTerms...),
+		IsolationModel:   host.effectiveIsolation,
+		ExtraEnv:         copyStringMap(extraAttemptEnv),
+		RunnerCwdPolicy:  host.runnerCwdPolicy,
+	}
+	return suiteRunExecutionPlan{
+		input:        input,
+		host:         host,
+		parsed:       parsed,
+		settings:     settings,
+		summary:      summary,
+		execOpts:     execOpts,
+		initialRunID: strings.TrimSpace(input.runID),
+	}, true, 0
+}
 
-	resolvedMode := strings.TrimSpace(*mode)
-	if resolvedMode == "" {
-		resolvedMode = parsed.Suite.Defaults.Mode
+func (r Runner) resolveSuiteRunSuiteSettings(input suiteRunCLIInput, parsed suite.ParsedSuite) (suiteRunSuiteSettings, bool, int) {
+	mode := strings.TrimSpace(input.mode)
+	if mode == "" {
+		mode = parsed.Suite.Defaults.Mode
 	}
-	if resolvedMode == "" {
-		resolvedMode = "discovery"
+	if mode == "" {
+		mode = "discovery"
 	}
-	if resolvedMode != "discovery" && resolvedMode != "ci" {
-		return r.failUsage("suite run: invalid --mode (expected discovery|ci)")
+	if mode != "discovery" && mode != "ci" {
+		return suiteRunSuiteSettings{}, false, r.failUsage("suite run: invalid --mode (expected discovery|ci)")
 	}
-	resolvedFeedbackPolicy := schema.NormalizeFeedbackPolicyV1(parsed.Suite.Defaults.FeedbackPolicy)
-	if strings.TrimSpace(*feedbackPolicy) != "" {
-		resolvedFeedbackPolicy = schema.NormalizeFeedbackPolicyV1(*feedbackPolicy)
+	feedbackPolicy := schema.NormalizeFeedbackPolicyV1(parsed.Suite.Defaults.FeedbackPolicy)
+	if strings.TrimSpace(input.feedbackPolicy) != "" {
+		feedbackPolicy = schema.NormalizeFeedbackPolicyV1(input.feedbackPolicy)
 	}
-	if !schema.IsValidFeedbackPolicyV1(resolvedFeedbackPolicy) {
-		return r.failUsage("suite run: invalid --feedback-policy (expected strict|auto_fail)")
+	if !schema.IsValidFeedbackPolicyV1(feedbackPolicy) {
+		return suiteRunSuiteSettings{}, false, r.failUsage("suite run: invalid --feedback-policy (expected strict|auto_fail)")
 	}
-	resolvedFinalizationMode := normalizeSuiteRunFinalizationMode(*finalizationMode, resolvedFeedbackPolicy)
-	if !isValidSuiteRunFinalizationMode(resolvedFinalizationMode) {
-		return r.failUsage("suite run: invalid --finalization-mode (expected strict|auto_fail|auto_from_result_json)")
+	finalizationMode := normalizeSuiteRunFinalizationMode(input.finalizationMode, feedbackPolicy)
+	if !isValidSuiteRunFinalizationMode(finalizationMode) {
+		return suiteRunSuiteSettings{}, false, r.failUsage("suite run: invalid --finalization-mode (expected strict|auto_fail|auto_from_result_json)")
 	}
-	resolvedResultChannel := suiteRunResultChannel{
-		Kind:         normalizeSuiteRunResultChannelKind(*resultChannel),
-		Path:         strings.TrimSpace(*resultFile),
-		Marker:       strings.TrimSpace(*resultMarker),
-		MinFinalTurn: *resultMinTurn,
+	resultChannel, ok, code := r.resolveSuiteRunResultChannel(input, finalizationMode)
+	if !ok {
+		return suiteRunSuiteSettings{}, false, code
 	}
-	if resolvedResultChannel.Kind == "" {
-		if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON {
-			resolvedResultChannel.Kind = campaign.ResultChannelFileJSON
-		} else {
-			resolvedResultChannel.Kind = campaign.ResultChannelNone
-		}
+	timeoutMs := input.timeoutMs
+	if timeoutMs == 0 {
+		timeoutMs = parsed.Suite.Defaults.TimeoutMs
 	}
-	if !isValidSuiteRunResultChannelKind(resolvedResultChannel.Kind) {
-		return r.failUsage("suite run: invalid --result-channel (expected none|file_json|stdout_json)")
+	timeoutStart := strings.TrimSpace(input.timeoutStart)
+	if timeoutStart == "" {
+		timeoutStart = strings.TrimSpace(parsed.Suite.Defaults.TimeoutStart)
 	}
-	switch resolvedResultChannel.Kind {
+	if !schema.IsValidTimeoutStartV1(timeoutStart) {
+		return suiteRunSuiteSettings{}, false, r.failUsage("suite run: invalid timeoutStart in suite defaults")
+	}
+	blind, blindTerms, ok, code := r.resolveSuiteRunBlindSettings(input, parsed)
+	if !ok {
+		return suiteRunSuiteSettings{}, false, code
+	}
+	total := input.total
+	if total == 0 {
+		total = len(parsed.Suite.Missions)
+	}
+	if total <= 0 {
+		return suiteRunSuiteSettings{}, false, r.failUsage("suite run: no missions to run")
+	}
+	return suiteRunSuiteSettings{
+		mode:             mode,
+		feedbackPolicy:   feedbackPolicy,
+		finalizationMode: finalizationMode,
+		resultChannel:    resultChannel,
+		timeoutMs:        timeoutMs,
+		timeoutStart:     timeoutStart,
+		blind:            blind,
+		blindTerms:       blindTerms,
+		total:            total,
+		missions:         selectSuiteRunMissions(parsed.Suite.Missions, total, input.missionOffset),
+	}, true, 0
+}
+
+func (r Runner) resolveSuiteRunResultChannel(input suiteRunCLIInput, finalizationMode string) (suiteRunResultChannel, bool, int) {
+	resultChannel := suiteRunResultChannel{
+		Kind:         normalizeSuiteRunResultChannelKind(input.resultChannel),
+		Path:         strings.TrimSpace(input.resultFile),
+		Marker:       strings.TrimSpace(input.resultMarker),
+		MinFinalTurn: input.resultMinTurn,
+	}
+	resultChannel.Kind = defaultSuiteRunResultChannelKind(resultChannel.Kind, finalizationMode)
+	if !isValidSuiteRunResultChannelKind(resultChannel.Kind) {
+		return suiteRunResultChannel{}, false, r.failUsage("suite run: invalid --result-channel (expected none|file_json|stdout_json)")
+	}
+	normalized, err := normalizeSuiteRunResultChannel(resultChannel)
+	if err != nil {
+		return suiteRunResultChannel{}, false, r.failUsage(err.Error())
+	}
+	resultChannel = normalized
+	if finalizationMode == campaign.FinalizationModeAutoFromResultJSON && resultChannel.Kind == campaign.ResultChannelNone {
+		return suiteRunResultChannel{}, false, r.failUsage("suite run: --finalization-mode auto_from_result_json requires --result-channel file_json|stdout_json")
+	}
+	resultChannel.MinFinalTurn = normalizeSuiteRunResultMinTurn(resultChannel.MinFinalTurn, finalizationMode)
+	return resultChannel, true, 0
+}
+
+func defaultSuiteRunResultChannelKind(kind string, finalizationMode string) string {
+	if strings.TrimSpace(kind) != "" {
+		return kind
+	}
+	if finalizationMode == campaign.FinalizationModeAutoFromResultJSON {
+		return campaign.ResultChannelFileJSON
+	}
+	return campaign.ResultChannelNone
+}
+
+func normalizeSuiteRunResultChannel(ch suiteRunResultChannel) (suiteRunResultChannel, error) {
+	switch ch.Kind {
 	case campaign.ResultChannelFileJSON:
-		if resolvedResultChannel.Path == "" {
-			resolvedResultChannel.Path = campaign.DefaultResultChannelPath
+		if ch.Path == "" {
+			ch.Path = campaign.DefaultResultChannelPath
 		}
-		if filepath.IsAbs(resolvedResultChannel.Path) {
-			return r.failUsage("suite run: --result-file must be attempt-relative")
+		if filepath.IsAbs(ch.Path) {
+			return suiteRunResultChannel{}, fmt.Errorf("suite run: --result-file must be attempt-relative")
 		}
-		resolvedResultChannel.Marker = ""
+		ch.Marker = ""
 	case campaign.ResultChannelStdoutJSON:
-		if resolvedResultChannel.Marker == "" {
-			resolvedResultChannel.Marker = campaign.DefaultResultChannelMarker
+		if ch.Marker == "" {
+			ch.Marker = campaign.DefaultResultChannelMarker
 		}
-		resolvedResultChannel.Path = ""
+		ch.Path = ""
 	default:
-		resolvedResultChannel.Path = ""
-		resolvedResultChannel.Marker = ""
+		ch.Path = ""
+		ch.Marker = ""
 	}
-	if resolvedFinalizationMode == campaign.FinalizationModeAutoFromResultJSON && resolvedResultChannel.Kind == campaign.ResultChannelNone {
-		return r.failUsage("suite run: --finalization-mode auto_from_result_json requires --result-channel file_json|stdout_json")
-	}
-	if resolvedResultChannel.MinFinalTurn <= 0 {
-		resolvedResultChannel.MinFinalTurn = campaign.DefaultMinResultTurn
-	}
-	if resolvedFinalizationMode != campaign.FinalizationModeAutoFromResultJSON {
-		resolvedResultChannel.MinFinalTurn = campaign.DefaultMinResultTurn
-	}
+	return ch, nil
+}
 
-	resolvedTimeoutMs := *timeoutMs
-	if resolvedTimeoutMs == 0 {
-		resolvedTimeoutMs = parsed.Suite.Defaults.TimeoutMs
+func normalizeSuiteRunResultMinTurn(minTurn int, finalizationMode string) int {
+	if minTurn <= 0 || finalizationMode != campaign.FinalizationModeAutoFromResultJSON {
+		return campaign.DefaultMinResultTurn
 	}
-	resolvedTimeoutStart := strings.TrimSpace(*timeoutStart)
-	if resolvedTimeoutStart == "" {
-		resolvedTimeoutStart = strings.TrimSpace(parsed.Suite.Defaults.TimeoutStart)
-	}
-	if !schema.IsValidTimeoutStartV1(resolvedTimeoutStart) {
-		return r.failUsage("suite run: invalid timeoutStart in suite defaults")
-	}
+	return minTurn
+}
 
-	resolvedBlind := parsed.Suite.Defaults.Blind
-	switch strings.ToLower(strings.TrimSpace(*blindOverride)) {
+func (r Runner) resolveSuiteRunBlindSettings(input suiteRunCLIInput, parsed suite.ParsedSuite) (bool, []string, bool, int) {
+	blindMode := parsed.Suite.Defaults.Blind
+	switch strings.ToLower(strings.TrimSpace(input.blindOverride)) {
 	case "":
-		// Use suite defaults.
 	case "on", "true", "1", "yes":
-		resolvedBlind = true
+		blindMode = true
 	case "off", "false", "0", "no":
-		resolvedBlind = false
+		blindMode = false
 	default:
-		return r.failUsage("suite run: invalid --blind (expected on|off)")
+		return false, nil, false, r.failUsage("suite run: invalid --blind (expected on|off)")
 	}
-	resolvedBlindTerms := append([]string(nil), parsed.Suite.Defaults.BlindTerms...)
-	if strings.TrimSpace(*blindTermsCSV) != "" {
-		resolvedBlindTerms = blind.ParseTermsCSV(*blindTermsCSV)
+	blindTerms := append([]string(nil), parsed.Suite.Defaults.BlindTerms...)
+	if strings.TrimSpace(input.blindTermsCSV) != "" {
+		blindTerms = blind.ParseTermsCSV(input.blindTermsCSV)
 	}
-	if resolvedBlind && len(resolvedBlindTerms) == 0 {
-		resolvedBlindTerms = blind.DefaultHarnessTermsV1()
+	if blindMode && len(blindTerms) == 0 {
+		blindTerms = blind.DefaultHarnessTermsV1()
 	}
+	return blindMode, blindTerms, true, 0
+}
 
-	resolvedTotal := *total
-	if resolvedTotal == 0 {
-		resolvedTotal = len(parsed.Suite.Missions)
+func selectSuiteRunMissions(all []suite.MissionV1, total int, missionOffset int) []suite.MissionV1 {
+	missions := make([]suite.MissionV1, 0, total)
+	for i := 0; i < total; i++ {
+		idx := (missionOffset + i) % len(all)
+		missions = append(missions, all[idx])
 	}
-	if resolvedTotal <= 0 {
-		return r.failUsage("suite run: no missions to run")
-	}
+	return missions
+}
 
-	missions := make([]suite.MissionV1, 0, resolvedTotal)
-	for i := 0; i < resolvedTotal; i++ {
-		idx := (*missionOffset + i) % len(parsed.Suite.Missions)
-		missions = append(missions, parsed.Suite.Missions[idx])
-	}
-
+func (r Runner) buildSuiteRunSummary(input suiteRunCLIInput, host suiteRunHostConfig, parsed suite.ParsedSuite, settings suiteRunSuiteSettings) (suiteRunSummary, bool, int) {
 	summary := suiteRunSummary{
 		SchemaVersion:             1,
 		OK:                        true,
-		RunID:                     strings.TrimSpace(*runID),
+		RunID:                     strings.TrimSpace(input.runID),
 		SuiteID:                   parsed.Suite.SuiteID,
-		Mode:                      resolvedMode,
-		OutRoot:                   m.OutRoot,
-		SessionIsolationRequested: requestedIsolation,
-		SessionIsolation:          effectiveIsolation,
-		HostNativeSpawnCapable:    hostNativeCapable,
-		RuntimeStrategyChain:      append([]string(nil), runtimeStrategyChain...),
-		FeedbackPolicy:            resolvedFeedbackPolicy,
+		Mode:                      settings.mode,
+		OutRoot:                   host.merged.OutRoot,
+		SessionIsolationRequested: host.requestedIsolation,
+		SessionIsolation:          host.effectiveIsolation,
+		HostNativeSpawnCapable:    host.hostNativeCapable,
+		RuntimeStrategyChain:      append([]string(nil), host.runtimeStrategyChain...),
+		FeedbackPolicy:            settings.feedbackPolicy,
 		CreatedAt:                 r.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if nativeMode {
-		summary.RuntimeStrategySelected = string(nativeRuntimeSelection.Selected)
+	if host.nativeMode {
+		summary.RuntimeStrategySelected = string(host.nativeRuntimeSelection.Selected)
 	}
 	summary.CampaignProfile = suiteRunCampaignProfile{
-		Mode:            resolvedMode,
-		TimeoutMs:       resolvedTimeoutMs,
-		TimeoutStart:    resolvedTimeoutStart,
-		IsolationModel:  effectiveIsolation,
-		FeedbackPolicy:  resolvedFeedbackPolicy,
-		Finalization:    resolvedFinalizationMode,
-		ResultChannel:   resolvedResultChannel.Kind,
-		ResultMinTurn:   resolvedResultChannel.MinFinalTurn,
-		RuntimeStrategy: string(nativeRuntimeSelection.Selected),
-		NativeModel:     resolvedNativeModel,
-		ReasoningEffort: resolvedNativeReasoningEffort,
-		ReasoningPolicy: resolvedNativeReasoningPolicy,
-		Parallel:        *parallel,
-		Total:           resolvedTotal,
-		MissionOffset:   *missionOffset,
-		FailFast:        *failFast,
-		Blind:           resolvedBlind,
-		Shims:           dedupeSortedStrings([]string(shims)),
+		Mode:            settings.mode,
+		TimeoutMs:       settings.timeoutMs,
+		TimeoutStart:    settings.timeoutStart,
+		IsolationModel:  host.effectiveIsolation,
+		FeedbackPolicy:  settings.feedbackPolicy,
+		Finalization:    settings.finalizationMode,
+		ResultChannel:   settings.resultChannel.Kind,
+		ResultMinTurn:   settings.resultChannel.MinFinalTurn,
+		RuntimeStrategy: string(host.nativeRuntimeSelection.Selected),
+		NativeModel:     host.resolvedNativeModel,
+		ReasoningEffort: host.resolvedNativeReasoningEffort,
+		ReasoningPolicy: host.resolvedNativeReasoningPolicy,
+		Parallel:        input.parallel,
+		Total:           settings.total,
+		MissionOffset:   input.missionOffset,
+		FailFast:        input.failFast,
+		Blind:           settings.blind,
+		Shims:           dedupeSortedStrings(input.shims),
 	}
 	summary.ComparabilityKey = suiteRunComparabilityKey(summary.CampaignProfile)
-	summary.CampaignID = ids.SanitizeComponent(strings.TrimSpace(*campaignID))
+	summary.CampaignID = ids.SanitizeComponent(strings.TrimSpace(input.campaignID))
 	if summary.CampaignID == "" {
 		summary.CampaignID = parsed.Suite.SuiteID
 	}
 	if summary.CampaignID == "" {
-		return r.failUsage("suite run: invalid --campaign-id (no usable characters)")
+		return suiteRunSummary{}, false, r.failUsage("suite run: invalid --campaign-id (no usable characters)")
 	}
-	if strings.TrimSpace(*campaignStatePath) == "" {
-		summary.CampaignStatePath = campaign.DefaultStatePath(m.OutRoot, summary.CampaignID)
+	if strings.TrimSpace(input.campaignStatePath) == "" {
+		summary.CampaignStatePath = campaign.DefaultStatePath(host.merged.OutRoot, summary.CampaignID)
 	} else {
-		summary.CampaignStatePath = strings.TrimSpace(*campaignStatePath)
+		summary.CampaignStatePath = strings.TrimSpace(input.campaignStatePath)
 	}
+	return summary, true, 0
+}
 
-	progress, err := newSuiteRunProgressEmitter(strings.TrimSpace(*progressJSONL), r.Stderr)
+func splitSuiteRunRunnerCommand(argv []string) (string, []string) {
+	if len(argv) == 0 {
+		return "", nil
+	}
+	if len(argv) == 1 {
+		return argv[0], nil
+	}
+	return argv[0], argv[1:]
+}
+
+func resolveSuiteRunZCLExecutable() string {
+	zclExe, _ := os.Executable()
+	if zclExe == "" {
+		return ""
+	}
+	base := strings.ToLower(filepath.Base(zclExe))
+	if base == "zcl" || base == "zcl.exe" {
+		return zclExe
+	}
+	return ""
+}
+
+func (r Runner) runSuiteRunExecution(plan suiteRunExecutionPlan) int {
+	progress, err := newSuiteRunProgressEmitter(strings.TrimSpace(plan.input.progressJSONL), r.Stderr)
 	if err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
 		return 1
@@ -516,187 +809,197 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 			_ = progress.Close()
 		}
 	}()
+	errWriter := &lockedWriter{mu: &sync.Mutex{}, w: r.Stderr}
+	plan.execOpts.Progress = progress
+	plan.execOpts.StderrWriter = errWriter
+	if err := emitSuiteRunStarted(r, progress, plan.summary); err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
+		return 1
+	}
+	results, currentRunID, harnessErr := r.executeSuiteRunMissions(plan, errWriter)
+	plan.summary = finalizeSuiteRunSummary(plan.summary, results, currentRunID)
+	harnessErr = updateSuiteRunCampaignState(r, &plan.summary, harnessErr)
+	harnessErr = emitSuiteRunFinished(r, progress, &plan.summary, harnessErr)
+	if err := encodeSuiteRunSummary(r.Stdout, plan.summary); err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": failed to encode json\n")
+		return 1
+	}
+	return finalizeSuiteRunExitCode(plan.summary.OK, harnessErr)
+}
 
-	// Keep stdout reserved for JSON; runner output is streamed to stderr.
-	runnerCmd := ""
-	runnerArgs := []string{}
-	if len(argv) > 0 {
-		runnerCmd = argv[0]
-		if len(argv) > 1 {
-			runnerArgs = argv[1:]
-		}
+func emitSuiteRunStarted(r Runner, progress *suiteRunProgressEmitter, summary suiteRunSummary) error {
+	if progress == nil {
+		return nil
 	}
-	zclExe, _ := os.Executable()
-	if zclExe != "" {
-		base := strings.ToLower(filepath.Base(zclExe))
-		if base != "zcl" && base != "zcl.exe" {
-			// suite run is expected to be invoked via the zcl binary; avoid wiring a misleading path.
-			zclExe = ""
-		}
-	}
+	return progress.Emit(suiteRunProgressEvent{
+		TS:         r.Now().UTC().Format(time.RFC3339Nano),
+		Kind:       "run_started",
+		RunID:      summary.RunID,
+		SuiteID:    summary.SuiteID,
+		Mode:       summary.Mode,
+		OutRoot:    summary.OutRoot,
+		CampaignID: summary.CampaignID,
+		Details: map[string]any{
+			"feedbackPolicy": summary.FeedbackPolicy,
+			"parallel":       summary.CampaignProfile.Parallel,
+			"total":          summary.CampaignProfile.Total,
+			"failFast":       summary.CampaignProfile.FailFast,
+		},
+	})
+}
 
-	results := make([]suiteRunAttemptResult, len(missions))
-	for i, mission := range missions {
-		results[i] = suiteRunAttemptResult{
-			MissionID:      mission.MissionID,
-			IsolationModel: effectiveIsolation,
-			Finish: suiteRunFinishResult{
-				OK:           false,
-				Strict:       *strict,
-				StrictExpect: *strictExpect,
-			},
-			OK: false,
-		}
-	}
+func (r Runner) executeSuiteRunMissions(plan suiteRunExecutionPlan, errWriter io.Writer) ([]suiteRunAttemptResult, string, bool) {
+	results := initializeSuiteRunResults(plan.settings.missions, plan.host.effectiveIsolation, plan.input.strict, plan.input.strictExpect)
 	var (
 		startMu      sync.Mutex
 		harnessErr   atomic.Bool
-		currentRunID = strings.TrimSpace(*runID)
+		currentRunID = plan.initialRunID
 	)
-	errWriter := &lockedWriter{
-		mu: &sync.Mutex{},
-		w:  r.Stderr,
+	runState := &suiteRunMissionRunState{
+		startMu:      &startMu,
+		harnessErr:   &harnessErr,
+		currentRunID: &currentRunID,
+		results:      results,
+		errWriter:    errWriter,
 	}
-	execOpts := suiteRunExecOpts{
-		RunnerCmd:        runnerCmd,
-		RunnerArgs:       runnerArgs,
-		NativeMode:       nativeMode,
-		NativeSelection:  nativeRuntimeSelection,
-		NativeScheduler:  buildNativeAttemptScheduler(nativeRuntimeSelection.Selected, *parallel),
-		NativeModel:      resolvedNativeModel,
-		ReasoningEffort:  resolvedNativeReasoningEffort,
-		ReasoningPolicy:  resolvedNativeReasoningPolicy,
-		FeedbackPolicy:   resolvedFeedbackPolicy,
-		FinalizationMode: resolvedFinalizationMode,
-		ResultChannel:    resolvedResultChannel,
-		Strict:           *strict,
-		StrictExpect:     *strictExpect,
-		CaptureRunnerIO:  *captureRunnerIO,
-		RunnerIOMaxBytes: *runnerIOMaxBytes,
-		RunnerIORaw:      *runnerIORaw,
-		Shims:            []string(shims),
-		ZCLExe:           zclExe,
-		Blind:            resolvedBlind,
-		BlindTerms:       resolvedBlindTerms,
-		IsolationModel:   effectiveIsolation,
-		StderrWriter:     errWriter,
-		Progress:         progress,
-		ExtraEnv:         copyStringMap(extraAttemptEnv),
-		RunnerCwdPolicy:  runnerCwdPolicy,
+	waveSize := plan.input.parallel
+	if waveSize > len(plan.settings.missions) {
+		waveSize = len(plan.settings.missions)
 	}
-	if progress != nil {
-		if err := progress.Emit(suiteRunProgressEvent{
-			TS:         r.Now().UTC().Format(time.RFC3339Nano),
-			Kind:       "run_started",
-			RunID:      summary.RunID,
-			SuiteID:    summary.SuiteID,
-			Mode:       summary.Mode,
-			OutRoot:    summary.OutRoot,
-			CampaignID: summary.CampaignID,
-			Details: map[string]any{
-				"feedbackPolicy": resolvedFeedbackPolicy,
-				"parallel":       *parallel,
-				"total":          resolvedTotal,
-				"failFast":       *failFast,
-			},
-		}); err != nil {
-			fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
-			return 1
-		}
-	}
-
-	wave := *parallel
-	if wave > len(missions) {
-		wave = len(missions)
-	}
-	for start := 0; start < len(missions); start += wave {
-		if *failFast && hasFailedAttempt(results) {
+	for start := 0; start < len(plan.settings.missions); start += waveSize {
+		if plan.input.failFast && hasFailedAttempt(results) {
 			markSkippedAttempts(results, start, "fail_fast_prior_failure")
 			break
 		}
-		end := start + wave
-		if end > len(missions) {
-			end = len(missions)
+		end := start + waveSize
+		if end > len(plan.settings.missions) {
+			end = len(plan.settings.missions)
 		}
-		var wg sync.WaitGroup
-		for idx := start; idx < end; idx++ {
-			idx := idx
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				mission := missions[idx]
-
-				startMu.Lock()
-				started, err := attempt.Start(r.Now(), attempt.StartOpts{
-					OutRoot:        m.OutRoot,
-					RunID:          currentRunID,
-					SuiteID:        parsed.Suite.SuiteID,
-					MissionID:      mission.MissionID,
-					IsolationModel: effectiveIsolation,
-					Mode:           resolvedMode,
-					Retry:          1,
-					Prompt:         mission.Prompt,
-					TimeoutMs:      resolvedTimeoutMs,
-					TimeoutStart:   resolvedTimeoutStart,
-					Blind:          resolvedBlind,
-					BlindTerms:     resolvedBlindTerms,
-					SuiteSnapshot:  parsed.CanonicalJSON,
-				})
-				if err == nil {
-					currentRunID = started.RunID
-				}
-				startMu.Unlock()
-
-				if err != nil {
-					harnessErr.Store(true)
-					fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
-					results[idx].RunnerErrorCode = codeUsage
-					results[idx].OK = false
-					return
-				}
-
-				pm := planner.PlannedMission{
-					MissionID: mission.MissionID,
-					Prompt:    mission.Prompt,
-					AttemptID: started.AttemptID,
-					OutDir:    started.OutDir,
-					OutDirAbs: started.OutDirAbs,
-					Env:       started.Env,
-				}
-				if progress != nil {
-					if err := progress.Emit(suiteRunProgressEvent{
-						TS:        r.Now().UTC().Format(time.RFC3339Nano),
-						Kind:      "attempt_started",
-						RunID:     started.RunID,
-						SuiteID:   started.SuiteID,
-						MissionID: mission.MissionID,
-						AttemptID: started.AttemptID,
-						Mode:      started.Mode,
-						OutDir:    started.OutDirAbs,
-						Details: map[string]any{
-							"tags": mission.Tags,
-						},
-					}); err != nil {
-						harnessErr.Store(true)
-						fmt.Fprintf(errWriter, codeIO+": suite run progress: %s\n", err.Error())
-					}
-				}
-				ar, hard := r.executeSuiteRunMission(pm, execOpts)
-				ar.IsolationModel = effectiveIsolation
-				if hard {
-					harnessErr.Store(true)
-				}
-				results[idx] = ar
-			}()
-		}
-		wg.Wait()
-		if *failFast && hasFailedAttempt(results[start:end]) {
+		r.executeSuiteRunWave(plan, runState, start, end)
+		if plan.input.failFast && hasFailedAttempt(results[start:end]) {
 			markSkippedAttempts(results, end, "fail_fast_prior_failure")
 			break
 		}
 	}
+	return results, currentRunID, harnessErr.Load()
+}
 
-	summary.RunID = currentRunID
+type suiteRunMissionRunState struct {
+	startMu      *sync.Mutex
+	harnessErr   *atomic.Bool
+	currentRunID *string
+	results      []suiteRunAttemptResult
+	errWriter    io.Writer
+}
+
+func initializeSuiteRunResults(missions []suite.MissionV1, isolationModel string, strict bool, strictExpect bool) []suiteRunAttemptResult {
+	results := make([]suiteRunAttemptResult, len(missions))
+	for i, mission := range missions {
+		results[i] = suiteRunAttemptResult{
+			MissionID:      mission.MissionID,
+			IsolationModel: isolationModel,
+			Finish: suiteRunFinishResult{
+				OK:           false,
+				Strict:       strict,
+				StrictExpect: strictExpect,
+			},
+			OK: false,
+		}
+	}
+	return results
+}
+
+func (r Runner) executeSuiteRunWave(plan suiteRunExecutionPlan, state *suiteRunMissionRunState, start int, end int) {
+	var wg sync.WaitGroup
+	for idx := start; idx < end; idx++ {
+		idx := idx
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.executeSuiteRunMissionIndex(plan, state, idx)
+		}()
+	}
+	wg.Wait()
+}
+
+func (r Runner) executeSuiteRunMissionIndex(plan suiteRunExecutionPlan, state *suiteRunMissionRunState, idx int) {
+	mission := plan.settings.missions[idx]
+	started, ok := startSuiteRunAttempt(r, plan, state, mission, idx)
+	if !ok {
+		return
+	}
+	pm := planner.PlannedMission{
+		MissionID: mission.MissionID,
+		Prompt:    mission.Prompt,
+		AttemptID: started.AttemptID,
+		OutDir:    started.OutDir,
+		OutDirAbs: started.OutDirAbs,
+		Env:       started.Env,
+	}
+	emitSuiteRunAttemptStarted(r, plan.execOpts.Progress, started, mission, state)
+	ar, hard := r.executeSuiteRunMission(pm, plan.execOpts)
+	ar.IsolationModel = plan.host.effectiveIsolation
+	if hard {
+		state.harnessErr.Store(true)
+	}
+	state.results[idx] = ar
+}
+
+func startSuiteRunAttempt(r Runner, plan suiteRunExecutionPlan, state *suiteRunMissionRunState, mission suite.MissionV1, idx int) (*attempt.StartResult, bool) {
+	state.startMu.Lock()
+	started, err := attempt.Start(r.Now(), attempt.StartOpts{
+		OutRoot:        plan.host.merged.OutRoot,
+		RunID:          *state.currentRunID,
+		SuiteID:        plan.parsed.Suite.SuiteID,
+		MissionID:      mission.MissionID,
+		IsolationModel: plan.host.effectiveIsolation,
+		Mode:           plan.settings.mode,
+		Retry:          1,
+		Prompt:         mission.Prompt,
+		TimeoutMs:      plan.settings.timeoutMs,
+		TimeoutStart:   plan.settings.timeoutStart,
+		Blind:          plan.settings.blind,
+		BlindTerms:     plan.settings.blindTerms,
+		SuiteSnapshot:  plan.parsed.CanonicalJSON,
+	})
+	if err == nil {
+		*state.currentRunID = started.RunID
+	}
+	state.startMu.Unlock()
+	if err == nil {
+		return started, true
+	}
+	state.harnessErr.Store(true)
+	fmt.Fprintf(state.errWriter, codeUsage+": suite run: %s\n", err.Error())
+	state.results[idx].RunnerErrorCode = codeUsage
+	state.results[idx].OK = false
+	return nil, false
+}
+
+func emitSuiteRunAttemptStarted(r Runner, progress *suiteRunProgressEmitter, started *attempt.StartResult, mission suite.MissionV1, state *suiteRunMissionRunState) {
+	if progress == nil {
+		return
+	}
+	if err := progress.Emit(suiteRunProgressEvent{
+		TS:        r.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      "attempt_started",
+		RunID:     started.RunID,
+		SuiteID:   started.SuiteID,
+		MissionID: mission.MissionID,
+		AttemptID: started.AttemptID,
+		Mode:      started.Mode,
+		OutDir:    started.OutDirAbs,
+		Details: map[string]any{
+			"tags": mission.Tags,
+		},
+	}); err != nil {
+		state.harnessErr.Store(true)
+		fmt.Fprintf(state.errWriter, codeIO+": suite run progress: %s\n", err.Error())
+	}
+}
+
+func finalizeSuiteRunSummary(summary suiteRunSummary, results []suiteRunAttemptResult, runID string) suiteRunSummary {
+	summary.RunID = runID
 	for _, ar := range results {
 		if ar.OK {
 			summary.Passed++
@@ -709,61 +1012,73 @@ func (r Runner) runSuiteRunWithEnv(args []string, extraAttemptEnv map[string]str
 	if summary.RunID != "" {
 		_ = store.WriteJSONAtomic(filepath.Join(summary.OutRoot, "runs", summary.RunID, "suite.run.summary.json"), summary)
 	}
-	if summary.RunID != "" && summary.CampaignStatePath != "" {
-		if _, err := campaign.UpdateState(summary.CampaignStatePath, campaign.UpdateInput{
-			Now:              r.Now(),
-			CampaignID:       summary.CampaignID,
-			SuiteID:          summary.SuiteID,
-			RunID:            summary.RunID,
-			CreatedAt:        summary.CreatedAt,
-			Mode:             summary.Mode,
-			OutRoot:          summary.OutRoot,
-			SessionIsolation: summary.SessionIsolation,
-			ComparabilityKey: summary.ComparabilityKey,
-			FeedbackPolicy:   summary.FeedbackPolicy,
-			Parallel:         summary.CampaignProfile.Parallel,
-			Total:            summary.CampaignProfile.Total,
-			FailFast:         summary.CampaignProfile.FailFast,
-			Passed:           summary.Passed,
-			Failed:           summary.Failed,
-		}); err != nil {
-			harnessErr.Store(true)
-			summary.OK = false
-			fmt.Fprintf(r.Stderr, codeIO+": suite run campaign state: %s\n", err.Error())
-		}
-	}
-	if progress != nil {
-		if err := progress.Emit(suiteRunProgressEvent{
-			TS:         r.Now().UTC().Format(time.RFC3339Nano),
-			Kind:       "run_finished",
-			RunID:      summary.RunID,
-			SuiteID:    summary.SuiteID,
-			Mode:       summary.Mode,
-			CampaignID: summary.CampaignID,
-			Details: map[string]any{
-				"ok":     summary.OK,
-				"passed": summary.Passed,
-				"failed": summary.Failed,
-			},
-		}); err != nil {
-			harnessErr.Store(true)
-			summary.OK = false
-			fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
-		}
-	}
+	return summary
+}
 
-	enc := json.NewEncoder(r.Stdout)
+func updateSuiteRunCampaignState(r Runner, summary *suiteRunSummary, harnessErr bool) bool {
+	if summary.RunID == "" || summary.CampaignStatePath == "" {
+		return harnessErr
+	}
+	if _, err := campaign.UpdateState(summary.CampaignStatePath, campaign.UpdateInput{
+		Now:              r.Now(),
+		CampaignID:       summary.CampaignID,
+		SuiteID:          summary.SuiteID,
+		RunID:            summary.RunID,
+		CreatedAt:        summary.CreatedAt,
+		Mode:             summary.Mode,
+		OutRoot:          summary.OutRoot,
+		SessionIsolation: summary.SessionIsolation,
+		ComparabilityKey: summary.ComparabilityKey,
+		FeedbackPolicy:   summary.FeedbackPolicy,
+		Parallel:         summary.CampaignProfile.Parallel,
+		Total:            summary.CampaignProfile.Total,
+		FailFast:         summary.CampaignProfile.FailFast,
+		Passed:           summary.Passed,
+		Failed:           summary.Failed,
+	}); err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": suite run campaign state: %s\n", err.Error())
+		summary.OK = false
+		return true
+	}
+	return harnessErr
+}
+
+func emitSuiteRunFinished(r Runner, progress *suiteRunProgressEmitter, summary *suiteRunSummary, harnessErr bool) bool {
+	if progress == nil {
+		return harnessErr
+	}
+	if err := progress.Emit(suiteRunProgressEvent{
+		TS:         r.Now().UTC().Format(time.RFC3339Nano),
+		Kind:       "run_finished",
+		RunID:      summary.RunID,
+		SuiteID:    summary.SuiteID,
+		Mode:       summary.Mode,
+		CampaignID: summary.CampaignID,
+		Details: map[string]any{
+			"ok":     summary.OK,
+			"passed": summary.Passed,
+			"failed": summary.Failed,
+		},
+	}); err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": suite run progress: %s\n", err.Error())
+		summary.OK = false
+		return true
+	}
+	return harnessErr
+}
+
+func encodeSuiteRunSummary(w io.Writer, summary suiteRunSummary) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(summary); err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": failed to encode json\n")
-		return 1
-	}
+	return enc.Encode(summary)
+}
 
-	if harnessErr.Load() {
+func finalizeSuiteRunExitCode(summaryOK bool, harnessErr bool) int {
+	if harnessErr {
 		return 1
 	}
-	if summary.OK {
+	if summaryOK {
 		return 0
 	}
 	return 2
@@ -817,11 +1132,48 @@ type suiteRunAttemptRuntimeContext struct {
 }
 
 func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
-	errWriter := opts.StderrWriter
-	if errWriter == nil {
-		errWriter = r.Stderr
+	return r.executeSuiteRunMissionImpl(pm, opts)
+}
+
+func (r Runner) executeSuiteRunMissionImpl(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
+	return r.executeSuiteRunMissionCore(pm, opts)
+}
+
+func (r Runner) executeSuiteRunMissionCore(pm planner.PlannedMission, opts suiteRunExecOpts) (suiteRunAttemptResult, bool) {
+	errWriter := suiteRunAttemptErrWriter(r, opts)
+	ar := newSuiteRunAttemptResult(pm, opts)
+	runtimeCtx, cleanupRunnerCwd, err := prepareSuiteRunAttemptStartCwd(pm, opts.RunnerCwdPolicy)
+	if err != nil {
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return ar, true
 	}
-	ar := suiteRunAttemptResult{
+	env := buildSuiteRunMissionEnv(pm, opts)
+
+	harnessErr := false
+	shouldFinish := true
+	if opts.NativeMode {
+		harnessErr, shouldFinish = r.runSuiteMissionNativePath(pm, opts, runtimeCtx, env, &ar, errWriter)
+	} else {
+		harnessErr, shouldFinish = r.runSuiteMissionProcessPath(pm, opts, runtimeCtx, env, &ar, errWriter)
+	}
+	if shouldFinish {
+		finalizeSuiteRunAttemptResult(r, pm, opts, env, &ar)
+		emitSuiteRunAttemptFinished(r, opts, env, pm, ar)
+	}
+	applySuiteRunRunnerCwdCleanup(cleanupRunnerCwd, &harnessErr, &ar, errWriter)
+	return ar, harnessErr
+}
+
+func suiteRunAttemptErrWriter(r Runner, opts suiteRunExecOpts) io.Writer {
+	if opts.StderrWriter != nil {
+		return opts.StderrWriter
+	}
+	return r.Stderr
+}
+
+func newSuiteRunAttemptResult(pm planner.PlannedMission, opts suiteRunExecOpts) suiteRunAttemptResult {
+	return suiteRunAttemptResult{
 		MissionID:      pm.MissionID,
 		AttemptID:      pm.AttemptID,
 		AttemptDir:     pm.OutDirAbs,
@@ -834,30 +1186,12 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 		},
 		OK: false,
 	}
-	harnessErr := false
-	runtimeCtx, cleanupRunnerCwd, err := prepareSuiteRunAttemptStartCwd(pm, opts.RunnerCwdPolicy)
-	if err != nil {
-		harnessErr = true
-		ar.RunnerErrorCode = codeIO
-		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		return ar, harnessErr
-	}
-	finishAttemptWithCleanup := func() (suiteRunAttemptResult, bool) {
-		if cleanupRunnerCwd != nil {
-			if err := cleanupRunnerCwd(ar.OK); err != nil {
-				harnessErr = true
-				if ar.RunnerErrorCode == "" {
-					ar.RunnerErrorCode = codeIO
-				}
-				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			}
-		}
-		return ar, harnessErr
-	}
+}
 
-	env := map[string]string{}
-	for k, v := range pm.Env {
-		env[k] = v
+func buildSuiteRunMissionEnv(pm planner.PlannedMission, opts suiteRunExecOpts) map[string]string {
+	env := copyStringMap(pm.Env)
+	if env == nil {
+		env = map[string]string{}
 	}
 	for k, v := range opts.ExtraEnv {
 		key := strings.TrimSpace(k)
@@ -869,235 +1203,263 @@ func (r Runner) executeSuiteRunMission(pm planner.PlannedMission, opts suiteRunE
 	env["ZCL_FINALIZATION_MODE"] = strings.TrimSpace(opts.FinalizationMode)
 	env["ZCL_RESULT_CHANNEL_KIND"] = strings.TrimSpace(opts.ResultChannel.Kind)
 	env["ZCL_RESULT_MIN_TURN"] = strconv.Itoa(opts.ResultChannel.MinFinalTurn)
-	switch opts.ResultChannel.Kind {
+	applySuiteRunResultChannelEnv(env, pm.OutDirAbs, opts.ResultChannel)
+	applySuiteRunOptionalEnvPaths(env, pm.OutDirAbs, opts.ZCLExe)
+	return env
+}
+
+func applySuiteRunResultChannelEnv(env map[string]string, outDirAbs string, resultChannel suiteRunResultChannel) {
+	switch resultChannel.Kind {
 	case campaign.ResultChannelFileJSON:
-		if strings.TrimSpace(opts.ResultChannel.Path) != "" {
-			env["ZCL_MISSION_RESULT_PATH"] = filepath.Join(pm.OutDirAbs, opts.ResultChannel.Path)
+		if strings.TrimSpace(resultChannel.Path) == "" {
+			return
 		}
+		env["ZCL_MISSION_RESULT_PATH"] = filepath.Join(outDirAbs, resultChannel.Path)
 	case campaign.ResultChannelStdoutJSON:
-		if strings.TrimSpace(opts.ResultChannel.Marker) != "" {
-			env["ZCL_MISSION_RESULT_MARKER"] = strings.TrimSpace(opts.ResultChannel.Marker)
+		if strings.TrimSpace(resultChannel.Marker) == "" {
+			return
 		}
+		env["ZCL_MISSION_RESULT_MARKER"] = strings.TrimSpace(resultChannel.Marker)
 	}
-	if p := filepath.Join(pm.OutDirAbs, "prompt.txt"); fileExists(p) {
+}
+
+func applySuiteRunOptionalEnvPaths(env map[string]string, outDirAbs string, zclExe string) {
+	if p := filepath.Join(outDirAbs, "prompt.txt"); fileExists(p) {
 		env["ZCL_PROMPT_PATH"] = p
 	}
-	if opts.ZCLExe != "" {
-		env["ZCL_SHIM_ZCL_PATH"] = opts.ZCLExe
+	if strings.TrimSpace(zclExe) != "" {
+		env["ZCL_SHIM_ZCL_PATH"] = zclExe
 	}
-	if opts.NativeMode {
-		if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts, runtimeCtx); err != nil {
-			harnessErr = true
-			ar.RunnerErrorCode = codeIO
-			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			return finishAttemptWithCleanup()
-		}
-		harnessErr = runSuiteNativeRuntime(r, pm, env, opts, runtimeCtx, &ar, errWriter)
-		if err := maybeWriteAutoFailureFeedback(r.Now(), env, &ar, schema.FeedbackPolicyAutoFailV1); err != nil {
-			harnessErr = true
-			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		}
-		ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
-		runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
-		ar.OK = runnerOK && ar.Finish.OK
-		if opts.Progress != nil {
-			_ = opts.Progress.Emit(suiteRunProgressEvent{
-				TS:        r.Now().UTC().Format(time.RFC3339Nano),
-				Kind:      "attempt_finished",
-				RunID:     env["ZCL_RUN_ID"],
-				SuiteID:   env["ZCL_SUITE_ID"],
-				MissionID: env["ZCL_MISSION_ID"],
-				AttemptID: env["ZCL_ATTEMPT_ID"],
-				OutDir:    pm.OutDirAbs,
-				Details: map[string]any{
-					"ok":               ar.OK,
-					"runnerErrorCode":  ar.RunnerErrorCode,
-					"autoFeedback":     ar.AutoFeedback,
-					"autoFeedbackCode": ar.AutoFeedbackCode,
-					"finishOk":         ar.Finish.OK,
-				},
-			})
-		}
-		return finishAttemptWithCleanup()
-	}
+}
 
-	var shimBinDir string
-	if len(opts.Shims) > 0 {
-		dir, err := installAttemptShims(pm.OutDirAbs, opts.Shims)
-		if err != nil {
-			harnessErr = true
-			ar.RunnerErrorCode = codeUsage
-			fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
-		} else {
-			shimBinDir = dir
-			env["ZCL_SHIM_BIN_DIR"] = shimBinDir
-			// Prepend to PATH so the agent can type the tool name and still be traced.
-			env["PATH"] = shimBinDir + ":" + os.Getenv("PATH")
-		}
-	}
+func (r Runner) runSuiteMissionNativePath(pm planner.PlannedMission, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, env map[string]string, ar *suiteRunAttemptResult, errWriter io.Writer) (bool, bool) {
 	if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts, runtimeCtx); err != nil {
-		harnessErr = true
 		ar.RunnerErrorCode = codeIO
 		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		return finishAttemptWithCleanup()
+		return true, false
 	}
+	harnessErr := runSuiteNativeRuntime(r, pm, env, opts, runtimeCtx, ar, errWriter)
+	if err := maybeWriteAutoFailureFeedback(r.Now(), env, ar, schema.FeedbackPolicyAutoFailV1); err != nil {
+		harnessErr = true
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	}
+	return harnessErr, true
+}
 
-	// Runner IO capture buffers (tail) + paths.
+type suiteRunProcessPathContext struct {
+	stdoutTB      *tailBuffer
+	stderrTB      *tailBuffer
+	stopRunnerLog func(harnessErr *bool, ar *suiteRunAttemptResult)
+}
+
+func (r Runner) runSuiteMissionProcessPath(pm planner.PlannedMission, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, env map[string]string, ar *suiteRunAttemptResult, errWriter io.Writer) (bool, bool) {
+	harnessErr, shimBinDir := installSuiteRunProcessShims(pm.OutDirAbs, opts, env, ar, errWriter)
+	if err := writeAttemptRuntimeEnvArtifact(r.Now(), pm, env, opts, runtimeCtx); err != nil {
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return true, false
+	}
+	pathCtx := prepareSuiteRunProcessPath(pm, opts, env, shimBinDir, ar, errWriter, &harnessErr)
+	harnessErr = executeSuiteRunProcessRunner(r, pm, opts, env, pathCtx.stdoutTB, pathCtx.stderrTB, ar, errWriter) || harnessErr
+	pathCtx.stopRunnerLog(&harnessErr, ar)
+	if err := maybeFinalizeSuiteFeedback(r.Now(), env, ar, opts.FinalizationMode, opts.FeedbackPolicy, opts.ResultChannel, pathCtx.stdoutTB); err != nil {
+		harnessErr = true
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	}
+	return harnessErr, true
+}
+
+func installSuiteRunProcessShims(attemptDir string, opts suiteRunExecOpts, env map[string]string, ar *suiteRunAttemptResult, errWriter io.Writer) (bool, string) {
+	if len(opts.Shims) == 0 {
+		return false, ""
+	}
+	dir, err := installAttemptShims(attemptDir, opts.Shims)
+	if err != nil {
+		ar.RunnerErrorCode = codeUsage
+		fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
+		return true, ""
+	}
+	env["ZCL_SHIM_BIN_DIR"] = dir
+	// Prepend to PATH so the agent can type the tool name and still be traced.
+	env["PATH"] = dir + ":" + os.Getenv("PATH")
+	return false, dir
+}
+
+func prepareSuiteRunProcessPath(pm planner.PlannedMission, opts suiteRunExecOpts, env map[string]string, shimBinDir string, ar *suiteRunAttemptResult, errWriter io.Writer, harnessErr *bool) suiteRunProcessPathContext {
+	ctx := suiteRunProcessPathContext{
+		stopRunnerLog: func(_ *bool, _ *suiteRunAttemptResult) {},
+	}
+	stdoutTB, stderrTB, stopRunnerLogs := initSuiteRunRunnerLogs(pm.OutDirAbs, opts, env, shimBinDir, ar, errWriter, harnessErr)
+	ctx.stdoutTB = stdoutTB
+	ctx.stderrTB = stderrTB
+	ctx.stopRunnerLog = stopRunnerLogs
+	ensureSuiteRunResultStdoutBuffers(opts, &ctx)
+	return ctx
+}
+
+func initSuiteRunRunnerLogs(attemptDir string, opts suiteRunExecOpts, env map[string]string, shimBinDir string, ar *suiteRunAttemptResult, errWriter io.Writer, harnessErr *bool) (*tailBuffer, *tailBuffer, func(harnessErr *bool, ar *suiteRunAttemptResult)) {
 	var (
 		stdoutTB *tailBuffer
 		stderrTB *tailBuffer
 	)
-	var logW *runnerLogWriter
-	var stopLogs chan struct{}
-	var logErrCh chan error
-	var stopLogsOnce sync.Once
-	stopRunnerLogs := func() {
-		if stopLogs == nil {
-			return
+	stopNoop := func(_ *bool, _ *suiteRunAttemptResult) {}
+	if !opts.CaptureRunnerIO {
+		_ = writeRunnerCommandFile(attemptDir, opts.RunnerCmd, opts.RunnerArgs, env, shimBinDir)
+		return stdoutTB, stderrTB, stopNoop
+	}
+	if opts.RunnerIOMaxBytes <= 0 {
+		*harnessErr = true
+		ar.RunnerErrorCode = codeUsage
+		fmt.Fprintf(errWriter, codeUsage+": suite run: --runner-io-max-bytes must be > 0\n")
+		return stdoutTB, stderrTB, stopNoop
+	}
+	stdoutTB = newTailBuffer(opts.RunnerIOMaxBytes)
+	stderrTB = newTailBuffer(opts.RunnerIOMaxBytes)
+	_ = writeRunnerCommandFile(attemptDir, opts.RunnerCmd, opts.RunnerArgs, env, shimBinDir)
+	logW := &runnerLogWriter{
+		AttemptDir: attemptDir,
+		StdoutTB:   stdoutTB,
+		StderrTB:   stderrTB,
+		Raw:        opts.RunnerIORaw,
+	}
+	if err := logW.Flush(true); err != nil {
+		*harnessErr = true
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return stdoutTB, stderrTB, stopNoop
+	}
+	stopLogs := make(chan struct{})
+	logErrCh := make(chan error, 1)
+	go func() {
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if err := logW.Flush(false); err != nil {
+					logErrCh <- err
+					return
+				}
+			case <-stopLogs:
+				logErrCh <- logW.Flush(true)
+				return
+			}
 		}
+	}()
+	var stopLogsOnce sync.Once
+	stopWithWait := func(localHarnessErr *bool, localAR *suiteRunAttemptResult) {
 		stopLogsOnce.Do(func() {
 			close(stopLogs)
-			if logErrCh != nil {
-				if lerr := <-logErrCh; lerr != nil {
-					harnessErr = true
-					ar.RunnerErrorCode = codeIO
-					fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", lerr.Error())
-				}
+			if lerr := <-logErrCh; lerr != nil {
+				*localHarnessErr = true
+				localAR.RunnerErrorCode = codeIO
+				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", lerr.Error())
 			}
 		})
 	}
-	if opts.CaptureRunnerIO {
-		if opts.RunnerIOMaxBytes <= 0 {
-			harnessErr = true
-			ar.RunnerErrorCode = codeUsage
-			fmt.Fprintf(errWriter, codeUsage+": suite run: --runner-io-max-bytes must be > 0\n")
-		} else {
-			stdoutTB = newTailBuffer(opts.RunnerIOMaxBytes)
-			stderrTB = newTailBuffer(opts.RunnerIOMaxBytes)
-			_ = writeRunnerCommandFile(pm.OutDirAbs, opts.RunnerCmd, opts.RunnerArgs, env, shimBinDir)
-			logW = &runnerLogWriter{
-				AttemptDir: pm.OutDirAbs,
-				StdoutTB:   stdoutTB,
-				StderrTB:   stderrTB,
-				Raw:        opts.RunnerIORaw,
-			}
-			// Create initial log artifacts so post-mortems always have the files.
-			if err := logW.Flush(true); err != nil {
-				harnessErr = true
-				ar.RunnerErrorCode = codeIO
-				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			} else {
-				stopLogs = make(chan struct{})
-				logErrCh = make(chan error, 1)
-				go func() {
-					t := time.NewTicker(250 * time.Millisecond)
-					defer t.Stop()
-					for {
-						select {
-						case <-t.C:
-							if err := logW.Flush(false); err != nil {
-								logErrCh <- err
-								return
-							}
-						case <-stopLogs:
-							logErrCh <- logW.Flush(true)
-							return
-						}
-					}
-				}()
-			}
-		}
-	} else {
-		_ = writeRunnerCommandFile(pm.OutDirAbs, opts.RunnerCmd, opts.RunnerArgs, env, shimBinDir)
-	}
-	if opts.ResultChannel.Kind == campaign.ResultChannelStdoutJSON {
-		maxBytes := opts.RunnerIOMaxBytes
-		if maxBytes <= 0 {
-			maxBytes = schema.CaptureMaxBytesV1
-		}
-		if stdoutTB == nil {
-			stdoutTB = newTailBuffer(maxBytes)
-		}
-		if stderrTB == nil {
-			stderrTB = newTailBuffer(maxBytes)
-		}
-	}
+	return stdoutTB, stderrTB, stopWithWait
+}
 
+func ensureSuiteRunResultStdoutBuffers(opts suiteRunExecOpts, pathCtx *suiteRunProcessPathContext) {
+	if opts.ResultChannel.Kind != campaign.ResultChannelStdoutJSON {
+		return
+	}
+	maxBytes := opts.RunnerIOMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = schema.CaptureMaxBytesV1
+	}
+	if pathCtx.stdoutTB == nil {
+		pathCtx.stdoutTB = newTailBuffer(maxBytes)
+	}
+	if pathCtx.stderrTB == nil {
+		pathCtx.stderrTB = newTailBuffer(maxBytes)
+	}
+}
+
+func executeSuiteRunProcessRunner(r Runner, pm planner.PlannedMission, opts suiteRunExecOpts, env map[string]string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
 	if err := verifyAttemptMatchesEnv(pm.OutDirAbs, env); err != nil {
-		harnessErr = true
 		ar.RunnerErrorCode = codeUsage
 		fmt.Fprintf(errWriter, codeUsage+": suite run: %s\n", err.Error())
-		stopRunnerLogs()
-	} else if opts.Blind {
-		found := promptContamination(pm.OutDirAbs, opts.BlindTerms)
-		if len(found) > 0 {
-			ar.RunnerErrorCode = codeContaminatedPrompt
-			msg := "prompt contamination detected: " + strings.Join(found, ",")
-			envTrace := trace.Env{
-				RunID:     env["ZCL_RUN_ID"],
-				SuiteID:   env["ZCL_SUITE_ID"],
-				MissionID: env["ZCL_MISSION_ID"],
-				AttemptID: env["ZCL_ATTEMPT_ID"],
-				AgentID:   env["ZCL_AGENT_ID"],
-				OutDirAbs: env["ZCL_OUT_DIR"],
-				TmpDirAbs: env["ZCL_TMP_DIR"],
-			}
-			if err := trace.AppendCLIRunEvent(r.Now(), envTrace, []string{"zcl", "blind-check"}, trace.ResultForTrace{
-				SpawnError: codeContaminatedPrompt,
-				DurationMs: 0,
-				OutBytes:   0,
-				ErrBytes:   int64(len(msg)),
-				ErrPreview: msg,
-			}); err != nil {
-				harnessErr = true
-				ar.RunnerErrorCode = codeIO
-				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			} else if err := feedback.Write(r.Now(), envTrace, feedback.WriteOpts{
-				OK:                   false,
-				Result:               "CONTAMINATED_PROMPT",
-				DecisionTags:         []string{schema.DecisionTagBlocked, schema.DecisionTagContaminatedPrompt},
-				SkipSuiteResultShape: true,
-			}); err != nil {
-				harnessErr = true
-				ar.RunnerErrorCode = codeIO
-				fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			}
-			stopRunnerLogs()
-		} else {
-			harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
-			stopRunnerLogs()
-		}
-	} else {
-		harnessErr = runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, &ar, errWriter) || harnessErr
-		stopRunnerLogs()
+		return true
 	}
-	if err := maybeFinalizeSuiteFeedback(r.Now(), env, &ar, opts.FinalizationMode, opts.FeedbackPolicy, opts.ResultChannel, stdoutTB); err != nil {
-		harnessErr = true
-		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	if !opts.Blind {
+		return runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, ar, errWriter)
 	}
+	return executeSuiteRunBlindRunner(r, pm, opts, env, stdoutTB, stderrTB, ar, errWriter)
+}
 
+func executeSuiteRunBlindRunner(r Runner, pm planner.PlannedMission, opts suiteRunExecOpts, env map[string]string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	found := promptContamination(pm.OutDirAbs, opts.BlindTerms)
+	if len(found) == 0 {
+		return runSuiteRunner(r, pm, env, opts.RunnerCmd, opts.RunnerArgs, stdoutTB, stderrTB, ar, errWriter)
+	}
+	ar.RunnerErrorCode = codeContaminatedPrompt
+	msg := "prompt contamination detected: " + strings.Join(found, ",")
+	envTrace := suiteRunTraceEnv(env, pm.OutDirAbs)
+	if err := trace.AppendCLIRunEvent(r.Now(), envTrace, []string{"zcl", "blind-check"}, trace.ResultForTrace{
+		SpawnError: codeContaminatedPrompt,
+		DurationMs: 0,
+		OutBytes:   0,
+		ErrBytes:   int64(len(msg)),
+		ErrPreview: msg,
+	}); err != nil {
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return true
+	}
+	if err := feedback.Write(r.Now(), envTrace, feedback.WriteOpts{
+		OK:                   false,
+		Result:               "CONTAMINATED_PROMPT",
+		DecisionTags:         []string{schema.DecisionTagBlocked, schema.DecisionTagContaminatedPrompt},
+		SkipSuiteResultShape: true,
+	}); err != nil {
+		ar.RunnerErrorCode = codeIO
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		return true
+	}
+	return false
+}
+
+func finalizeSuiteRunAttemptResult(r Runner, pm planner.PlannedMission, opts suiteRunExecOpts, env map[string]string, ar *suiteRunAttemptResult) {
 	ar.Finish = finishAttempt(r.Now(), pm.OutDirAbs, opts.Strict, opts.StrictExpect)
 	runnerOK := ar.RunnerErrorCode == "" && ar.RunnerExitCode != nil && *ar.RunnerExitCode == 0
 	ar.OK = runnerOK && ar.Finish.OK
-	if opts.Progress != nil {
-		_ = opts.Progress.Emit(suiteRunProgressEvent{
-			TS:        r.Now().UTC().Format(time.RFC3339Nano),
-			Kind:      "attempt_finished",
-			RunID:     env["ZCL_RUN_ID"],
-			SuiteID:   env["ZCL_SUITE_ID"],
-			MissionID: env["ZCL_MISSION_ID"],
-			AttemptID: env["ZCL_ATTEMPT_ID"],
-			OutDir:    pm.OutDirAbs,
-			Details: map[string]any{
-				"ok":               ar.OK,
-				"runnerErrorCode":  ar.RunnerErrorCode,
-				"autoFeedback":     ar.AutoFeedback,
-				"autoFeedbackCode": ar.AutoFeedbackCode,
-				"finishOk":         ar.Finish.OK,
-			},
-		})
+	_ = env
+}
+
+func emitSuiteRunAttemptFinished(r Runner, opts suiteRunExecOpts, env map[string]string, pm planner.PlannedMission, ar suiteRunAttemptResult) {
+	if opts.Progress == nil {
+		return
 	}
-	return finishAttemptWithCleanup()
+	_ = opts.Progress.Emit(suiteRunProgressEvent{
+		TS:        r.Now().UTC().Format(time.RFC3339Nano),
+		Kind:      "attempt_finished",
+		RunID:     env["ZCL_RUN_ID"],
+		SuiteID:   env["ZCL_SUITE_ID"],
+		MissionID: env["ZCL_MISSION_ID"],
+		AttemptID: env["ZCL_ATTEMPT_ID"],
+		OutDir:    pm.OutDirAbs,
+		Details: map[string]any{
+			"ok":               ar.OK,
+			"runnerErrorCode":  ar.RunnerErrorCode,
+			"autoFeedback":     ar.AutoFeedback,
+			"autoFeedbackCode": ar.AutoFeedbackCode,
+			"finishOk":         ar.Finish.OK,
+		},
+	})
+}
+
+func applySuiteRunRunnerCwdCleanup(cleanupRunnerCwd func(bool) error, harnessErr *bool, ar *suiteRunAttemptResult, errWriter io.Writer) {
+	if cleanupRunnerCwd == nil {
+		return
+	}
+	if err := cleanupRunnerCwd(ar.OK); err != nil {
+		*harnessErr = true
+		if ar.RunnerErrorCode == "" {
+			ar.RunnerErrorCode = codeIO
+		}
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	}
 }
 
 func copyStringMap(in map[string]string) map[string]string {
@@ -1211,11 +1573,16 @@ func sortedEnvKeys(m map[string]string) []string {
 }
 
 func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
-	if errWriter == nil {
-		errWriter = r.Stderr
-	}
-	now := r.Now()
-	ctx, cancel, timedOut := attemptCtxForDeadline(now, pm.OutDirAbs)
+	return runSuiteRunnerImpl(r, pm, env, runnerCmd, runnerArgs, stdoutTB, stderrTB, ar, errWriter)
+}
+
+func runSuiteRunnerImpl(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	return runSuiteRunnerCore(r, pm, env, runnerCmd, runnerArgs, stdoutTB, stderrTB, ar, errWriter)
+}
+
+func runSuiteRunnerCore(r Runner, pm planner.PlannedMission, env map[string]string, runnerCmd string, runnerArgs []string, stdoutTB *tailBuffer, stderrTB *tailBuffer, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	errWriter = defaultSuiteRunErrWriter(errWriter, r.Stderr)
+	ctx, cancel, timedOut := attemptCtxForDeadline(r.Now(), pm.OutDirAbs)
 	if cancel != nil {
 		defer cancel()
 	}
@@ -1223,35 +1590,54 @@ func runSuiteRunner(r Runner, pm planner.PlannedMission, env map[string]string, 
 		ar.RunnerErrorCode = codeTimeout
 		return false
 	}
-
 	fmt.Fprintf(errWriter, "suite run: mission=%s attempt=%s runner=%s\n", pm.MissionID, pm.AttemptID, filepath.Base(runnerCmd))
 
+	cmd := buildSuiteRunRunnerCommand(ctx, env, runnerCmd, runnerArgs, errWriter, stdoutTB, stderrTB)
+	err := cmd.Run()
+	setSuiteRunRunnerExitCode(ar, cmd, err)
+	return classifySuiteRunRunnerExecution(err, ctx, ar)
+}
+
+func defaultSuiteRunErrWriter(errWriter io.Writer, fallback io.Writer) io.Writer {
+	if errWriter != nil {
+		return errWriter
+	}
+	return fallback
+}
+
+func buildSuiteRunRunnerCommand(ctx context.Context, env map[string]string, runnerCmd string, runnerArgs []string, errWriter io.Writer, stdoutTB *tailBuffer, stderrTB *tailBuffer) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, runnerCmd, runnerArgs...)
 	cmd.Env = mergeEnviron(os.Environ(), env)
 	cmd.Stdin = os.Stdin
 	if stdoutTB != nil && stderrTB != nil {
 		cmd.Stdout = io.MultiWriter(errWriter, stdoutTB)
 		cmd.Stderr = io.MultiWriter(errWriter, stderrTB)
-	} else {
-		cmd.Stdout = errWriter
-		cmd.Stderr = errWriter
+		return cmd
 	}
+	cmd.Stdout = errWriter
+	cmd.Stderr = errWriter
+	return cmd
+}
 
-	err := cmd.Run()
+func setSuiteRunRunnerExitCode(ar *suiteRunAttemptResult, cmd *exec.Cmd, runErr error) {
 	if cmd.ProcessState != nil {
 		ec := cmd.ProcessState.ExitCode()
 		ar.RunnerExitCode = &ec
-	} else if err == nil {
+		return
+	}
+	if runErr == nil {
 		ec := 0
 		ar.RunnerExitCode = &ec
 	}
+}
 
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+func classifySuiteRunRunnerExecution(runErr error, ctx context.Context, ar *suiteRunAttemptResult) bool {
+	if runErr != nil {
+		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			ar.RunnerErrorCode = codeTimeout
 			return true
 		}
-		if isStartFailure(err) {
+		if isStartFailure(runErr) {
 			ar.RunnerErrorCode = codeSpawn
 			return true
 		}
@@ -1362,46 +1748,87 @@ func buildNativeAttemptScheduler(strategy native.StrategyID, defaultParallel int
 }
 
 func (s *nativeAttemptScheduler) Acquire(ctx context.Context) error {
+	return s.acquireImpl(ctx)
+}
+
+func (s *nativeAttemptScheduler) acquireImpl(ctx context.Context) error {
+	return s.acquireCore(ctx)
+}
+
+func (s *nativeAttemptScheduler) acquireCore(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if s.sem != nil {
-		select {
-		case s.sem <- struct{}{}:
-		default:
-			native.RecordHealth(s.strategy, native.HealthSchedulerWait)
-			select {
-			case s.sem <- struct{}{}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	acquired, err := s.acquireSemaphore(ctx)
+	if err != nil {
+		return err
 	}
+	return s.waitForStartSlot(ctx, acquired)
+}
+
+func (s *nativeAttemptScheduler) acquireSemaphore(ctx context.Context) (bool, error) {
+	if s.sem == nil {
+		return false, nil
+	}
+	select {
+	case s.sem <- struct{}{}:
+		return true, nil
+	default:
+		native.RecordHealth(s.strategy, native.HealthSchedulerWait)
+	}
+	select {
+	case s.sem <- struct{}{}:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (s *nativeAttemptScheduler) waitForStartSlot(ctx context.Context, releaseOnCancel bool) error {
 	if s.minStartInterval <= 0 {
 		return nil
 	}
+	wait := s.nextStartWaitDuration()
+	if wait <= 0 {
+		s.markNextAllowedStart()
+		return nil
+	}
+	native.RecordHealth(s.strategy, native.HealthSchedulerWait)
+	if err := waitWithContext(ctx, wait); err != nil {
+		if releaseOnCancel {
+			s.Release()
+		}
+		return err
+	}
+	s.markNextAllowedStart()
+	return nil
+}
+
+func (s *nativeAttemptScheduler) nextStartWaitDuration() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	if now.Before(s.nextAllowedStartUTC) {
-		wait := time.Until(s.nextAllowedStartUTC)
-		native.RecordHealth(s.strategy, native.HealthSchedulerWait)
-		timer := time.NewTimer(wait)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if s.sem != nil {
-				select {
-				case <-s.sem:
-				default:
-				}
-			}
-			return ctx.Err()
-		}
+		return time.Until(s.nextAllowedStartUTC)
 	}
+	return 0
+}
+
+func (s *nativeAttemptScheduler) markNextAllowedStart() {
+	s.mu.Lock()
 	s.nextAllowedStartUTC = time.Now().UTC().Add(s.minStartInterval)
-	return nil
+	s.mu.Unlock()
+}
+
+func waitWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *nativeAttemptScheduler) Release() {
@@ -1427,6 +1854,14 @@ func parsePositiveIntEnv(key string, fallback int) int {
 }
 
 func resolveSuiteRunRunnerCwdPolicy(extraAttemptEnv map[string]string) (suiteRunRunnerCwdPolicy, error) {
+	return resolveSuiteRunRunnerCwdPolicyImpl(extraAttemptEnv)
+}
+
+func resolveSuiteRunRunnerCwdPolicyImpl(extraAttemptEnv map[string]string) (suiteRunRunnerCwdPolicy, error) {
+	return resolveSuiteRunRunnerCwdPolicyCore(extraAttemptEnv)
+}
+
+func resolveSuiteRunRunnerCwdPolicyCore(extraAttemptEnv map[string]string) (suiteRunRunnerCwdPolicy, error) {
 	policy := suiteRunRunnerCwdPolicy{
 		Mode:   campaign.RunnerCwdModeInherit,
 		Retain: campaign.RunnerCwdRetainNever,
@@ -1434,110 +1869,177 @@ func resolveSuiteRunRunnerCwdPolicy(extraAttemptEnv map[string]string) (suiteRun
 	if len(extraAttemptEnv) == 0 {
 		return policy, nil
 	}
-	if rawMode := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdMode])); rawMode != "" {
-		policy.Mode = rawMode
-	}
+	policy.Mode = chooseSuiteRunRunnerCwdMode(extraAttemptEnv)
 	if !isValidSuiteRunRunnerCwdMode(policy.Mode) {
 		return suiteRunRunnerCwdPolicy{}, fmt.Errorf("invalid %s (expected %s|%s)", suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeInherit, campaign.RunnerCwdModeTempEmptyPerAttempt)
 	}
-	policy.BasePath = strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdBasePath])
-	if rawRetain := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdRetain])); rawRetain != "" {
-		policy.Retain = rawRetain
-	}
+	policy.Retain = chooseSuiteRunRunnerCwdRetain(extraAttemptEnv)
 	if !isValidSuiteRunRunnerCwdRetain(policy.Retain) {
 		return suiteRunRunnerCwdPolicy{}, fmt.Errorf("invalid %s (expected %s|%s|%s)", suiteRunEnvRunnerCwdRetain, campaign.RunnerCwdRetainNever, campaign.RunnerCwdRetainOnFailure, campaign.RunnerCwdRetainAlways)
 	}
-	if policy.BasePath != "" {
-		base := policy.BasePath
-		if !filepath.IsAbs(base) {
-			abs, err := filepath.Abs(base)
-			if err != nil {
-				return suiteRunRunnerCwdPolicy{}, fmt.Errorf("resolve %s: %w", suiteRunEnvRunnerCwdBasePath, err)
-			}
-			base = abs
-		}
-		policy.BasePath = filepath.Clean(base)
+	basePath, err := normalizeSuiteRunRunnerCwdBasePath(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdBasePath]))
+	if err != nil {
+		return suiteRunRunnerCwdPolicy{}, err
 	}
-	if policy.Mode == campaign.RunnerCwdModeInherit {
-		if policy.BasePath != "" {
-			return suiteRunRunnerCwdPolicy{}, fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdBasePath, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
-		}
-		if policy.Retain != campaign.RunnerCwdRetainNever {
-			return suiteRunRunnerCwdPolicy{}, fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdRetain, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
-		}
+	policy.BasePath = basePath
+	if err := validateSuiteRunRunnerCwdPolicyShape(policy); err != nil {
+		return suiteRunRunnerCwdPolicy{}, err
 	}
 	return policy, nil
 }
 
+func chooseSuiteRunRunnerCwdMode(extraAttemptEnv map[string]string) string {
+	rawMode := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdMode]))
+	if rawMode != "" {
+		return rawMode
+	}
+	return campaign.RunnerCwdModeInherit
+}
+
+func chooseSuiteRunRunnerCwdRetain(extraAttemptEnv map[string]string) string {
+	rawRetain := strings.ToLower(strings.TrimSpace(extraAttemptEnv[suiteRunEnvRunnerCwdRetain]))
+	if rawRetain != "" {
+		return rawRetain
+	}
+	return campaign.RunnerCwdRetainNever
+}
+
+func normalizeSuiteRunRunnerCwdBasePath(basePath string) (string, error) {
+	if basePath == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(basePath) {
+		abs, err := filepath.Abs(basePath)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: %w", suiteRunEnvRunnerCwdBasePath, err)
+		}
+		basePath = abs
+	}
+	return filepath.Clean(basePath), nil
+}
+
+func validateSuiteRunRunnerCwdPolicyShape(policy suiteRunRunnerCwdPolicy) error {
+	if policy.Mode != campaign.RunnerCwdModeInherit {
+		return nil
+	}
+	if policy.BasePath != "" {
+		return fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdBasePath, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
+	}
+	if policy.Retain != campaign.RunnerCwdRetainNever {
+		return fmt.Errorf("%s requires %s=%s", suiteRunEnvRunnerCwdRetain, suiteRunEnvRunnerCwdMode, campaign.RunnerCwdModeTempEmptyPerAttempt)
+	}
+	return nil
+}
+
 func prepareSuiteRunAttemptStartCwd(pm planner.PlannedMission, policy suiteRunRunnerCwdPolicy) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
-	mode := strings.ToLower(strings.TrimSpace(policy.Mode))
-	if mode == "" {
-		mode = campaign.RunnerCwdModeInherit
-	}
-	retain := strings.ToLower(strings.TrimSpace(policy.Retain))
-	if retain == "" {
-		retain = campaign.RunnerCwdRetainNever
-	}
+	return prepareSuiteRunAttemptStartCwdImpl(pm, policy)
+}
+
+func prepareSuiteRunAttemptStartCwdImpl(pm planner.PlannedMission, policy suiteRunRunnerCwdPolicy) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
+	return prepareSuiteRunAttemptStartCwdCore(pm, policy)
+}
+
+func prepareSuiteRunAttemptStartCwdCore(pm planner.PlannedMission, policy suiteRunRunnerCwdPolicy) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
+	mode := normalizeSuiteRunRunnerCwdMode(policy.Mode)
+	retain := normalizeSuiteRunRunnerCwdRetain(policy.Retain)
 	switch mode {
 	case campaign.RunnerCwdModeInherit:
-		cwd, err := os.Getwd()
-		if err != nil {
-			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("resolve inherited runner cwd: %w", err)
-		}
-		return suiteRunAttemptRuntimeContext{
-			StartCwdMode:   mode,
-			StartCwd:       strings.TrimSpace(cwd),
-			StartCwdRetain: retain,
-		}, nil, nil
+		return prepareSuiteRunInheritedCwd(retain)
 	case campaign.RunnerCwdModeTempEmptyPerAttempt:
-		basePath := strings.TrimSpace(policy.BasePath)
-		if basePath == "" {
-			basePath = os.TempDir()
-		}
-		if !filepath.IsAbs(basePath) {
-			abs, err := filepath.Abs(basePath)
-			if err != nil {
-				return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("resolve runner cwd base path: %w", err)
-			}
-			basePath = abs
-		}
-		basePath = filepath.Clean(basePath)
-		if err := os.MkdirAll(basePath, 0o700); err != nil {
-			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("create runner cwd base path: %w", err)
-		}
-		prefix := "zcl-cwd-"
-		if attemptID := ids.SanitizeComponent(strings.TrimSpace(pm.AttemptID)); attemptID != "" {
-			prefix = "zcl-cwd-" + attemptID + "-"
-		}
-		startCwd, err := os.MkdirTemp(basePath, prefix)
-		if err != nil {
-			return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("create runner cwd temp dir: %w", err)
-		}
-		cleanup := func(attemptOK bool) error {
-			remove := false
-			switch retain {
-			case campaign.RunnerCwdRetainAlways:
-				remove = false
-			case campaign.RunnerCwdRetainOnFailure:
-				remove = attemptOK
-			default:
-				remove = true
-			}
-			if !remove {
-				return nil
-			}
-			if err := os.RemoveAll(startCwd); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("cleanup runner cwd %q: %w", startCwd, err)
-			}
-			return nil
-		}
-		return suiteRunAttemptRuntimeContext{
-			StartCwdMode:   mode,
-			StartCwd:       startCwd,
-			StartCwdRetain: retain,
-		}, cleanup, nil
+		return prepareSuiteRunTemporaryCwd(pm, policy.BasePath, mode, retain)
 	default:
 		return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("invalid runner cwd mode %q", mode)
+	}
+}
+
+func normalizeSuiteRunRunnerCwdMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return campaign.RunnerCwdModeInherit
+	}
+	return mode
+}
+
+func normalizeSuiteRunRunnerCwdRetain(retain string) string {
+	retain = strings.ToLower(strings.TrimSpace(retain))
+	if retain == "" {
+		return campaign.RunnerCwdRetainNever
+	}
+	return retain
+}
+
+func prepareSuiteRunInheritedCwd(retain string) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("resolve inherited runner cwd: %w", err)
+	}
+	return suiteRunAttemptRuntimeContext{
+		StartCwdMode:   campaign.RunnerCwdModeInherit,
+		StartCwd:       strings.TrimSpace(cwd),
+		StartCwdRetain: retain,
+	}, nil, nil
+}
+
+func prepareSuiteRunTemporaryCwd(pm planner.PlannedMission, basePath, mode, retain string) (suiteRunAttemptRuntimeContext, func(bool) error, error) {
+	absBasePath, err := ensureSuiteRunRunnerCwdBasePath(basePath)
+	if err != nil {
+		return suiteRunAttemptRuntimeContext{}, nil, err
+	}
+	startCwd, err := os.MkdirTemp(absBasePath, suiteRunRunnerCwdPrefix(pm))
+	if err != nil {
+		return suiteRunAttemptRuntimeContext{}, nil, fmt.Errorf("create runner cwd temp dir: %w", err)
+	}
+	cleanup := func(attemptOK bool) error {
+		if !shouldRemoveSuiteRunCwd(retain, attemptOK) {
+			return nil
+		}
+		if err := os.RemoveAll(startCwd); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("cleanup runner cwd %q: %w", startCwd, err)
+		}
+		return nil
+	}
+	return suiteRunAttemptRuntimeContext{
+		StartCwdMode:   mode,
+		StartCwd:       startCwd,
+		StartCwdRetain: retain,
+	}, cleanup, nil
+}
+
+func ensureSuiteRunRunnerCwdBasePath(basePath string) (string, error) {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" {
+		basePath = os.TempDir()
+	}
+	if !filepath.IsAbs(basePath) {
+		abs, err := filepath.Abs(basePath)
+		if err != nil {
+			return "", fmt.Errorf("resolve runner cwd base path: %w", err)
+		}
+		basePath = abs
+	}
+	basePath = filepath.Clean(basePath)
+	if err := os.MkdirAll(basePath, 0o700); err != nil {
+		return "", fmt.Errorf("create runner cwd base path: %w", err)
+	}
+	return basePath, nil
+}
+
+func suiteRunRunnerCwdPrefix(pm planner.PlannedMission) string {
+	prefix := "zcl-cwd-"
+	if attemptID := ids.SanitizeComponent(strings.TrimSpace(pm.AttemptID)); attemptID != "" {
+		prefix = "zcl-cwd-" + attemptID + "-"
+	}
+	return prefix
+}
+
+func shouldRemoveSuiteRunCwd(retain string, attemptOK bool) bool {
+	switch retain {
+	case campaign.RunnerCwdRetainAlways:
+		return false
+	case campaign.RunnerCwdRetainOnFailure:
+		return attemptOK
+	default:
+		return true
 	}
 }
 
@@ -1560,20 +2062,100 @@ func isValidSuiteRunRunnerCwdRetain(v string) bool {
 }
 
 func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
-	if errWriter == nil {
-		errWriter = r.Stderr
+	return runSuiteNativeRuntimeImpl(r, pm, env, opts, runtimeCtx, ar, errWriter)
+}
+
+func runSuiteNativeRuntimeImpl(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	return runSuiteNativeRuntimeCore(r, pm, env, opts, runtimeCtx, ar, errWriter)
+}
+
+func runSuiteNativeRuntimeCore(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, ar *suiteRunAttemptResult, errWriter io.Writer) bool {
+	errWriter = defaultSuiteRunErrWriter(errWriter, r.Stderr)
+	supervisor, emitNativeState := newSuiteNativeStateEmitter(r, pm, env, opts)
+	emitNativeState(nativeStateQueued, true, nil)
+
+	setup, ok, harnessErr := prepareSuiteNativeRuntimeSetup(r, pm, env, opts, ar, errWriter, emitNativeState)
+	if !ok {
+		return harnessErr
 	}
+	defer setup.cleanup()
+
+	sess, ok, harnessErr := startSuiteNativeSession(setup, pm, env, opts, ar, emitNativeState)
+	if !ok {
+		return harnessErr
+	}
+	defer closeSuiteNativeSession(sess, opts.NativeSelection.Selected)
+
+	listener, ok, harnessErr := addSuiteNativeListener(sess, setup.envTrace, opts.NativeSelection.Selected, ar, emitNativeState)
+	if !ok {
+		return harnessErr
+	}
+	defer removeSuiteNativeListener(sess, listener.listenerID)
+
+	thread, turn, ok, harnessErr := startSuiteNativeThreadTurn(setup.ctx, sess, pm, opts, runtimeCtx, ar, emitNativeState)
+	if !ok {
+		return harnessErr
+	}
+	if !writeSuiteNativeRunnerRef(pm, env, opts, sess, thread, ar, errWriter, emitNativeState) {
+		return true
+	}
+
+	resultCollector := newNativeResultCollector()
+	observeSuiteNativeEvents(setup.ctx, sess, thread, turn, listener.events, resultCollector, opts, ar, emitNativeState)
+	if err := listener.traceState.Err(); err != nil {
+		return failSuiteNativeTraceAppend(ar, errWriter, err, emitNativeState)
+	}
+	return finalizeSuiteNativeRun(setup.now, setup.envTrace, supervisor, pm, turn, resultCollector, ar, emitNativeState, errWriter)
+}
+
+type suiteNativeRuntimeSetup struct {
+	now      time.Time
+	ctx      context.Context
+	cleanup  func()
+	rt       native.Runtime
+	envTrace trace.Env
+}
+
+type suiteNativeRuntimeListener struct {
+	listenerID string
+	events     chan native.Event
+	traceState *suiteNativeTraceState
+}
+
+type suiteNativeTraceState struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (s *suiteNativeTraceState) Set(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err == nil {
+		s.err = err
+	}
+}
+
+func (s *suiteNativeTraceState) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func newSuiteNativeStateEmitter(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts) (*nativeAttemptSupervisor, func(state nativeAttemptState, force bool, details map[string]any)) {
 	supervisor := newNativeAttemptSupervisor()
-	emitNativeState := func(state nativeAttemptState, force bool, details map[string]any) {
+	emit := func(state nativeAttemptState, force bool, details map[string]any) {
 		if !force && !supervisor.Transition(state) {
 			return
 		}
 		if opts.Progress == nil {
 			return
 		}
-		d := map[string]any{"state": string(state)}
+		payload := map[string]any{"state": string(state)}
 		for k, v := range details {
-			d[k] = v
+			payload[k] = v
 		}
 		_ = opts.Progress.Emit(suiteRunProgressEvent{
 			TS:        r.Now().UTC().Format(time.RFC3339Nano),
@@ -1583,73 +2165,57 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 			MissionID: env["ZCL_MISSION_ID"],
 			AttemptID: env["ZCL_ATTEMPT_ID"],
 			OutDir:    pm.OutDirAbs,
-			Details:   d,
+			Details:   payload,
 		})
 	}
-	emitNativeState(nativeStateQueued, true, nil)
+	return supervisor, emit
+}
 
-	now := r.Now()
-	if _, err := attempt.EnsureTimeoutAnchor(now, pm.OutDirAbs); err != nil {
-		ar.RunnerErrorCode = codeIO
-		ec := 1
-		ar.RunnerExitCode = &ec
+func prepareSuiteNativeRuntimeSetup(r Runner, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, ar *suiteRunAttemptResult, errWriter io.Writer, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) (suiteNativeRuntimeSetup, bool, bool) {
+	setup := suiteNativeRuntimeSetup{
+		now: r.Now(),
+	}
+	if _, err := attempt.EnsureTimeoutAnchor(setup.now, pm.OutDirAbs); err != nil {
 		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "timeout_anchor_failed",
-			"code":   ar.RunnerErrorCode,
-		})
-		return true
+		emitSuiteNativeFailure(ar, codeIO, emitNativeState, "timeout_anchor_failed")
+		return setup, false, true
 	}
-	ctx, cancel, timedOut := attemptCtxForDeadline(now, pm.OutDirAbs)
-	if cancel != nil {
-		defer cancel()
-	}
+	ctx, cancel, timedOut := attemptCtxForDeadline(setup.now, pm.OutDirAbs)
 	if timedOut {
-		ar.RunnerErrorCode = codeRuntimeStall
-		ec := 1
-		ar.RunnerExitCode = &ec
-		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "attempt_deadline_exceeded",
-			"code":   ar.RunnerErrorCode,
-		})
-		return false
+		emitSuiteNativeFailure(ar, codeRuntimeStall, emitNativeState, "attempt_deadline_exceeded")
+		return setup, false, false
 	}
+	releaseScheduler := func() {}
 	if opts.NativeScheduler != nil {
 		if err := opts.NativeScheduler.Acquire(ctx); err != nil {
-			ar.RunnerErrorCode = codeRuntimeStall
-			ec := 1
-			ar.RunnerExitCode = &ec
-			emitNativeState(nativeStateFailed, false, map[string]any{
-				"reason": "scheduler_acquire_timeout",
-				"code":   ar.RunnerErrorCode,
-			})
-			return false
+			if cancel != nil {
+				cancel()
+			}
+			emitSuiteNativeFailure(ar, codeRuntimeStall, emitNativeState, "scheduler_acquire_timeout")
+			return setup, false, false
 		}
-		defer opts.NativeScheduler.Release()
+		releaseScheduler = opts.NativeScheduler.Release
 	}
-	rt := opts.NativeSelection.Runtime
-	if rt == nil {
-		ar.RunnerErrorCode = codeUsage
-		ec := 1
-		ar.RunnerExitCode = &ec
-		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "runtime_not_selected",
-			"code":   ar.RunnerErrorCode,
-		})
-		return true
+	setup.ctx = ctx
+	setup.cleanup = func() {
+		releaseScheduler()
+		if cancel != nil {
+			cancel()
+		}
 	}
-	envTrace := trace.Env{
-		RunID:     env["ZCL_RUN_ID"],
-		SuiteID:   env["ZCL_SUITE_ID"],
-		MissionID: env["ZCL_MISSION_ID"],
-		AttemptID: env["ZCL_ATTEMPT_ID"],
-		AgentID:   env["ZCL_AGENT_ID"],
-		OutDirAbs: env["ZCL_OUT_DIR"],
-		TmpDirAbs: env["ZCL_TMP_DIR"],
+	setup.rt = opts.NativeSelection.Runtime
+	if setup.rt == nil {
+		emitSuiteNativeFailure(ar, codeUsage, emitNativeState, "runtime_not_selected")
+		return setup, false, true
 	}
+	setup.envTrace = suiteRunTraceEnv(env, strings.TrimSpace(env["ZCL_OUT_DIR"]))
+	return setup, true, false
+}
+
+func startSuiteNativeSession(setup suiteNativeRuntimeSetup, pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) (native.Session, bool, bool) {
 	emitNativeState(nativeStateSessionStart, false, nil)
 	native.RecordHealth(opts.NativeSelection.Selected, native.HealthSessionStart)
-	sess, err := rt.StartSession(ctx, native.SessionOptions{
+	sess, err := setup.rt.StartSession(setup.ctx, native.SessionOptions{
 		RunID:      env["ZCL_RUN_ID"],
 		SuiteID:    env["ZCL_SUITE_ID"],
 		MissionID:  env["ZCL_MISSION_ID"],
@@ -1667,22 +2233,15 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 			"reason": "session_start_failed",
 			"code":   ar.RunnerErrorCode,
 		})
-		_ = trace.AppendNativeRuntimeEvent(now, envTrace, trace.NativeRuntimeEvent{
+		_ = trace.AppendNativeRuntimeEvent(setup.now, setup.envTrace, trace.NativeRuntimeEvent{
 			RuntimeID: string(opts.NativeSelection.Selected),
 			EventName: "codex/event/session_start_failed",
 			Code:      ar.RunnerErrorCode,
 			Partial:   true,
 		})
-		return false
+		return nil, false, false
 	}
-	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer closeCancel()
-		native.RecordHealth(opts.NativeSelection.Selected, native.HealthSessionClosed)
-		_ = sess.Close(closeCtx)
-	}()
-
-	_ = trace.AppendNativeRuntimeEvent(now, envTrace, trace.NativeRuntimeEvent{
+	_ = trace.AppendNativeRuntimeEvent(setup.now, setup.envTrace, trace.NativeRuntimeEvent{
 		RuntimeID: string(opts.NativeSelection.Selected),
 		SessionID: sess.SessionID(),
 		EventName: "codex/event/session_started",
@@ -1690,70 +2249,85 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 	emitNativeState(nativeStateSessionReady, false, map[string]any{
 		"sessionId": sess.SessionID(),
 	})
+	return sess, true, false
+}
 
-	var (
-		traceErrMu sync.Mutex
-		traceErr   error
-	)
+func closeSuiteNativeSession(sess native.Session, strategy native.StrategyID) {
+	if sess == nil {
+		return
+	}
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer closeCancel()
+	native.RecordHealth(strategy, native.HealthSessionClosed)
+	_ = sess.Close(closeCtx)
+}
+
+func addSuiteNativeListener(sess native.Session, envTrace trace.Env, strategy native.StrategyID, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) (suiteNativeRuntimeListener, bool, bool) {
+	state := &suiteNativeTraceState{}
 	events := make(chan native.Event, 128)
-	listenerID, lerr := sess.AddListener(func(ev native.Event) {
-		if err := trace.AppendNativeRuntimeEvent(ev.ReceivedAt, envTrace, trace.NativeRuntimeEvent{
-			RuntimeID: string(opts.NativeSelection.Selected),
+	listenerID, err := sess.AddListener(func(ev native.Event) {
+		if appendErr := trace.AppendNativeRuntimeEvent(ev.ReceivedAt, envTrace, trace.NativeRuntimeEvent{
+			RuntimeID: string(strategy),
 			SessionID: sess.SessionID(),
 			ThreadID:  ev.ThreadID,
 			TurnID:    ev.TurnID,
 			CallID:    ev.CallID,
 			EventName: ev.Name,
 			Payload:   ev.Payload,
-		}); err != nil {
-			traceErrMu.Lock()
-			if traceErr == nil {
-				traceErr = err
-			}
-			traceErrMu.Unlock()
+		}); appendErr != nil {
+			state.Set(appendErr)
 		}
 		select {
 		case events <- ev:
 		default:
 		}
 	})
-	if lerr != nil {
-		native.RecordHealth(opts.NativeSelection.Selected, native.HealthListenerFailure)
-		ar.RunnerErrorCode = nativeErrorCode(lerr)
+	if err != nil {
+		native.RecordHealth(strategy, native.HealthListenerFailure)
+		ar.RunnerErrorCode = nativeErrorCode(err)
+		recordNativeFailureHealth(strategy, ar.RunnerErrorCode)
 		ec := 1
 		ar.RunnerExitCode = &ec
-		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 		emitNativeState(nativeStateFailed, false, map[string]any{
 			"reason": "listener_add_failed",
 			"code":   ar.RunnerErrorCode,
 		})
-		return true
+		return suiteNativeRuntimeListener{}, false, true
 	}
-	defer func() {
-		_ = sess.RemoveListener(listenerID)
-	}()
+	return suiteNativeRuntimeListener{
+		listenerID: listenerID,
+		events:     events,
+		traceState: state,
+	}, true, false
+}
 
-	threadReq := native.ThreadStartRequest{
+func removeSuiteNativeListener(sess native.Session, listenerID string) {
+	if sess == nil || strings.TrimSpace(listenerID) == "" {
+		return
+	}
+	_ = sess.RemoveListener(listenerID)
+}
+
+func startSuiteNativeThreadTurn(ctx context.Context, sess native.Session, pm planner.PlannedMission, opts suiteRunExecOpts, runtimeCtx suiteRunAttemptRuntimeContext, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) (native.ThreadHandle, native.TurnHandle, bool, bool) {
+	thread, err := sess.StartThread(ctx, native.ThreadStartRequest{
 		Model:                strings.TrimSpace(opts.NativeModel),
 		ModelReasoningEffort: strings.ToLower(strings.TrimSpace(opts.ReasoningEffort)),
 		ModelReasoningPolicy: strings.ToLower(strings.TrimSpace(opts.ReasoningPolicy)),
 		Cwd:                  strings.TrimSpace(runtimeCtx.StartCwd),
-	}
-	thread, err := sess.StartThread(ctx, threadReq)
+	})
 	if err != nil {
 		ar.RunnerErrorCode = nativeErrorCode(err)
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 		ec := 1
 		ar.RunnerExitCode = &ec
-		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 		emitNativeState(nativeStateFailed, false, map[string]any{
 			"reason": "thread_start_failed",
 			"code":   ar.RunnerErrorCode,
 		})
-		return false
+		return native.ThreadHandle{}, native.TurnHandle{}, false, false
 	}
-	emitNativeState(nativeStateThreadStarted, false, map[string]any{
-		"threadId": thread.ThreadID,
-	})
+	emitNativeState(nativeStateThreadStarted, false, map[string]any{"threadId": thread.ThreadID})
+
 	prompt := strings.TrimSpace(pm.Prompt)
 	if prompt == "" {
 		prompt = "complete mission and provide final result"
@@ -1764,78 +2338,39 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 	})
 	if err != nil {
 		ar.RunnerErrorCode = nativeErrorCode(err)
+		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 		ec := 1
 		ar.RunnerExitCode = &ec
-		recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
 		emitNativeState(nativeStateFailed, false, map[string]any{
 			"reason": "turn_start_failed",
 			"code":   ar.RunnerErrorCode,
 		})
+		return native.ThreadHandle{}, native.TurnHandle{}, false, false
+	}
+	emitNativeState(nativeStateTurnStarted, false, map[string]any{"turnId": turn.TurnID})
+	return thread, turn, true, false
+}
+
+func writeSuiteNativeRunnerRef(pm planner.PlannedMission, env map[string]string, opts suiteRunExecOpts, sess native.Session, thread native.ThreadHandle, ar *suiteRunAttemptResult, errWriter io.Writer, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) bool {
+	if err := writeNativeRunnerRef(pm.OutDirAbs, env, opts.NativeSelection.Selected, sess.SessionID(), thread.ThreadID); err != nil {
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitSuiteNativeFailure(ar, codeIO, emitNativeState, "runner_ref_write_failed")
 		return false
 	}
-	emitNativeState(nativeStateTurnStarted, false, map[string]any{
-		"turnId": turn.TurnID,
-	})
-	if err := writeNativeRunnerRef(pm.OutDirAbs, env, opts.NativeSelection.Selected, sess.SessionID(), thread.ThreadID); err != nil {
-		ar.RunnerErrorCode = codeIO
-		ec := 1
-		ar.RunnerExitCode = &ec
-		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "runner_ref_write_failed",
-			"code":   ar.RunnerErrorCode,
-		})
-		return true
-	}
+	return true
+}
 
-	resultCollector := newNativeResultCollector()
-	completed := false
-	for !completed {
+func observeSuiteNativeEvents(ctx context.Context, sess native.Session, thread native.ThreadHandle, turn native.TurnHandle, events <-chan native.Event, resultCollector *nativeResultCollector, opts suiteRunExecOpts, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) {
+	for completed := false; !completed; {
 		select {
 		case ev := <-events:
 			resultCollector.Observe(ev)
 			if nativeEventIsTurnCompleted(ev, turn.TurnID) {
-				emitNativeState(nativeStateTurnCompleted, false, map[string]any{
-					"turnId": turn.TurnID,
-				})
+				emitNativeState(nativeStateTurnCompleted, false, map[string]any{"turnId": turn.TurnID})
 				completed = true
 				continue
 			}
-			switch ev.Name {
-			case "codex/event/turn_failed":
-				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
-				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
-				emitNativeState(nativeStateFailed, false, map[string]any{
-					"reason": "turn_failed",
-					"code":   ar.RunnerErrorCode,
-				})
-				completed = true
-			case "codex/event/error":
-				if ar.RunnerErrorCode == "" {
-					ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
-					recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
-					emitNativeState(nativeStateFailed, false, map[string]any{
-						"reason": "runtime_error_event",
-						"code":   ar.RunnerErrorCode,
-					})
-				}
-			case "codex/event/stream_disconnected":
-				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeStreamDisconnect)
-				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
-				emitNativeState(nativeStateFailed, false, map[string]any{
-					"reason": "stream_disconnected",
-					"code":   ar.RunnerErrorCode,
-				})
-				completed = true
-			case "codex/event/runtime_crashed":
-				ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeCrash)
-				recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
-				emitNativeState(nativeStateFailed, false, map[string]any{
-					"reason": "runtime_crashed",
-					"code":   ar.RunnerErrorCode,
-				})
-				completed = true
-			}
+			completed = observeSuiteNativeEventFailure(ev, opts.NativeSelection.Selected, ar, emitNativeState, completed)
 		case <-ctx.Done():
 			ar.RunnerErrorCode = codeRuntimeStall
 			recordNativeFailureHealth(opts.NativeSelection.Selected, ar.RunnerErrorCode)
@@ -1850,30 +2385,60 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 			completed = true
 		}
 	}
-	traceErrMu.Lock()
-	localTraceErr := traceErr
-	traceErrMu.Unlock()
-	if localTraceErr != nil {
-		ar.RunnerErrorCode = codeIO
-		ec := 1
-		ar.RunnerExitCode = &ec
-		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", localTraceErr.Error())
+}
+
+func observeSuiteNativeEventFailure(ev native.Event, strategy native.StrategyID, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any), completed bool) bool {
+	switch ev.Name {
+	case "codex/event/turn_failed":
+		ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
+		recordNativeFailureHealth(strategy, ar.RunnerErrorCode)
 		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "trace_append_failed",
+			"reason": "turn_failed",
 			"code":   ar.RunnerErrorCode,
 		})
 		return true
-	}
-	finalResult, resultSource, foundFinalResult := resultCollector.ResolveFinalResult()
-	if err := writeNativeResultProvenance(pm.OutDirAbs, resultCollector.Provenance(resultSource)); err != nil {
-		ar.RunnerErrorCode = codeIO
-		ec := 1
-		ar.RunnerExitCode = &ec
-		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	case "codex/event/error":
+		if ar.RunnerErrorCode == "" {
+			ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeToolFailed)
+			recordNativeFailureHealth(strategy, ar.RunnerErrorCode)
+			emitNativeState(nativeStateFailed, false, map[string]any{
+				"reason": "runtime_error_event",
+				"code":   ar.RunnerErrorCode,
+			})
+		}
+		return completed
+	case "codex/event/stream_disconnected":
+		ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeStreamDisconnect)
+		recordNativeFailureHealth(strategy, ar.RunnerErrorCode)
 		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "attempt_metadata_write_failed",
+			"reason": "stream_disconnected",
 			"code":   ar.RunnerErrorCode,
 		})
+		return true
+	case "codex/event/runtime_crashed":
+		ar.RunnerErrorCode = classifyNativeFailureCode(ev.Payload, codeRuntimeCrash)
+		recordNativeFailureHealth(strategy, ar.RunnerErrorCode)
+		emitNativeState(nativeStateFailed, false, map[string]any{
+			"reason": "runtime_crashed",
+			"code":   ar.RunnerErrorCode,
+		})
+		return true
+	default:
+		return completed
+	}
+}
+
+func failSuiteNativeTraceAppend(ar *suiteRunAttemptResult, errWriter io.Writer, err error, emitNativeState func(state nativeAttemptState, force bool, details map[string]any)) bool {
+	fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+	emitSuiteNativeFailure(ar, codeIO, emitNativeState, "trace_append_failed")
+	return true
+}
+
+func finalizeSuiteNativeRun(now time.Time, envTrace trace.Env, supervisor *nativeAttemptSupervisor, pm planner.PlannedMission, turn native.TurnHandle, resultCollector *nativeResultCollector, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any), errWriter io.Writer) bool {
+	finalResult, resultSource, foundFinalResult := resultCollector.ResolveFinalResult()
+	if err := writeNativeResultProvenance(pm.OutDirAbs, resultCollector.Provenance(resultSource)); err != nil {
+		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
+		emitSuiteNativeFailure(ar, codeIO, emitNativeState, "attempt_metadata_write_failed")
 		return true
 	}
 	if ar.RunnerErrorCode == "" && !foundFinalResult {
@@ -1886,30 +2451,26 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 			"reasoningItemsObserved":     resultCollector.ReasoningItemsObserved(),
 		})
 	}
-
-	if ar.RunnerErrorCode == "" {
-		ec := 0
-		ar.RunnerExitCode = &ec
-	} else {
-		ec := 1
-		ar.RunnerExitCode = &ec
-	}
-
-	feedbackPath := filepath.Join(pm.OutDirAbs, "feedback.json")
-	if fileExists(feedbackPath) {
+	setSuiteNativeRunnerExitCode(ar)
+	if fileExists(filepath.Join(pm.OutDirAbs, "feedback.json")) {
 		return false
 	}
+	return writeSuiteNativeAutoFeedback(now, envTrace, supervisor, turn.TurnID, finalResult, resultSource, ar, emitNativeState, errWriter)
+}
+
+func setSuiteNativeRunnerExitCode(ar *suiteRunAttemptResult) {
+	ec := 1
 	if ar.RunnerErrorCode == "" {
-		result := strings.TrimSpace(finalResult)
-		if err := feedback.Write(now, envTrace, feedback.WriteOpts{OK: true, Result: result}); err != nil {
-			ar.RunnerErrorCode = codeIO
-			ec := 1
-			ar.RunnerExitCode = &ec
+		ec = 0
+	}
+	ar.RunnerExitCode = &ec
+}
+
+func writeSuiteNativeAutoFeedback(now time.Time, envTrace trace.Env, supervisor *nativeAttemptSupervisor, turnID string, finalResult string, resultSource string, ar *suiteRunAttemptResult, emitNativeState func(state nativeAttemptState, force bool, details map[string]any), errWriter io.Writer) bool {
+	if ar.RunnerErrorCode == "" {
+		if err := feedback.Write(now, envTrace, feedback.WriteOpts{OK: true, Result: strings.TrimSpace(finalResult)}); err != nil {
 			fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-			emitNativeState(nativeStateFailed, false, map[string]any{
-				"reason": "feedback_write_failed",
-				"code":   ar.RunnerErrorCode,
-			})
+			emitSuiteNativeFailure(ar, codeIO, emitNativeState, "feedback_write_failed")
 			return true
 		}
 		ar.AutoFeedback = true
@@ -1920,11 +2481,10 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		})
 		return false
 	}
-
 	resultJSON, _ := store.CanonicalJSON(map[string]any{
 		"kind":   "runtime_failure",
 		"code":   ar.RunnerErrorCode,
-		"turnId": turn.TurnID,
+		"turnId": turnID,
 	})
 	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
 		OK:                   false,
@@ -1932,14 +2492,8 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		DecisionTags:         []string{schema.DecisionTagBlocked},
 		SkipSuiteResultShape: true,
 	}); err != nil {
-		ar.RunnerErrorCode = codeIO
-		ec := 1
-		ar.RunnerExitCode = &ec
 		fmt.Fprintf(errWriter, codeIO+": suite run: %s\n", err.Error())
-		emitNativeState(nativeStateFailed, false, map[string]any{
-			"reason": "feedback_write_failed",
-			"code":   ar.RunnerErrorCode,
-		})
+		emitSuiteNativeFailure(ar, codeIO, emitNativeState, "feedback_write_failed")
 		return true
 	}
 	ar.AutoFeedback = true
@@ -1950,6 +2504,16 @@ func runSuiteNativeRuntime(r Runner, pm planner.PlannedMission, env map[string]s
 		"state":        string(supervisor.State()),
 	})
 	return false
+}
+
+func emitSuiteNativeFailure(ar *suiteRunAttemptResult, code string, emitNativeState func(state nativeAttemptState, force bool, details map[string]any), reason string) {
+	ar.RunnerErrorCode = code
+	ec := 1
+	ar.RunnerExitCode = &ec
+	emitNativeState(nativeStateFailed, false, map[string]any{
+		"reason": reason,
+		"code":   ar.RunnerErrorCode,
+	})
 }
 
 func nativeErrorCode(err error) string {
@@ -2122,46 +2686,80 @@ func (c *nativeResultCollector) Observe(ev native.Event) {
 }
 
 func (c *nativeResultCollector) observePayload(eventName string, payload map[string]any) {
+	c.observePayloadImpl(eventName, payload)
+}
+
+func (c *nativeResultCollector) observePayloadImpl(eventName string, payload map[string]any) {
+	c.observePayloadCore(eventName, payload)
+}
+
+func (c *nativeResultCollector) observePayloadCore(eventName string, payload map[string]any) {
 	if len(payload) == 0 {
 		return
 	}
-	if nativePayloadIsTaskComplete(eventName, payload) {
-		if last := nativeFirstString(payload, "last_agent_message", "lastAgentMessage"); last != "" {
-			c.taskCompleteLastAgentMessage = last
-		}
-	}
-	if delta := extractNativeEventDeltaFromPayload(payload); delta != "" && nativePayloadIsAssistantDelta(eventName, payload) {
-		c.deltaFallback.WriteString(delta)
-	}
+	c.observeTaskCompletePayload(eventName, payload)
+	c.observeAssistantDeltaPayload(eventName, payload)
+	c.observeAssistantMessagePayload(eventName, payload)
+	c.observeReasoningPayload(payload)
+}
 
+func (c *nativeResultCollector) observeTaskCompletePayload(eventName string, payload map[string]any) {
+	if !nativePayloadIsTaskComplete(eventName, payload) {
+		return
+	}
+	if last := nativeFirstString(payload, "last_agent_message", "lastAgentMessage"); last != "" {
+		c.taskCompleteLastAgentMessage = last
+	}
+}
+
+func (c *nativeResultCollector) observeAssistantDeltaPayload(eventName string, payload map[string]any) {
+	delta := extractNativeEventDeltaFromPayload(payload)
+	if delta == "" || !nativePayloadIsAssistantDelta(eventName, payload) {
+		return
+	}
+	c.deltaFallback.WriteString(delta)
+}
+
+func (c *nativeResultCollector) observeAssistantMessagePayload(eventName string, payload map[string]any) {
 	text, phase, itemID, ok := nativeAssistantMessageFromPayload(eventName, payload)
-	if ok {
-		if phase != "" {
-			c.phaseAware = true
-		}
-		switch phase {
-		case "commentary":
-			if itemID != "" {
-				if !c.commentaryByItemID[itemID] {
-					c.commentaryByItemID[itemID] = true
-				}
-			} else {
-				c.commentaryWithoutItemID++
-			}
-		case "final_answer":
-			if strings.TrimSpace(text) != "" {
-				c.lastPhaseFinalAnswer = strings.TrimSpace(text)
-			}
+	if !ok {
+		return
+	}
+	if phase != "" {
+		c.phaseAware = true
+	}
+	switch phase {
+	case "commentary":
+		c.recordCommentaryItem(itemID)
+	case "final_answer":
+		trimmed := strings.TrimSpace(text)
+		if trimmed != "" {
+			c.lastPhaseFinalAnswer = trimmed
 		}
 	}
-	if itemID, ok := nativeReasoningItemFromPayload(payload); ok {
-		if itemID != "" {
-			if !c.reasoningByItemID[itemID] {
-				c.reasoningByItemID[itemID] = true
-			}
-		} else {
-			c.reasoningWithoutItemID++
-		}
+}
+
+func (c *nativeResultCollector) recordCommentaryItem(itemID string) {
+	if itemID == "" {
+		c.commentaryWithoutItemID++
+		return
+	}
+	if !c.commentaryByItemID[itemID] {
+		c.commentaryByItemID[itemID] = true
+	}
+}
+
+func (c *nativeResultCollector) observeReasoningPayload(payload map[string]any) {
+	itemID, ok := nativeReasoningItemFromPayload(payload)
+	if !ok {
+		return
+	}
+	if itemID == "" {
+		c.reasoningWithoutItemID++
+		return
+	}
+	if !c.reasoningByItemID[itemID] {
+		c.reasoningByItemID[itemID] = true
 	}
 }
 
@@ -2668,81 +3266,145 @@ func (e *missionResultTurnTooEarlyError) Error() string {
 }
 
 func decodeSuiteResultFeedback(raw []byte, minFinalTurn int) (feedback.WriteOpts, error) {
-	if minFinalTurn <= 0 {
-		minFinalTurn = campaign.DefaultMinResultTurn
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return feedback.WriteOpts{}, fmt.Errorf("invalid mission result json: %w", err)
-	}
-	rawOK, ok := obj["ok"]
-	if !ok {
-		return feedback.WriteOpts{}, fmt.Errorf("mission result requires boolean field \"ok\"")
-	}
-	okVal, ok := rawOK.(bool)
-	if !ok {
-		return feedback.WriteOpts{}, fmt.Errorf("mission result field \"ok\" must be boolean")
-	}
+	return decodeSuiteResultFeedbackImpl(raw, minFinalTurn)
+}
 
-	turnVal, hasTurn, err := parseMissionResultTurn(obj)
+func decodeSuiteResultFeedbackImpl(raw []byte, minFinalTurn int) (feedback.WriteOpts, error) {
+	return decodeSuiteResultFeedbackCore(raw, minFinalTurn)
+}
+
+func decodeSuiteResultFeedbackCore(raw []byte, minFinalTurn int) (feedback.WriteOpts, error) {
+	minFinalTurn = normalizeSuiteResultMinFinalTurn(minFinalTurn)
+	obj, err := decodeMissionResultObject(raw)
 	if err != nil {
 		return feedback.WriteOpts{}, err
 	}
-	if minFinalTurn > campaign.DefaultMinResultTurn {
-		if !hasTurn {
-			return feedback.WriteOpts{}, &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Missing: true}
-		}
-		if turnVal < minFinalTurn {
-			return feedback.WriteOpts{}, &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Actual: turnVal}
-		}
+	okVal, err := decodeMissionResultOK(obj)
+	if err != nil {
+		return feedback.WriteOpts{}, err
+	}
+	if err := validateMissionResultTurnFloor(obj, minFinalTurn); err != nil {
+		return feedback.WriteOpts{}, err
 	}
 
 	opts := feedback.WriteOpts{OK: okVal}
-	if tags, present := obj["decisionTags"]; present {
-		parsedTags, err := toStringSlice(tags)
-		if err != nil {
-			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"decisionTags\" must be string array")
-		}
-		opts.DecisionTags = parsedTags
+	if err := decodeMissionResultDecisionTags(&opts, obj); err != nil {
+		return feedback.WriteOpts{}, err
 	}
+	if err := decodeMissionResultBody(&opts, obj); err != nil {
+		return feedback.WriteOpts{}, err
+	}
+	if err := ensureMissionResultProof(&opts, obj); err != nil {
+		return feedback.WriteOpts{}, err
+	}
+	return opts, nil
+}
 
+func normalizeSuiteResultMinFinalTurn(minFinalTurn int) int {
+	if minFinalTurn <= 0 {
+		return campaign.DefaultMinResultTurn
+	}
+	return minFinalTurn
+}
+
+func decodeMissionResultObject(raw []byte) (map[string]any, error) {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("invalid mission result json: %w", err)
+	}
+	return obj, nil
+}
+
+func decodeMissionResultOK(obj map[string]any) (bool, error) {
+	rawOK, ok := obj["ok"]
+	if !ok {
+		return false, fmt.Errorf("mission result requires boolean field \"ok\"")
+	}
+	okVal, ok := rawOK.(bool)
+	if !ok {
+		return false, fmt.Errorf("mission result field \"ok\" must be boolean")
+	}
+	return okVal, nil
+}
+
+func validateMissionResultTurnFloor(obj map[string]any, minFinalTurn int) error {
+	turnVal, hasTurn, err := parseMissionResultTurn(obj)
+	if err != nil {
+		return err
+	}
+	if minFinalTurn <= campaign.DefaultMinResultTurn {
+		return nil
+	}
+	if !hasTurn {
+		return &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Missing: true}
+	}
+	if turnVal < minFinalTurn {
+		return &missionResultTurnTooEarlyError{RequiredMin: minFinalTurn, Actual: turnVal}
+	}
+	return nil
+}
+
+func decodeMissionResultDecisionTags(opts *feedback.WriteOpts, obj map[string]any) error {
+	tags, present := obj["decisionTags"]
+	if !present {
+		return nil
+	}
+	parsedTags, err := toStringSlice(tags)
+	if err != nil {
+		return fmt.Errorf("mission result field \"decisionTags\" must be string array")
+	}
+	opts.DecisionTags = parsedTags
+	return nil
+}
+
+func decodeMissionResultBody(opts *feedback.WriteOpts, obj map[string]any) error {
 	if rawResult, present := obj["result"]; present {
 		resultText, ok := rawResult.(string)
 		if !ok {
-			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"result\" must be string")
+			return fmt.Errorf("mission result field \"result\" must be string")
 		}
 		opts.Result = resultText
 	}
 	if rawResultJSON, present := obj["resultJson"]; present {
 		b, err := store.CanonicalJSON(rawResultJSON)
 		if err != nil {
-			return feedback.WriteOpts{}, fmt.Errorf("mission result field \"resultJson\" must be valid json")
+			return fmt.Errorf("mission result field \"resultJson\" must be valid json")
 		}
 		opts.ResultJSON = string(b)
 	}
 	if opts.Result != "" && opts.ResultJSON != "" {
-		return feedback.WriteOpts{}, fmt.Errorf("mission result cannot include both \"result\" and \"resultJson\"")
+		return fmt.Errorf("mission result cannot include both \"result\" and \"resultJson\"")
 	}
-	if opts.Result == "" && opts.ResultJSON == "" {
-		payload := map[string]any{}
-		for k, v := range obj {
-			switch strings.TrimSpace(k) {
-			case "ok", "decisionTags", "turn":
-				continue
-			default:
-				payload[k] = v
-			}
-		}
-		if len(payload) == 0 {
-			return feedback.WriteOpts{}, fmt.Errorf("mission result must include \"result\", \"resultJson\", or additional proof fields")
-		}
-		b, err := store.CanonicalJSON(payload)
-		if err != nil {
-			return feedback.WriteOpts{}, err
-		}
-		opts.ResultJSON = string(b)
+	return nil
+}
+
+func ensureMissionResultProof(opts *feedback.WriteOpts, obj map[string]any) error {
+	if opts.Result != "" || opts.ResultJSON != "" {
+		return nil
 	}
-	return opts, nil
+	payload := missionResultFallbackPayload(obj)
+	if len(payload) == 0 {
+		return fmt.Errorf("mission result must include \"result\", \"resultJson\", or additional proof fields")
+	}
+	b, err := store.CanonicalJSON(payload)
+	if err != nil {
+		return err
+	}
+	opts.ResultJSON = string(b)
+	return nil
+}
+
+func missionResultFallbackPayload(obj map[string]any) map[string]any {
+	payload := map[string]any{}
+	for k, v := range obj {
+		switch strings.TrimSpace(k) {
+		case "ok", "decisionTags", "turn":
+			continue
+		default:
+			payload[k] = v
+		}
+	}
+	return payload
 }
 
 func parseMissionResultTurn(obj map[string]any) (int, bool, error) {
@@ -2859,19 +3521,57 @@ func ensureAutoFeedbackTrace(now time.Time, envTrace trace.Env, op string, code 
 }
 
 func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *suiteRunAttemptResult, feedbackPolicy string) error {
+	return maybeWriteAutoFailureFeedbackImpl(now, env, ar, feedbackPolicy)
+}
+
+func maybeWriteAutoFailureFeedbackImpl(now time.Time, env map[string]string, ar *suiteRunAttemptResult, feedbackPolicy string) error {
+	return maybeWriteAutoFailureFeedbackCore(now, env, ar, feedbackPolicy)
+}
+
+func maybeWriteAutoFailureFeedbackCore(now time.Time, env map[string]string, ar *suiteRunAttemptResult, feedbackPolicy string) error {
+	outDir, shouldWrite, err := shouldWriteAutoFailureFeedback(env, feedbackPolicy)
+	if err != nil || !shouldWrite {
+		return err
+	}
+	envTrace := suiteRunTraceEnv(env, outDir)
+	code := autoFailureCode(*ar)
+	msg := autoFailureMessage(*ar)
+	if err := ensureAutoFailureTraceEvent(now, envTrace, code, msg); err != nil {
+		return err
+	}
+	resultJSON, err := autoFailureResultJSON(*ar, code)
+	if err != nil {
+		return err
+	}
+	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
+		OK:                   false,
+		ResultJSON:           resultJSON,
+		DecisionTags:         autoFailureDecisionTags(code, ar.RunnerErrorCode),
+		SkipSuiteResultShape: true,
+	}); err != nil {
+		return err
+	}
+	ar.AutoFeedback = true
+	ar.AutoFeedbackCode = code
+	return nil
+}
+
+func shouldWriteAutoFailureFeedback(env map[string]string, feedbackPolicy string) (string, bool, error) {
 	outDir := strings.TrimSpace(env["ZCL_OUT_DIR"])
 	if outDir == "" {
-		return fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
+		return "", false, fmt.Errorf("suite run: missing ZCL_OUT_DIR for auto-feedback")
 	}
-	feedbackPath := filepath.Join(outDir, "feedback.json")
-	if fileExists(feedbackPath) {
-		return nil
+	if fileExists(filepath.Join(outDir, "feedback.json")) {
+		return outDir, false, nil
 	}
 	if schema.NormalizeFeedbackPolicyV1(feedbackPolicy) == schema.FeedbackPolicyStrictV1 {
-		return nil
+		return outDir, false, nil
 	}
+	return outDir, true, nil
+}
 
-	envTrace := trace.Env{
+func suiteRunTraceEnv(env map[string]string, outDir string) trace.Env {
+	return trace.Env{
 		RunID:     env["ZCL_RUN_ID"],
 		SuiteID:   env["ZCL_SUITE_ID"],
 		MissionID: env["ZCL_MISSION_ID"],
@@ -2880,7 +3580,9 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 		OutDirAbs: outDir,
 		TmpDirAbs: env["ZCL_TMP_DIR"],
 	}
-	code := autoFailureCode(*ar)
+}
+
+func autoFailureMessage(ar suiteRunAttemptResult) string {
 	msg := "canonical feedback missing after suite runner completion"
 	if ar.RunnerErrorCode != "" {
 		msg += " runnerErrorCode=" + ar.RunnerErrorCode
@@ -2888,24 +3590,28 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 	if ar.RunnerExitCode != nil {
 		msg += fmt.Sprintf(" runnerExitCode=%d", *ar.RunnerExitCode)
 	}
+	return msg
+}
 
-	tracePath := filepath.Join(outDir, "tool.calls.jsonl")
+func ensureAutoFailureTraceEvent(now time.Time, envTrace trace.Env, code string, msg string) error {
+	tracePath := filepath.Join(envTrace.OutDirAbs, "tool.calls.jsonl")
 	nonEmpty, err := store.JSONLHasNonEmptyLine(tracePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if !nonEmpty {
-		if err := trace.AppendCLIRunEvent(now, envTrace, []string{"zcl", "suite-runner-auto-feedback"}, trace.ResultForTrace{
-			SpawnError: code,
-			DurationMs: 0,
-			OutBytes:   0,
-			ErrBytes:   int64(len(msg)),
-			ErrPreview: msg,
-		}); err != nil {
-			return err
-		}
+	if nonEmpty {
+		return nil
 	}
+	return trace.AppendCLIRunEvent(now, envTrace, []string{"zcl", "suite-runner-auto-feedback"}, trace.ResultForTrace{
+		SpawnError: code,
+		DurationMs: 0,
+		OutBytes:   0,
+		ErrBytes:   int64(len(msg)),
+		ErrPreview: msg,
+	})
+}
 
+func autoFailureResultJSON(ar suiteRunAttemptResult, code string) (string, error) {
 	result := map[string]any{
 		"kind":   "infra_failure",
 		"source": "suite_run",
@@ -2919,24 +3625,17 @@ func maybeWriteAutoFailureFeedback(now time.Time, env map[string]string, ar *sui
 	}
 	b, err := json.Marshal(result)
 	if err != nil {
-		return err
+		return "", err
 	}
+	return string(b), nil
+}
 
+func autoFailureDecisionTags(code string, runnerErrorCode string) []string {
 	decisionTags := []string{schema.DecisionTagBlocked}
-	if code == codeTimeout || code == codeRuntimeStall || ar.RunnerErrorCode == codeTimeout || ar.RunnerErrorCode == codeRuntimeStall {
-		decisionTags = append(decisionTags, schema.DecisionTagTimeout)
+	if code == codeTimeout || code == codeRuntimeStall || runnerErrorCode == codeTimeout || runnerErrorCode == codeRuntimeStall {
+		return append(decisionTags, schema.DecisionTagTimeout)
 	}
-	if err := feedback.Write(now, envTrace, feedback.WriteOpts{
-		OK:                   false,
-		ResultJSON:           string(b),
-		DecisionTags:         decisionTags,
-		SkipSuiteResultShape: true,
-	}); err != nil {
-		return err
-	}
-	ar.AutoFeedback = true
-	ar.AutoFeedbackCode = code
-	return nil
+	return decisionTags
 }
 
 func autoFailureCode(ar suiteRunAttemptResult) string {
@@ -3025,6 +3724,14 @@ func verifyAttemptMatchesEnv(attemptDir string, env map[string]string) error {
 }
 
 func finishAttempt(now time.Time, attemptDir string, strict bool, strictExpect bool) suiteRunFinishResult {
+	return finishAttemptImpl(now, attemptDir, strict, strictExpect)
+}
+
+func finishAttemptImpl(now time.Time, attemptDir string, strict bool, strictExpect bool) suiteRunFinishResult {
+	return finishAttemptCore(now, attemptDir, strict, strictExpect)
+}
+
+func finishAttemptCore(now time.Time, attemptDir string, strict bool, strictExpect bool) suiteRunFinishResult {
 	out := suiteRunFinishResult{
 		OK:           false,
 		Strict:       strict,
@@ -3032,45 +3739,20 @@ func finishAttempt(now time.Time, attemptDir string, strict bool, strictExpect b
 		AttemptDir:   attemptDir,
 	}
 
-	rep, repErr := report.BuildAttemptReport(now, attemptDir, strict)
-	if repErr == nil {
-		out.Report = rep
-		if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep); err != nil {
-			out.IOError = err.Error()
-			return out
-		}
-	} else {
-		var ce *report.CliError
-		if errors.As(repErr, &ce) {
-			out.ReportError = &suiteRunReportErr{Code: ce.Code, Message: ce.Message}
-			// Even when strict report build fails (for example missing feedback.json),
-			// still emit a best-effort attempt.report.json so operators get a terminal
-			// artifact for debugging and aggregation.
-			if fallback, ferr := report.BuildAttemptReport(now, attemptDir, false); ferr == nil {
-				out.Report = fallback
-				if err := report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), fallback); err != nil {
-					out.IOError = err.Error()
-					return out
-				}
-			}
-		} else {
-			out.IOError = repErr.Error()
-			return out
-		}
+	rep, repErr, reportErr, ioErr := buildSuiteRunFinishReport(now, attemptDir, strict)
+	if ioErr != nil {
+		out.IOError = ioErr.Error()
+		return out
 	}
+	out.Report = rep
+	out.ReportError = reportErr
 
-	valRes, err := validate.ValidatePath(attemptDir, strict)
+	valRes, expRes, err := evaluateSuiteRunFinish(attemptDir, strict, strictExpect)
 	if err != nil {
 		out.IOError = err.Error()
 		return out
 	}
 	out.Validate = valRes
-
-	expRes, err := expect.ExpectPath(attemptDir, strictExpect)
-	if err != nil {
-		out.IOError = err.Error()
-		return out
-	}
 	out.Expect = expRes
 
 	ok := valRes.OK && expRes.OK
@@ -3079,6 +3761,42 @@ func finishAttempt(now time.Time, attemptDir string, strict bool, strictExpect b
 	}
 	out.OK = ok && out.ReportError == nil
 	return out
+}
+
+func buildSuiteRunFinishReport(now time.Time, attemptDir string, strict bool) (schema.AttemptReportJSONV1, error, *suiteRunReportErr, error) {
+	rep, repErr := report.BuildAttemptReport(now, attemptDir, strict)
+	if repErr == nil {
+		return rep, nil, nil, writeSuiteRunFinishReport(attemptDir, rep)
+	}
+	var ce *report.CliError
+	if !errors.As(repErr, &ce) {
+		return schema.AttemptReportJSONV1{}, repErr, nil, repErr
+	}
+	reportErr := &suiteRunReportErr{Code: ce.Code, Message: ce.Message}
+	fallback, ferr := report.BuildAttemptReport(now, attemptDir, false)
+	if ferr == nil {
+		if err := writeSuiteRunFinishReport(attemptDir, fallback); err != nil {
+			return fallback, repErr, reportErr, err
+		}
+		return fallback, repErr, reportErr, nil
+	}
+	return schema.AttemptReportJSONV1{}, repErr, reportErr, nil
+}
+
+func writeSuiteRunFinishReport(attemptDir string, rep schema.AttemptReportJSONV1) error {
+	return report.WriteAttemptReportAtomic(filepath.Join(attemptDir, "attempt.report.json"), rep)
+}
+
+func evaluateSuiteRunFinish(attemptDir string, strict bool, strictExpect bool) (validate.Result, expect.Result, error) {
+	valRes, err := validate.ValidatePath(attemptDir, strict)
+	if err != nil {
+		return validate.Result{}, expect.Result{}, err
+	}
+	expRes, err := expect.ExpectPath(attemptDir, strictExpect)
+	if err != nil {
+		return validate.Result{}, expect.Result{}, err
+	}
+	return valRes, expRes, nil
 }
 
 func isStartFailure(err error) bool {

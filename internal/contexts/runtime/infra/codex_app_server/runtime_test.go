@@ -151,72 +151,109 @@ func runHelper(mode string) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
-	var mu sync.Mutex
-	writeJSON := func(v any) {
-		b, _ := json.Marshal(v)
-		mu.Lock()
-		defer mu.Unlock()
-		_, _ = os.Stdout.Write(append(b, '\n'))
-	}
-
-	threadID := "thr_1"
-	turnID := "turn_1"
+	writeJSON := newHelperWriter()
+	state := helperRuntimeState{threadID: "thr_1", turnID: "turn_1"}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		var msg map[string]any
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		msg, ok := parseHelperMessage(line)
+		if !ok {
 			continue
 		}
-		method, _ := msg["method"].(string)
-		id, hasID := msg["id"]
-
-		if !hasID {
-			if method == "initialized" && mode == "disconnect_after_initialized" {
-				return
-			}
+		if shouldDisconnectHelperAfterInitialized(mode, msg) {
+			return
+		}
+		if helperMessageHasNoID(msg) {
 			continue
 		}
+		handleHelperRequest(mode, msg, &state, writeJSON)
+	}
+}
 
-		respond := func(result any) {
-			writeJSON(map[string]any{"id": id, "result": result})
-		}
-		respondErr := func(code int, message string) {
-			writeJSON(map[string]any{"id": id, "error": map[string]any{"code": code, "message": message}})
-		}
+func newHelperWriter() func(any) {
+	var mu sync.Mutex
+	return func(v any) {
+		b, _ := json.Marshal(v)
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = os.Stdout.Write(append(b, '\n'))
+	}
+}
 
-		switch method {
-		case "initialize":
-			respond(map[string]any{"userAgent": "codex-cli/1.4.0"})
-		case "model/list":
-			switch mode {
-			case "compat_missing_method":
-				respondErr(-32601, "method not found")
-			case "timeout_on_model_list":
-				time.Sleep(2 * time.Second)
-			default:
-				respond(map[string]any{"data": []any{}})
-			}
-		case "thread/start":
-			respond(map[string]any{"thread": map[string]any{"id": threadID}})
-			writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": threadID}})
-		case "thread/resume":
-			respond(map[string]any{"thread": map[string]any{"id": threadID}})
-		case "turn/start":
-			respond(map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}})
-			writeJSON(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-			writeJSON(map[string]any{"method": "item/started", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_1"}})
-			writeJSON(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID, "itemId": "itm_1"}})
-			writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turnId": turnID}})
-		case "turn/steer":
-			respond(map[string]any{"turnId": turnID})
-		case "turn/interrupt":
-			respond(map[string]any{})
-		default:
-			respondErr(-32601, fmt.Sprintf("method not found: %s", method))
-		}
+type helperRuntimeState struct {
+	threadID string
+	turnID   string
+}
+
+func parseHelperMessage(line string) (map[string]any, bool) {
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		return nil, false
+	}
+	return msg, true
+}
+
+func helperMessageHasNoID(msg map[string]any) bool {
+	_, hasID := msg["id"]
+	return !hasID
+}
+
+func shouldDisconnectHelperAfterInitialized(mode string, msg map[string]any) bool {
+	if mode != "disconnect_after_initialized" {
+		return false
+	}
+	if !helperMessageHasNoID(msg) {
+		return false
+	}
+	method, _ := msg["method"].(string)
+	return method == "initialized"
+}
+
+func handleHelperRequest(mode string, msg map[string]any, state *helperRuntimeState, writeJSON func(any)) {
+	method, _ := msg["method"].(string)
+	id := msg["id"]
+	respond := func(result any) {
+		writeJSON(map[string]any{"id": id, "result": result})
+	}
+	respondErr := func(code int, message string) {
+		writeJSON(map[string]any{"id": id, "error": map[string]any{"code": code, "message": message}})
+	}
+
+	switch method {
+	case "initialize":
+		respond(map[string]any{"userAgent": "codex-cli/1.4.0"})
+	case "model/list":
+		handleHelperModelList(mode, respond, respondErr)
+	case "thread/start":
+		respond(map[string]any{"thread": map[string]any{"id": state.threadID}})
+		writeJSON(map[string]any{"method": "thread/started", "params": map[string]any{"threadId": state.threadID}})
+	case "thread/resume":
+		respond(map[string]any{"thread": map[string]any{"id": state.threadID}})
+	case "turn/start":
+		respond(map[string]any{"turn": map[string]any{"id": state.turnID, "status": "inProgress", "items": []any{}}})
+		writeJSON(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": state.threadID, "turnId": state.turnID}})
+		writeJSON(map[string]any{"method": "item/started", "params": map[string]any{"threadId": state.threadID, "turnId": state.turnID, "itemId": "itm_1"}})
+		writeJSON(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": state.threadID, "turnId": state.turnID, "itemId": "itm_1"}})
+		writeJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": state.threadID, "turnId": state.turnID}})
+	case "turn/steer":
+		respond(map[string]any{"turnId": state.turnID})
+	case "turn/interrupt":
+		respond(map[string]any{})
+	default:
+		respondErr(-32601, fmt.Sprintf("method not found: %s", method))
+	}
+}
+
+func handleHelperModelList(mode string, respond func(any), respondErr func(int, string)) {
+	switch mode {
+	case "compat_missing_method":
+		respondErr(-32601, "method not found")
+	case "timeout_on_model_list":
+		time.Sleep(2 * time.Second)
+	default:
+		respond(map[string]any{"data": []any{}})
 	}
 }

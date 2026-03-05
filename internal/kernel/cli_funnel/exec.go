@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/execabs"
 )
 
 type Result struct {
@@ -75,7 +77,7 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer, 
 		stderr = io.Discard
 	}
 
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := execabs.CommandContext(ctx, argv[0], argv[1:]...)
 	if stdin == nil {
 		cmd.Stdin = os.Stdin
 	} else {

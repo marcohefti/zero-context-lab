@@ -85,38 +85,56 @@ func comparePrerelease(a []string, b []string) int {
 		n = len(b)
 	}
 	for i := 0; i < n; i++ {
-		if a[i] == b[i] {
-			continue
+		if cmp := comparePrereleaseIdentifier(a[i], b[i]); cmp != 0 {
+			return cmp
 		}
-		an, aNum := prereleaseNumeric(a[i])
-		bn, bNum := prereleaseNumeric(b[i])
-		if aNum && bNum {
-			if an < bn {
-				return -1
-			}
-			if an > bn {
-				return 1
-			}
-			continue
-		}
-		if aNum && !bNum {
-			return -1
-		}
-		if !aNum && bNum {
-			return 1
-		}
-		if a[i] < b[i] {
-			return -1
-		}
-		return 1
 	}
-	if len(a) < len(b) {
+	return compareInt(len(a), len(b))
+}
+
+func comparePrereleaseIdentifier(a string, b string) int {
+	if a == b {
+		return 0
+	}
+	an, aNum := prereleaseNumeric(a)
+	bn, bNum := prereleaseNumeric(b)
+	if aNum && bNum {
+		return compareInt64(an, bn)
+	}
+	if aNum {
 		return -1
 	}
-	if len(a) > len(b) {
+	if bNum {
+		return 1
+	}
+	return compareString(a, b)
+}
+
+func compareInt(a int, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
 		return 1
 	}
 	return 0
+}
+
+func compareInt64(a int64, b int64) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func compareString(a string, b string) int {
+	if a < b {
+		return -1
+	}
+	return 1
 }
 
 func prereleaseNumeric(s string) (int64, bool) {

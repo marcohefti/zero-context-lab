@@ -43,16 +43,15 @@ func ParseRolloutJSONL(path string) (Metrics, error) {
 		if len(line) == 0 {
 			continue
 		}
-		var obj map[string]any
-		if err := json.Unmarshal(line, &obj); err != nil {
+		obj, ok := parseRolloutLine(line)
+		if !ok {
 			continue
 		}
 		if v, ok := findString(obj, "model"); ok && m.Model == "" {
 			m.Model = v
 		}
 		if usage, ok := findTokenUsage(obj); ok {
-			// Prefer the largest totalTokens (these events tend to be cumulative).
-			if usage.TotalTokens != nil && (best.TotalTokens == nil || *usage.TotalTokens > *best.TotalTokens) {
+			if preferTokenUsage(usage, best) {
 				best = usage
 			}
 		}
@@ -62,6 +61,24 @@ func ParseRolloutJSONL(path string) (Metrics, error) {
 	}
 	m.Usage = best
 	return m, nil
+}
+
+func parseRolloutLine(line []byte) (map[string]any, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal(line, &obj); err != nil {
+		return nil, false
+	}
+	return obj, true
+}
+
+func preferTokenUsage(candidate TokenUsage, current TokenUsage) bool {
+	if candidate.TotalTokens == nil {
+		return false
+	}
+	if current.TotalTokens == nil {
+		return true
+	}
+	return *candidate.TotalTokens > *current.TotalTokens
 }
 
 func WriteAttemptArtifacts(attemptDir string, attempt schema.AttemptJSONV1, rolloutPath string, metrics Metrics) error {

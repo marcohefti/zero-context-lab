@@ -63,33 +63,69 @@ func UpdateState(path string, in UpdateInput) (StateV1, error) {
 	if path == "" {
 		return StateV1{}, fmt.Errorf("missing campaign state path")
 	}
-	if strings.TrimSpace(in.CampaignID) == "" || strings.TrimSpace(in.SuiteID) == "" || strings.TrimSpace(in.RunID) == "" {
+	campaignID := strings.TrimSpace(in.CampaignID)
+	suiteID := strings.TrimSpace(in.SuiteID)
+	runID := strings.TrimSpace(in.RunID)
+	if campaignID == "" || suiteID == "" || runID == "" {
 		return StateV1{}, fmt.Errorf("campaign update requires campaignId, suiteId, runId")
 	}
 
-	st := StateV1{
-		SchemaVersion: 1,
-		CampaignID:    strings.TrimSpace(in.CampaignID),
-		SuiteID:       strings.TrimSpace(in.SuiteID),
-	}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &st); err != nil {
-			return StateV1{}, err
-		}
-		if st.SchemaVersion != 1 {
-			return StateV1{}, fmt.Errorf("unsupported campaign.state schemaVersion")
-		}
-		if st.CampaignID != strings.TrimSpace(in.CampaignID) {
-			return StateV1{}, fmt.Errorf("campaignId mismatch in campaign.state")
-		}
-		if st.SuiteID != strings.TrimSpace(in.SuiteID) {
-			return StateV1{}, fmt.Errorf("suiteId mismatch in campaign.state")
-		}
-	} else if !os.IsNotExist(err) {
+	st, err := loadCampaignState(path, campaignID, suiteID)
+	if err != nil {
 		return StateV1{}, err
 	}
+	run := toRunSummary(in)
+	upsertRunSummary(&st, run)
+	sort.Slice(st.Runs, func(i, j int) bool {
+		ti, _ := parseTS(st.Runs[i].CreatedAt)
+		tj, _ := parseTS(st.Runs[j].CreatedAt)
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		return st.Runs[i].RunID < st.Runs[j].RunID
+	})
+	st.SchemaVersion = 1
+	st.CampaignID = campaignID
+	st.SuiteID = suiteID
+	st.UpdatedAt = in.Now.UTC().Format(time.RFC3339Nano)
+	st.LatestRunID = latestRunID(st.Runs)
 
-	run := RunSummaryV1{
+	if err := store.WriteJSONAtomic(path, st); err != nil {
+		return StateV1{}, err
+	}
+	return st, nil
+}
+
+func loadCampaignState(path string, campaignID string, suiteID string) (StateV1, error) {
+	st := StateV1{
+		SchemaVersion: 1,
+		CampaignID:    campaignID,
+		SuiteID:       suiteID,
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return StateV1{}, err
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return StateV1{}, err
+	}
+	if st.SchemaVersion != 1 {
+		return StateV1{}, fmt.Errorf("unsupported campaign.state schemaVersion")
+	}
+	if st.CampaignID != campaignID {
+		return StateV1{}, fmt.Errorf("campaignId mismatch in campaign.state")
+	}
+	if st.SuiteID != suiteID {
+		return StateV1{}, fmt.Errorf("suiteId mismatch in campaign.state")
+	}
+	return st, nil
+}
+
+func toRunSummary(in UpdateInput) RunSummaryV1 {
+	return RunSummaryV1{
 		RunID:            strings.TrimSpace(in.RunID),
 		CreatedAt:        strings.TrimSpace(in.CreatedAt),
 		Mode:             strings.TrimSpace(in.Mode),
@@ -103,35 +139,17 @@ func UpdateState(path string, in UpdateInput) (StateV1, error) {
 		Passed:           in.Passed,
 		Failed:           in.Failed,
 	}
-	upserted := false
-	for i := range st.Runs {
-		if st.Runs[i].RunID == run.RunID {
-			st.Runs[i] = run
-			upserted = true
-			break
-		}
-	}
-	if !upserted {
-		st.Runs = append(st.Runs, run)
-	}
-	sort.Slice(st.Runs, func(i, j int) bool {
-		ti, _ := parseTS(st.Runs[i].CreatedAt)
-		tj, _ := parseTS(st.Runs[j].CreatedAt)
-		if !ti.Equal(tj) {
-			return ti.Before(tj)
-		}
-		return st.Runs[i].RunID < st.Runs[j].RunID
-	})
-	st.SchemaVersion = 1
-	st.CampaignID = strings.TrimSpace(in.CampaignID)
-	st.SuiteID = strings.TrimSpace(in.SuiteID)
-	st.UpdatedAt = in.Now.UTC().Format(time.RFC3339Nano)
-	st.LatestRunID = latestRunID(st.Runs)
+}
 
-	if err := store.WriteJSONAtomic(path, st); err != nil {
-		return StateV1{}, err
+func upsertRunSummary(st *StateV1, run RunSummaryV1) {
+	for i := range st.Runs {
+		if st.Runs[i].RunID != run.RunID {
+			continue
+		}
+		st.Runs[i] = run
+		return
 	}
-	return st, nil
+	st.Runs = append(st.Runs, run)
 }
 
 func latestRunID(runs []RunSummaryV1) string {

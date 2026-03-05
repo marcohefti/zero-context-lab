@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	httpproxy "github.com/marcohefti/zero-context-lab/internal/contexts/evidence/app/http_proxy"
 	"github.com/marcohefti/zero-context-lab/internal/contexts/evidence/app/trace"
@@ -30,6 +31,49 @@ func (r Runner) runHTTP(args []string) int {
 }
 
 func (r Runner) runHTTPProxy(args []string) int {
+	opts, exit, done := r.parseHTTPProxyOptions(args)
+	if done {
+		return exit
+	}
+	env, exit, done := r.loadHTTPProxyContext()
+	if done {
+		return exit
+	}
+	ctx, cancel, timedOut, exit, done := r.prepareHTTPProxyContext(r.Now(), env.OutDirAbs)
+	if done {
+		return exit
+	}
+	if cancel != nil {
+		defer cancel()
+	}
+	if timedOut {
+		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
+		return 1
+	}
+
+	h, err := httpproxy.Start(ctx, env, opts.listen, opts.upstream, schema.PreviewMaxBytesV1, opts.maxRequests)
+	if err != nil {
+		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return 1
+	}
+	defer func() { _ = h.Close() }()
+
+	if opts.jsonOut {
+		if exit := r.writeHTTPProxyJSON(h.ListenAddr, opts.upstream); exit != 0 {
+			return exit
+		}
+	}
+	return r.waitHTTPProxy(ctx, h.Wait)
+}
+
+type httpProxyOptions struct {
+	listen      string
+	upstream    string
+	maxRequests int
+	jsonOut     bool
+}
+
+func (r Runner) parseHTTPProxyOptions(args []string) (httpProxyOptions, int, bool) {
 	fs := flag.NewFlagSet("http proxy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -40,65 +84,65 @@ func (r Runner) runHTTPProxy(args []string) int {
 	help := fs.Bool("help", false, "show help")
 
 	if err := fs.Parse(args); err != nil {
-		return r.failUsage("http proxy: invalid flags")
+		return httpProxyOptions{}, r.failUsage("http proxy: invalid flags"), true
 	}
 	if *help {
 		printHTTPProxyHelp(r.Stdout)
-		return 0
+		return httpProxyOptions{}, 0, true
 	}
+	return httpProxyOptions{
+		listen:      strings.TrimSpace(*listen),
+		upstream:    strings.TrimSpace(*upstream),
+		maxRequests: *maxRequests,
+		jsonOut:     *jsonOut,
+	}, 0, false
+}
 
+func (r Runner) loadHTTPProxyContext() (trace.Env, int, bool) {
 	env, err := trace.EnvFromProcess()
 	if err != nil {
 		printHTTPProxyHelp(r.Stderr)
-		return r.failUsage("http proxy: missing ZCL attempt context (need ZCL_* env)")
+		return trace.Env{}, r.failUsage("http proxy: missing ZCL attempt context (need ZCL_* env)"), true
 	}
 	if a, err := attempt.ReadAttempt(env.OutDirAbs); err != nil {
 		printHTTPProxyHelp(r.Stderr)
-		return r.failUsage("http proxy: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)")
+		return trace.Env{}, r.failUsage("http proxy: missing/invalid attempt.json in ZCL_OUT_DIR (need zcl attempt start context)"), true
 	} else if a.RunID != env.RunID || a.SuiteID != env.SuiteID || a.MissionID != env.MissionID || a.AttemptID != env.AttemptID {
 		printHTTPProxyHelp(r.Stderr)
-		return r.failUsage("http proxy: attempt.json ids do not match ZCL_* env (refuse to run)")
+		return trace.Env{}, r.failUsage("http proxy: attempt.json ids do not match ZCL_* env (refuse to run)"), true
 	}
+	return env, 0, false
+}
 
-	now := r.Now()
-	if _, err := attempt.EnsureTimeoutAnchor(now, env.OutDirAbs); err != nil {
+func (r Runner) prepareHTTPProxyContext(now time.Time, attemptDir string) (context.Context, context.CancelFunc, bool, int, bool) {
+	if _, err := attempt.EnsureTimeoutAnchor(now, attemptDir); err != nil {
 		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
+		return context.Background(), nil, false, 1, true
+	}
+	ctx, cancel, timedOut := attemptCtxForDeadline(now, attemptDir)
+	return ctx, cancel, timedOut, 0, false
+}
+
+func (r Runner) writeHTTPProxyJSON(listenAddr, upstream string) int {
+	out := struct {
+		OK         bool   `json:"ok"`
+		ListenAddr string `json:"listenAddr"`
+		ProxyURL   string `json:"proxyUrl"`
+		Upstream   string `json:"upstream"`
+	}{
+		OK:         true,
+		ListenAddr: listenAddr,
+		ProxyURL:   "http://" + listenAddr,
+		Upstream:   upstream,
+	}
+	if r.writeJSON(out) != 0 {
 		return 1
 	}
-	ctx, cancel, timedOut := attemptCtxForDeadline(now, env.OutDirAbs)
-	if cancel != nil {
-		defer cancel()
-	}
-	if timedOut {
-		fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
-		return 1
-	}
+	return 0
+}
 
-	h, err := httpproxy.Start(ctx, env, strings.TrimSpace(*listen), strings.TrimSpace(*upstream), schema.PreviewMaxBytesV1, *maxRequests)
-	if err != nil {
-		fmt.Fprintf(r.Stderr, codeIO+": %s\n", err.Error())
-		return 1
-	}
-	defer func() { _ = h.Close() }()
-
-	if *jsonOut {
-		out := struct {
-			OK         bool   `json:"ok"`
-			ListenAddr string `json:"listenAddr"`
-			ProxyURL   string `json:"proxyUrl"`
-			Upstream   string `json:"upstream"`
-		}{
-			OK:         true,
-			ListenAddr: h.ListenAddr,
-			ProxyURL:   "http://" + h.ListenAddr,
-			Upstream:   strings.TrimSpace(*upstream),
-		}
-		if r.writeJSON(out) != 0 {
-			return 1
-		}
-	}
-
-	if err := h.Wait(); err != nil {
+func (r Runner) waitHTTPProxy(ctx context.Context, waitFn func() error) int {
+	if err := waitFn(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			fmt.Fprintf(r.Stderr, codeTimeout+": attempt deadline exceeded\n")
 			return 1

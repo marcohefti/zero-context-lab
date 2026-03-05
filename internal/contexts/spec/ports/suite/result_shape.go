@@ -19,45 +19,66 @@ func ValidateResultShape(re *ResultExpectsV1, fb schema.FeedbackJSONV1) []Expect
 	if re == nil {
 		return nil
 	}
-	var failures []ExpectationFailure
 	switch re.Type {
 	case "string":
-		if len(fb.ResultJSON) > 0 {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_RESULT_TYPE",
-				Message: "expected result type string, got resultJson",
-			})
-		}
+		return validateStringResultShape(fb)
 	case "json":
-		if len(fb.ResultJSON) == 0 {
-			failures = append(failures, ExpectationFailure{
-				Code:    "ZCL_E_EXPECT_RESULT_TYPE",
-				Message: "expected result type json, got result",
-			})
-			return failures
-		}
-		if len(re.RequiredJSONPointers) > 0 {
-			var doc any
-			if err := json.Unmarshal(fb.ResultJSON, &doc); err != nil {
-				failures = append(failures, ExpectationFailure{
-					Code:    "ZCL_E_EXPECT_RESULT_JSON",
-					Message: "feedback resultJson is not valid json",
-				})
-				return failures
-			}
-			for _, ptr := range re.RequiredJSONPointers {
-				if _, ok := jsonPointerLookup(doc, ptr); !ok {
-					failures = append(failures, ExpectationFailure{
-						Code:    "ZCL_E_EXPECT_RESULT_JSON_POINTER",
-						Message: "missing required resultJson pointer " + ptr,
-					})
-				}
-			}
-		}
+		return validateJSONResultShape(re, fb)
 	default:
-		failures = append(failures, ExpectationFailure{
+		return []ExpectationFailure{{
 			Code:    "ZCL_E_EXPECT_RESULT_TYPE",
 			Message: "unsupported expects.result.type",
+		}}
+	}
+}
+
+func validateStringResultShape(fb schema.FeedbackJSONV1) []ExpectationFailure {
+	if len(fb.ResultJSON) == 0 {
+		return nil
+	}
+	return []ExpectationFailure{{
+		Code:    "ZCL_E_EXPECT_RESULT_TYPE",
+		Message: "expected result type string, got resultJson",
+	}}
+}
+
+func validateJSONResultShape(re *ResultExpectsV1, fb schema.FeedbackJSONV1) []ExpectationFailure {
+	if len(fb.ResultJSON) == 0 {
+		return []ExpectationFailure{{
+			Code:    "ZCL_E_EXPECT_RESULT_TYPE",
+			Message: "expected result type json, got result",
+		}}
+	}
+	if len(re.RequiredJSONPointers) == 0 {
+		return nil
+	}
+	doc, ok := decodeResultJSON(fb.ResultJSON)
+	if !ok {
+		return []ExpectationFailure{{
+			Code:    "ZCL_E_EXPECT_RESULT_JSON",
+			Message: "feedback resultJson is not valid json",
+		}}
+	}
+	return missingJSONPointerFailures(re.RequiredJSONPointers, doc)
+}
+
+func decodeResultJSON(raw json.RawMessage) (any, bool) {
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, false
+	}
+	return doc, true
+}
+
+func missingJSONPointerFailures(pointers []string, doc any) []ExpectationFailure {
+	failures := make([]ExpectationFailure, 0, len(pointers))
+	for _, ptr := range pointers {
+		if _, ok := jsonPointerLookup(doc, ptr); ok {
+			continue
+		}
+		failures = append(failures, ExpectationFailure{
+			Code:    "ZCL_E_EXPECT_RESULT_JSON_POINTER",
+			Message: "missing required resultJson pointer " + ptr,
 		})
 	}
 	return failures

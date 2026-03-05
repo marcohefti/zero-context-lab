@@ -56,37 +56,7 @@ func Run(opts Opts) (Result, error) {
 		return Result{}, err
 	}
 
-	var runs []RunInfo
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		runDir := filepath.Join(runsDir, e.Name())
-		runJSONPath := filepath.Join(runDir, "run.json")
-		raw, err := os.ReadFile(runJSONPath)
-		if err != nil {
-			continue
-		}
-		var meta schema.RunJSONV1
-		if err := json.Unmarshal(raw, &meta); err != nil {
-			continue
-		}
-		if meta.SchemaVersion != schema.RunSchemaV1 || meta.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
-			continue
-		}
-		createdAt, err := time.Parse(time.RFC3339Nano, meta.CreatedAt)
-		if err != nil {
-			createdAt, _ = time.Parse(time.RFC3339, meta.CreatedAt)
-		}
-		size, _ := dirSize(runDir)
-		runs = append(runs, RunInfo{
-			RunID:     meta.RunID,
-			Path:      runDir,
-			CreatedAt: createdAt,
-			Pinned:    meta.Pinned,
-			Bytes:     size,
-		})
-	}
+	runs := collectRuns(entries, runsDir)
 
 	sort.Slice(runs, func(i, j int) bool {
 		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
@@ -100,50 +70,104 @@ func Run(opts Opts) (Result, error) {
 		total += r.Bytes
 	}
 	res := Result{OK: true, OutRoot: outRoot, DryRun: opts.DryRun, TotalBefore: total, TotalAfter: total}
-
-	shouldDelete := make(map[string]bool)
-	if opts.MaxAgeDays > 0 {
-		cutoff := now.Add(-time.Duration(opts.MaxAgeDays) * 24 * time.Hour)
-		for _, r := range runs {
-			if r.Pinned {
-				continue
-			}
-			if !r.CreatedAt.IsZero() && r.CreatedAt.Before(cutoff) {
-				shouldDelete[r.RunID] = true
-			}
-		}
-	}
-
-	// Size-based: delete oldest unpinned runs until under threshold.
-	if opts.MaxTotalBytes > 0 && total > opts.MaxTotalBytes {
-		for _, r := range runs {
-			if total <= opts.MaxTotalBytes {
-				break
-			}
-			if r.Pinned {
-				continue
-			}
-			if shouldDelete[r.RunID] {
-				// already deleting via age, account below
-				continue
-			}
-			shouldDelete[r.RunID] = true
-			total -= r.Bytes
-		}
-	}
-
-	for _, r := range runs {
-		if shouldDelete[r.RunID] {
-			res.Deleted = append(res.Deleted, r)
-			res.TotalAfter -= r.Bytes
-			if !opts.DryRun {
-				_ = os.RemoveAll(r.Path)
-			}
-		} else {
-			res.Kept = append(res.Kept, r)
-		}
-	}
+	shouldDelete := planDeletion(runs, now, opts, total)
+	applyDeletion(&res, runs, shouldDelete, opts.DryRun)
 	return res, nil
+}
+
+func collectRuns(entries []os.DirEntry, runsDir string) []RunInfo {
+	runs := make([]RunInfo, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		run, ok := loadRunInfo(filepath.Join(runsDir, e.Name()))
+		if !ok {
+			continue
+		}
+		runs = append(runs, run)
+	}
+	return runs
+}
+
+func loadRunInfo(runDir string) (RunInfo, bool) {
+	runJSONPath := filepath.Join(runDir, "run.json")
+	raw, err := os.ReadFile(runJSONPath)
+	if err != nil {
+		return RunInfo{}, false
+	}
+	var meta schema.RunJSONV1
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return RunInfo{}, false
+	}
+	if meta.SchemaVersion != schema.RunSchemaV1 || meta.ArtifactLayoutVersion != schema.ArtifactLayoutVersionV1 {
+		return RunInfo{}, false
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, meta.CreatedAt)
+	if err != nil {
+		createdAt, _ = time.Parse(time.RFC3339, meta.CreatedAt)
+	}
+	size, _ := dirSize(runDir)
+	return RunInfo{
+		RunID:     meta.RunID,
+		Path:      runDir,
+		CreatedAt: createdAt,
+		Pinned:    meta.Pinned,
+		Bytes:     size,
+	}, true
+}
+
+func planDeletion(runs []RunInfo, now time.Time, opts Opts, total int64) map[string]bool {
+	shouldDelete := selectAgeBasedRuns(runs, now, opts.MaxAgeDays)
+	applySizeBasedSelection(runs, opts.MaxTotalBytes, total, shouldDelete)
+	return shouldDelete
+}
+
+func selectAgeBasedRuns(runs []RunInfo, now time.Time, maxAgeDays int) map[string]bool {
+	shouldDelete := make(map[string]bool)
+	if maxAgeDays <= 0 {
+		return shouldDelete
+	}
+	cutoff := now.Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
+	for _, r := range runs {
+		if r.Pinned {
+			continue
+		}
+		if !r.CreatedAt.IsZero() && r.CreatedAt.Before(cutoff) {
+			shouldDelete[r.RunID] = true
+		}
+	}
+	return shouldDelete
+}
+
+func applySizeBasedSelection(runs []RunInfo, maxTotalBytes int64, total int64, shouldDelete map[string]bool) {
+	if maxTotalBytes <= 0 || total <= maxTotalBytes {
+		return
+	}
+	for _, r := range runs {
+		if total <= maxTotalBytes {
+			return
+		}
+		if r.Pinned || shouldDelete[r.RunID] {
+			continue
+		}
+		shouldDelete[r.RunID] = true
+		total -= r.Bytes
+	}
+}
+
+func applyDeletion(res *Result, runs []RunInfo, shouldDelete map[string]bool, dryRun bool) {
+	for _, r := range runs {
+		if !shouldDelete[r.RunID] {
+			res.Kept = append(res.Kept, r)
+			continue
+		}
+		res.Deleted = append(res.Deleted, r)
+		res.TotalAfter -= r.Bytes
+		if !dryRun {
+			_ = os.RemoveAll(r.Path)
+		}
+	}
 }
 
 func dirSize(root string) (int64, error) {
