@@ -62,6 +62,8 @@ func (r Runner) parseAttemptFinishOptions(args []string) (attemptFinishOptions, 
 	rest := fs.Args()
 	attemptDir := os.Getenv("ZCL_OUT_DIR")
 	switch len(rest) {
+	case 0:
+		// Use ZCL_OUT_DIR fallback.
 	case 1:
 		attemptDir = rest[0]
 	default:
