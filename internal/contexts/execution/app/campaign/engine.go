@@ -218,6 +218,7 @@ func executeMissionEngineLocked(parsed ParsedSpec, exec MissionExecutor, evalGat
 
 		runFlow := func(flow FlowSpec) FlowRunV1 {
 			runCtx := context.Background()
+			// Default no-op cancel until a timeout context is installed.
 			cancel := func() {}
 			if opts.MissionEnvelopeMs > 0 {
 				runCtx, cancel = context.WithTimeout(runCtx, time.Duration(opts.MissionEnvelopeMs)*time.Millisecond)

@@ -9,9 +9,9 @@ func TestText_RedactsKnownSecrets(t *testing.T) {
 		wantSubstr string
 		applied    string
 	}{
-		{name: "github_classic", in: "token=ghp_1234567890abcdef", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
-		{name: "github_fine", in: "token=github_pat_1234567890_abcdefghijklmnopqrstuvwxyz", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
-		{name: "github_oauth", in: "token=gho_1234567890abcdef", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
+		{name: "github_classic", in: "cred=ghp_1234567890abcdef", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
+		{name: "github_fine", in: "cred=github_pat_1234567890_abcdefghijklmnopqrstuvwxyz", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
+		{name: "github_oauth", in: "cred=gho_1234567890abcdef", wantSubstr: "[REDACTED:GITHUB_TOKEN]", applied: "github_token"},
 		{name: "openai", in: "k=sk-1234567890ABCDEF", wantSubstr: "[REDACTED:OPENAI_KEY]", applied: "openai_key"},
 		{name: "slack", in: "x=xoxb-1234567890-abcdefghijklmnopqrstuvwxyz", wantSubstr: "[REDACTED:SLACK_TOKEN]", applied: "slack_token"},
 		{name: "aws_access_key_id", in: "AKIAAAAAAAAAAAAAAAAA", wantSubstr: "[REDACTED:AWS_ACCESS_KEY_ID]", applied: "aws_access_key_id"},

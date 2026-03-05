@@ -26,6 +26,7 @@ echo "gofmt-check: PASS"
 
 go test ./...
 go vet ./...
+./scripts/golangci-check.sh
 ./scripts/campaign-e2e.sh
 ./scripts/no-context-examples-check.sh
 

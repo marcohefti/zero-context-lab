@@ -29,7 +29,7 @@ func TestWrite_ResultStringRedactsAndBounds(t *testing.T) {
 	now := time.Date(2026, 2, 15, 18, 0, 0, 0, time.UTC)
 	if err := Write(now, env, WriteOpts{
 		OK:     true,
-		Result: "token=ghp_ABCDEF1234567890",
+		Result: "cred=ghp_ABCDEF1234567890",
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestWrite_ResultStringRedactsAndBounds(t *testing.T) {
 	if fb.Result == "" || fb.ResultJSON != nil {
 		t.Fatalf("expected string result only: %+v", fb)
 	}
-	if fb.Result != "token=[REDACTED:GITHUB_TOKEN]" {
+	if fb.Result != "cred=[REDACTED:GITHUB_TOKEN]" {
 		t.Fatalf("expected redaction, got: %q", fb.Result)
 	}
 	if len(fb.RedactionsApplied) == 0 {
