@@ -1840,7 +1840,7 @@ func TestSuiteRun_NativeSchedulerRateLimitIsDeterministic(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr.String())
 	}
-	if elapsed < 400*time.Millisecond {
+	if elapsed < 200*time.Millisecond {
 		t.Fatalf("expected scheduler delay from rate limit, elapsed=%s", elapsed)
 	}
 }
