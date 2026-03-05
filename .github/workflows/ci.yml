@@ -51,7 +51,7 @@ jobs:
           cache: true
 
       - name: Store Tests
-        run: go test ./internal/store
+        run: go test ./internal/kernel/store
 
   cli-smoke:
     runs-on: ubuntu-latest
