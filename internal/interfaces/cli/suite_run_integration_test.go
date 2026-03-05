@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +12,10 @@ import (
 	"testing"
 	"time"
 )
+
+func suiteRunNow() time.Time {
+	return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC)
+}
 
 func TestSuiteRun_OK_EndToEnd(t *testing.T) {
 	TestSuiteRun_OK_EndToEndCore(t)
@@ -33,16 +36,9 @@ func TestSuiteRun_OK_EndToEndCore(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -51,13 +47,13 @@ func TestSuiteRun_OK_EndToEndCore(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
-	sum := parseSuiteRunOKEndToEndSummary(t, stdout.Bytes(), stdout.String())
+	sum := parseSuiteRunOKEndToEndSummary(t, h.Stdout.Bytes(), h.Stdout.String())
 	assertSuiteRunOKEndToEndSummary(t, sum)
 	assertSuiteRunOKEndToEndAttempts(t, sum.Attempts)
-	assertSuiteRunOKEndToEndStderr(t, stderr.String())
+	assertSuiteRunOKEndToEndStderr(t, h.Stderr.String())
 }
 
 type suiteRunOKEndToEndSummary struct {
@@ -211,16 +207,9 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -229,7 +218,7 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=no-feedback",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -252,8 +241,8 @@ func TestSuiteRun_FailsWhenRunnerWritesNoFeedback(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if sum.OK || sum.Failed != 1 || len(sum.Attempts) != 1 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -287,16 +276,9 @@ func TestSuiteRun_FailFastSkipsRemainingMissions(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -305,7 +287,7 @@ func TestSuiteRun_FailFastSkipsRemainingMissions(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=no-feedback",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -317,8 +299,8 @@ func TestSuiteRun_FailFastSkipsRemainingMissions(t *testing.T) {
 			SkipReason string `json:"skipReason"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if len(sum.Attempts) != 2 {
 		t.Fatalf("expected two attempts in summary, got %+v", sum.Attempts)
@@ -348,16 +330,9 @@ func TestSuiteRun_BlindRejectsContaminatedPrompt(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -367,7 +342,7 @@ func TestSuiteRun_BlindRejectsContaminatedPrompt(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -385,8 +360,8 @@ func TestSuiteRun_BlindRejectsContaminatedPrompt(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if sum.OK || len(sum.Attempts) != 1 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -414,16 +389,9 @@ func TestSuiteRun_ParallelTotal_JITAllocation(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -434,7 +402,7 @@ func TestSuiteRun_ParallelTotal_JITAllocation(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -448,8 +416,8 @@ func TestSuiteRun_ParallelTotal_JITAllocation(t *testing.T) {
 			OK        bool   `json:"ok"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || sum.Passed != 5 || sum.Failed != 0 || len(sum.Attempts) != 5 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -474,16 +442,9 @@ func TestSuiteRun_RefusesImplicitProcessFallbackWhenHostIsNativeCapable(t *testi
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 	t.Setenv("ZCL_HOST_NATIVE_SPAWN", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -492,10 +453,10 @@ func TestSuiteRun_RefusesImplicitProcessFallbackWhenHostIsNativeCapable(t *testi
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "native runtime mode does not accept -- <runner-cmd> arguments") {
-		t.Fatalf("expected native-capability guard error, got stderr=%q", stderr.String())
+	if !strings.Contains(h.Stderr.String(), "native runtime mode does not accept -- <runner-cmd> arguments") {
+		t.Fatalf("expected native-capability guard error, got stderr=%q", h.Stderr.String())
 	}
 }
 
@@ -514,16 +475,9 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 	t.Setenv("ZCL_HOST_NATIVE_SPAWN", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -533,7 +487,7 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -542,8 +496,8 @@ func TestSuiteRun_ExplicitProcessAllowedWhenHostIsNativeCapable(t *testing.T) {
 		SessionIsolationRequested string `json:"sessionIsolationRequested"`
 		HostNativeSpawnCapable    bool   `json:"hostNativeSpawnCapable"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK {
 		t.Fatalf("expected ok=true summary, got %+v", sum)
@@ -576,16 +530,9 @@ func TestSuiteRun_NativeRuntimeEndToEndCore(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -593,10 +540,10 @@ func TestSuiteRun_NativeRuntimeEndToEndCore(t *testing.T) {
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
-	sum := parseSuiteRunNativeRuntimeSummary(t, stdout.Bytes(), stdout.String())
+	sum := parseSuiteRunNativeRuntimeSummary(t, h.Stdout.Bytes(), h.Stdout.String())
 	attemptDir := assertSuiteRunNativeRuntimeSummary(t, sum)
 	assertSuiteRunNativeRuntimeArtifacts(t, attemptDir)
 }
@@ -783,16 +730,9 @@ func TestSuiteRun_NativeRunnerCwdTempEmptyPerAttempt(t *testing.T) {
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
 	t.Setenv("ZCL_HELPER_EXPECT_CWD_PREFIX", filepath.Clean(basePath)+string(os.PathSeparator))
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 3, 1, 15, 0, 0, 0, time.UTC))
 
-	code := r.runSuiteRunWithEnv([]string{
+	code := h.Runner.runSuiteRunWithEnv([]string{
 		"--file", suitePath,
 		"--out-root", outRoot,
 		"--session-isolation", "native",
@@ -802,7 +742,7 @@ func TestSuiteRun_NativeRunnerCwdTempEmptyPerAttempt(t *testing.T) {
 		suiteRunEnvRunnerCwdBasePath: basePath,
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -811,8 +751,8 @@ func TestSuiteRun_NativeRunnerCwdTempEmptyPerAttempt(t *testing.T) {
 			AttemptDir string `json:"attemptDir"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -862,16 +802,9 @@ func TestSuiteRun_NativeFinalResultPrefersTaskCompleteLastAgentMessage(t *testin
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "task_complete_preferred")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -879,7 +812,7 @@ func TestSuiteRun_NativeFinalResultPrefersTaskCompleteLastAgentMessage(t *testin
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -888,8 +821,8 @@ func TestSuiteRun_NativeFinalResultPrefersTaskCompleteLastAgentMessage(t *testin
 			AttemptDir string `json:"attemptDir"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -949,16 +882,9 @@ func TestSuiteRun_NativeFinalResultUsesPhaseFinalAnswer(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "phase_final_answer")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -966,7 +892,7 @@ func TestSuiteRun_NativeFinalResultUsesPhaseFinalAnswer(t *testing.T) {
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -975,8 +901,8 @@ func TestSuiteRun_NativeFinalResultUsesPhaseFinalAnswer(t *testing.T) {
 			AttemptDir string `json:"attemptDir"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -1040,16 +966,9 @@ func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailureCore(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "phase_without_final_answer")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1057,10 +976,10 @@ func TestSuiteRun_NativeMissingFinalAnswerGetsTypedFailureCore(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, h.Stderr.String())
 	}
 
-	attempt := parseSuiteRunNativeMissingFinalAnswerAttempt(t, stdout.Bytes(), stdout.String())
+	attempt := parseSuiteRunNativeMissingFinalAnswerAttempt(t, h.Stdout.Bytes(), h.Stdout.String())
 	assertSuiteRunNativeMissingFinalAnswerSummary(t, attempt)
 	assertSuiteRunNativeMissingFinalAnswerFeedback(t, attempt.AttemptDir)
 	assertSuiteRunNativeMissingFinalAnswerAttemptMetadata(t, attempt.AttemptDir)
@@ -1157,16 +1076,9 @@ func TestSuiteRun_NativeModelForwardedToThreadStart(t *testing.T) {
 	t.Setenv("ZCL_HELPER_EXPECT_MODEL", "gpt-5.3-codex-spark")
 	t.Setenv("ZCL_HELPER_EXPECT_REASONING_EFFORT", "medium")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 1, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 16, 12, 1, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1176,7 +1088,7 @@ func TestSuiteRun_NativeModelForwardedToThreadStart(t *testing.T) {
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1186,8 +1098,8 @@ func TestSuiteRun_NativeModelForwardedToThreadStart(t *testing.T) {
 			OK              bool   `json:"ok"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK || sum.Attempts[0].RunnerErrorCode != "" {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -1210,16 +1122,9 @@ func TestSuiteRun_NativeInvalidModelFailureIsTyped(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "invalid_model")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1228,7 +1133,7 @@ func TestSuiteRun_NativeInvalidModelFailureIsTyped(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected typed runtime failure, got harness error code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1236,7 +1141,7 @@ func TestSuiteRun_NativeInvalidModelFailureIsTyped(t *testing.T) {
 			RunnerErrorCode string `json:"runnerErrorCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run output: %v", err)
 	}
 	if len(sum.Attempts) != 1 {
@@ -1263,16 +1168,9 @@ func TestSuiteRun_NativeReasoningUnsupportedBestEffortFallsBack(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "reasoning_unsupported")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1282,7 +1180,7 @@ func TestSuiteRun_NativeReasoningUnsupportedBestEffortFallsBack(t *testing.T) {
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected success with best-effort fallback, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected success with best-effort fallback, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1292,7 +1190,7 @@ func TestSuiteRun_NativeReasoningUnsupportedBestEffortFallsBack(t *testing.T) {
 			OK              bool   `json:"ok"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run json: %v", err)
 	}
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].OK || sum.Attempts[0].RunnerErrorCode != "" {
@@ -1324,15 +1222,8 @@ func TestSuiteRun_NativeProcessParityCore(t *testing.T) {
 func runSuiteProcessParityMode(t *testing.T, suitePath string, outRoot string) string {
 	t.Helper()
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 10, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
-	code := r.Run([]string{
+	h := newRunnerHarness(t, time.Date(2026, 2, 16, 12, 10, 0, 0, time.UTC))
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1342,9 +1233,9 @@ func runSuiteProcessParityMode(t *testing.T, suitePath string, outRoot string) s
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 0 {
-		t.Fatalf("process suite run expected 0, got %d stderr=%q", code, stderr.String())
+		t.Fatalf("process suite run expected 0, got %d stderr=%q", code, h.Stderr.String())
 	}
-	return parseSuiteRunSingleAttemptDir(t, stdout.Bytes(), "process summary")
+	return parseSuiteRunSingleAttemptDir(t, h.Stdout.Bytes(), "process summary")
 }
 
 func runSuiteNativeParityMode(t *testing.T, suitePath string, outRoot string) string {
@@ -1352,15 +1243,8 @@ func runSuiteNativeParityMode(t *testing.T, suitePath string, outRoot string) st
 	t.Setenv("ZCL_CODEX_APP_SERVER_CMD", os.Args[0]+" -test.run=TestHelperSuiteNativeAppServer$")
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 11, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
-	code := r.Run([]string{
+	h := newRunnerHarness(t, time.Date(2026, 2, 16, 12, 11, 0, 0, time.UTC))
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1368,9 +1252,9 @@ func runSuiteNativeParityMode(t *testing.T, suitePath string, outRoot string) st
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("native suite run expected 0, got %d stderr=%q", code, stderr.String())
+		t.Fatalf("native suite run expected 0, got %d stderr=%q", code, h.Stderr.String())
 	}
-	return parseSuiteRunSingleAttemptDir(t, stdout.Bytes(), "native summary")
+	return parseSuiteRunSingleAttemptDir(t, h.Stdout.Bytes(), "native summary")
 }
 
 func parseSuiteRunSingleAttemptDir(t *testing.T, stdout []byte, label string) string {
@@ -1462,16 +1346,9 @@ func TestSuiteRun_NativeParallelUniqueSessionsCore(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 20, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 16, 12, 20, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1481,10 +1358,10 @@ func TestSuiteRun_NativeParallelUniqueSessionsCore(t *testing.T) {
 		"--json",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d stderr=%q", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d stderr=%q", code, h.Stderr.String())
 	}
 
-	sum := parseSuiteRunNativeParallelSummary(t, stdout.Bytes())
+	sum := parseSuiteRunNativeParallelSummary(t, h.Stdout.Bytes())
 	assertSuiteRunNativeParallelSummary(t, sum, 20)
 	assertSuiteRunNativeParallelSessionsUnique(t, sum.Attempts)
 }
@@ -1591,15 +1468,8 @@ func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 25, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
-	code := r.Run([]string{
+	h := newRunnerHarness(t, time.Date(2026, 2, 16, 12, 25, 0, 0, time.UTC))
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1609,7 +1479,7 @@ func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected no harness failure, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected no harness failure, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1619,7 +1489,7 @@ func TestSuiteRun_NativeTimeoutDoesNotAbortSiblingAttempts(t *testing.T) {
 			OK              bool   `json:"ok"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run json: %v", err)
 	}
 	if len(sum.Attempts) != 2 {
@@ -1656,16 +1526,9 @@ func TestSuiteRun_NativeMapsRateLimitFailure(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "rate_limit_failure")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1673,7 +1536,7 @@ func TestSuiteRun_NativeMapsRateLimitFailure(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1682,7 +1545,7 @@ func TestSuiteRun_NativeMapsRateLimitFailure(t *testing.T) {
 			AutoFeedbackCode string `json:"autoFeedbackCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run output: %v", err)
 	}
 	if len(sum.Attempts) != 1 {
@@ -1709,16 +1572,9 @@ func TestSuiteRun_NativeMapsAuthFailure(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "auth_failure")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1726,7 +1582,7 @@ func TestSuiteRun_NativeMapsAuthFailure(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1735,7 +1591,7 @@ func TestSuiteRun_NativeMapsAuthFailure(t *testing.T) {
 			AutoFeedbackCode string `json:"autoFeedbackCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run output: %v", err)
 	}
 	if len(sum.Attempts) != 1 {
@@ -1762,16 +1618,9 @@ func TestSuiteRun_NativeCrashDuringTurnIsTyped(t *testing.T) {
 	t.Setenv("ZCL_HELPER_PROCESS", "1")
 	t.Setenv("ZCL_HELPER_MODE", "crash_during_turn")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1779,7 +1628,7 @@ func TestSuiteRun_NativeCrashDuringTurnIsTyped(t *testing.T) {
 		"--json",
 	})
 	if code == 1 {
-		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected non-harness failure path, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1787,7 +1636,7 @@ func TestSuiteRun_NativeCrashDuringTurnIsTyped(t *testing.T) {
 			RunnerErrorCode string `json:"runnerErrorCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
 		t.Fatalf("unmarshal suite run output: %v", err)
 	}
 	if len(sum.Attempts) != 1 {
@@ -1817,17 +1666,10 @@ func TestSuiteRun_NativeSchedulerRateLimitIsDeterministic(t *testing.T) {
 	t.Setenv("ZCL_HELPER_MODE", "smoke")
 	t.Setenv("ZCL_NATIVE_MIN_START_INTERVAL_MS", "220")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     time.Now,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarnessNowFunc(t, time.Now)
 
 	start := time.Now()
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1838,7 +1680,7 @@ func TestSuiteRun_NativeSchedulerRateLimitIsDeterministic(t *testing.T) {
 	})
 	elapsed := time.Since(start)
 	if code != 0 {
-		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("expected success, got code=%d stderr=%q", code, h.Stderr.String())
 	}
 	if elapsed < 200*time.Millisecond {
 		t.Fatalf("expected scheduler delay from rate limit, elapsed=%s", elapsed)
@@ -1859,16 +1701,9 @@ func TestSuiteRun_AutoFeedbackOnTimeout(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1877,7 +1712,7 @@ func TestSuiteRun_AutoFeedbackOnTimeout(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=sleep",
 	})
 	if code != 1 {
-		t.Fatalf("expected exit code 1 for timeout harness error, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 1 for timeout harness error, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1892,8 +1727,8 @@ func TestSuiteRun_AutoFeedbackOnTimeout(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if len(sum.Attempts) != 1 {
 		t.Fatalf("expected one attempt, got %+v", sum.Attempts)
@@ -1940,16 +1775,9 @@ func TestSuiteRun_FeedbackPolicyStrict_DoesNotAutoFinalize(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -1959,7 +1787,7 @@ func TestSuiteRun_FeedbackPolicyStrict_DoesNotAutoFinalize(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=no-feedback",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -1973,8 +1801,8 @@ func TestSuiteRun_FeedbackPolicyStrict_DoesNotAutoFinalize(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if sum.FeedbackPolicy != "strict" {
 		t.Fatalf("expected feedbackPolicy=strict, got %+v", sum)
@@ -2005,16 +1833,9 @@ func TestSuiteRun_WritesCampaignStateAndProgress(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 16, 12, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, suiteRunNow())
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2025,7 +1846,7 @@ func TestSuiteRun_WritesCampaignStateAndProgress(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -2033,8 +1854,8 @@ func TestSuiteRun_WritesCampaignStateAndProgress(t *testing.T) {
 		CampaignID        string `json:"campaignId"`
 		CampaignStatePath string `json:"campaignStatePath"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if sum.RunID == "" || sum.CampaignID != "campaign-alpha" {
 		t.Fatalf("unexpected summary campaign fields: %+v", sum)
@@ -2083,16 +1904,9 @@ func TestSuiteRun_FinalizationAutoFromResultFileJSON(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 0, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 0, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2103,7 +1917,7 @@ func TestSuiteRun_FinalizationAutoFromResultFileJSON(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -2117,8 +1931,8 @@ func TestSuiteRun_FinalizationAutoFromResultFileJSON(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -2158,16 +1972,9 @@ func TestSuiteRun_FinalizationAutoFromResultStdoutJSON(t *testing.T) {
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 5, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 5, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2179,7 +1986,7 @@ func TestSuiteRun_FinalizationAutoFromResultStdoutJSON(t *testing.T) {
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-stdout-ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 
 	var sum struct {
@@ -2191,8 +1998,8 @@ func TestSuiteRun_FinalizationAutoFromResultStdoutJSON(t *testing.T) {
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK || sum.Attempts[0].AutoFeedbackCode != "" {
 		t.Fatalf("unexpected summary: %+v", sum)
@@ -2212,16 +2019,9 @@ func TestSuiteRun_FinalizationAutoFromResultInvalidWritesTypedFailure(t *testing
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 10, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 10, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2232,15 +2032,15 @@ func TestSuiteRun_FinalizationAutoFromResultInvalidWritesTypedFailure(t *testing
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-invalid",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 	var sum struct {
 		Attempts []struct {
 			AutoFeedbackCode string `json:"autoFeedbackCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if len(sum.Attempts) != 1 || sum.Attempts[0].AutoFeedbackCode != "ZCL_E_MISSION_RESULT_INVALID" {
 		t.Fatalf("expected typed result-channel invalid code, got %+v", sum)
@@ -2260,16 +2060,9 @@ func TestSuiteRun_FinalizationAutoFromResultNoTraceStillProducesEvidence(t *test
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 20, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 20, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2280,15 +2073,15 @@ func TestSuiteRun_FinalizationAutoFromResultNoTraceStillProducesEvidence(t *test
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-no-trace-ok",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 	var sum struct {
 		Attempts []struct {
 			AttemptDir string `json:"attemptDir"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if len(sum.Attempts) != 1 {
 		t.Fatalf("expected one attempt, got %+v", sum)
@@ -2316,16 +2109,9 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnRejectsEarlyTurn(t *testing.T
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 30, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 30, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2337,15 +2123,15 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnRejectsEarlyTurn(t *testing.T
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-turn-2",
 	})
 	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 2, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 	var sum struct {
 		Attempts []struct {
 			AutoFeedbackCode string `json:"autoFeedbackCode"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if len(sum.Attempts) != 1 || sum.Attempts[0].AutoFeedbackCode != "ZCL_E_MISSION_RESULT_TURN_TOO_EARLY" {
 		t.Fatalf("expected turn-too-early code, got %+v", sum)
@@ -2365,16 +2151,9 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnAcceptsFinalTurn(t *testing.T
 
 	t.Setenv("ZCL_WANT_SUITE_RUNNER", "1")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	r := Runner{
-		Version: "0.0.0-dev",
-		Now:     func() time.Time { return time.Date(2026, 2, 22, 20, 35, 0, 0, time.UTC) },
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-	}
+	h := newRunnerHarness(t, time.Date(2026, 2, 22, 20, 35, 0, 0, time.UTC))
 
-	code := r.Run([]string{
+	code := h.Runner.Run([]string{
 		"suite", "run",
 		"--file", suitePath,
 		"--out-root", outRoot,
@@ -2386,7 +2165,7 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnAcceptsFinalTurn(t *testing.T
 		os.Args[0], "-test.run=TestHelperSuiteRunnerProcess$", "--", "case=result-file-turn-3",
 	})
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, stderr.String())
+		t.Fatalf("expected exit code 0, got %d (stderr=%q)", code, h.Stderr.String())
 	}
 	var sum struct {
 		OK       bool `json:"ok"`
@@ -2397,8 +2176,8 @@ func TestSuiteRun_FinalizationAutoFromResultMinTurnAcceptsFinalTurn(t *testing.T
 			} `json:"finish"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
-		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, stdout.String())
+	if err := json.Unmarshal(h.Stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal suite run json: %v (stdout=%q)", err, h.Stdout.String())
 	}
 	if !sum.OK || len(sum.Attempts) != 1 || !sum.Attempts[0].Finish.OK || sum.Attempts[0].AutoFeedbackCode != "" {
 		t.Fatalf("unexpected summary: %+v", sum)
